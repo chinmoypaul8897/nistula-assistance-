@@ -1,0 +1,4 @@
+# pnpm settings (pnpm 11 reads these here, not from package.json).
+# esbuild's install script places the platform binary tsx/vitest rely on.
+allowBuilds:
+  esbuild: true

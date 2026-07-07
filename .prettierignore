@@ -1,0 +1,8 @@
+# Formatting is for source only — docs are verbatim mirrors/specs, never reflowed.
+dist/
+node_modules/
+pnpm-lock.yaml
+docs/
+kb/
+credentials-local/
+*.md
