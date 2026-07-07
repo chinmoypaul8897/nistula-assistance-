@@ -1,0 +1,1158 @@
+[
+ {
+  "sid": "CFG-01",
+  "name": "Check Hotel Authentication",
+  "eid": "478",
+  "rt": "gethotelinfo",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.pos2pms",
+  "ctype": "xml",
+  "tags": [
+   "POS Connectivity"
+  ]
+ },
+ {
+  "sid": "CFG-02",
+  "name": "Retrieve Room Information",
+  "eid": "519",
+  "rt": "RoomInfo",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open",
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "CFG-03",
+  "name": "Retrieve Hotel Information",
+  "eid": "574",
+  "rt": "HotelList",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=HotelList&HotelCode=XXXX&APIKey=XXXXXX&language=en",
+  "ctype": "",
+  "tags": [
+   "Meta Search",
+   "Open"
+  ]
+ },
+ {
+  "sid": "CFG-04",
+  "name": "Retrieve Hotel Amenities",
+  "eid": "582",
+  "rt": "HotelAmenity",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=HotelAmenity&HotelCode=XXX&APIKey=XXX&language=en",
+  "ctype": "",
+  "tags": [
+   "Meta Search",
+   "Open"
+  ]
+ },
+ {
+  "sid": "CFG-05",
+  "name": "Retrieve Room Types",
+  "eid": "587",
+  "rt": "RoomTypeList",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=RoomTypeList&HotelCode=XXX&APIKey=XXX&language=en&publishtoweb=1",
+  "ctype": "",
+  "tags": [
+   "Meta Search",
+   "Open"
+  ]
+ },
+ {
+  "sid": "CFG-06",
+  "name": "Retrieve Salutations and Country",
+  "eid": "589",
+  "rt": "ConfiguredDetails",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=ConfiguredDetails&HotelCode=XXXX&APIKey=XXXXXX&language=en",
+  "ctype": "",
+  "tags": [
+   "Meta Search",
+   "Open"
+  ]
+ },
+ {
+  "sid": "CFG-07",
+  "name": "Retrieve Extras Rate Based on Parameters",
+  "eid": "594",
+  "rt": "CalculateExtraCharge",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=CalculateExtraCharge&HotelCode=XXX&APIKey=XXX&check_in_date=XXX&check_out_date=XXX&ExtraChargeId=XXX&Total_ExtraItem=X",
+  "ctype": "",
+  "tags": [
+   "eZee Reservation Required",
+   "Meta Search"
+  ]
+ },
+ {
+  "sid": "CFG-08",
+  "name": "Verify Travel Agent",
+  "eid": "596",
+  "rt": "VerifyUser",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?APIKey=XX&request_type=VerifyUser&username=XX&password=XX&groupcode=XX",
+  "ctype": "",
+  "tags": [
+   "eZee Reservation Required",
+   "Meta Search"
+  ]
+ },
+ {
+  "sid": "CFG-09",
+  "name": "Retrieve Payment Gateways",
+  "eid": "613",
+  "rt": "ConfiguredPGList",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?APIKey=XX&request_type=ConfiguredPGList&HotelCode=XX",
+  "ctype": "",
+  "tags": [
+   "eZee Reservation Required",
+   "Meta Search",
+   "Open"
+  ]
+ },
+ {
+  "sid": "CFG-10",
+  "name": "Retrieve Currency",
+  "eid": "2037",
+  "rt": "RetrieveCurrency",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "CFG-11",
+  "name": "Retrieve Pay Methods",
+  "eid": "2048",
+  "rt": "RetrievePayMethods",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "CFG-12",
+  "name": "Retrieve Identity Type",
+  "eid": "2059",
+  "rt": "RetrieveIdentityType",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "CFG-13",
+  "name": "Retrieve Available Room List",
+  "eid": "2336",
+  "rt": "RoomAvailability",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "RA-01",
+  "name": "Update Room Inventory",
+  "eid": "620",
+  "rt": "UpdateAvailability",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-02",
+  "name": "Update Linear Rate",
+  "eid": "626",
+  "rt": "UpdateRoomRates",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-03",
+  "name": "Update Non Linear Rate",
+  "eid": "629",
+  "rt": "UpdateRoomRatesNL",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-04",
+  "name": "Retrieve Room Rates with Source details",
+  "eid": "631",
+  "rt": "Separatesourcemapping",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-05",
+  "name": "Update Max Nights",
+  "eid": "633",
+  "rt": "UpdateMaxNights",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-06",
+  "name": "Update Min Nights",
+  "eid": "637",
+  "rt": "UpdateMinNights",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-07",
+  "name": "Update StopSell",
+  "eid": "643",
+  "rt": "UpdateStopSell",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-08",
+  "name": "Update Close On Arrival",
+  "eid": "650",
+  "rt": "UpdateCOA",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-09",
+  "name": "Update Close On Departure",
+  "eid": "654",
+  "rt": "UpdateCOD",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "RA-10",
+  "name": "Retrieve Room Inventory",
+  "eid": "662",
+  "rt": "Inventory",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/getdataAPI.php",
+  "ctype": "xml",
+  "tags": [
+   "PMS Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "RA-11",
+  "name": "Retrieve Room Rates",
+  "eid": "667",
+  "rt": "Rate",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/getdataAPI.php",
+  "ctype": "xml",
+  "tags": [
+   "PMS Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "BKG-01",
+  "name": "Check Availability",
+  "eid": "675",
+  "rt": "RoomList",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=RoomList&HotelCode=XX&APIKey=XXXXXX&check_in_date=",
+  "ctype": "",
+  "tags": [
+   "eZee Reservation Required",
+   "Meta Search"
+  ]
+ },
+ {
+  "sid": "BKG-02",
+  "name": "Retrieve all Bookings",
+  "eid": "681",
+  "rt": "Bookings",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Open",
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-03",
+  "name": "Retrieve a Booking",
+  "eid": "688",
+  "rt": "FetchSingleBooking",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Open",
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-04",
+  "name": "Booking Received Notification",
+  "eid": "692",
+  "rt": "BookingRecdNotification",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-05",
+  "name": "Retrieve Arrivals",
+  "eid": "695",
+  "rt": "ArrivalList",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open",
+   "Regional Portal"
+  ]
+ },
+ {
+  "sid": "BKG-06",
+  "name": "Retrieve Departures",
+  "eid": "699",
+  "rt": "DepartureList",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open",
+   "Regional Portal"
+  ]
+ },
+ {
+  "sid": "BKG-07",
+  "name": "Post Charge To Room",
+  "eid": "702",
+  "rt": "chargepost",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.pos2pms",
+  "ctype": "xml",
+  "tags": [
+   "POS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-08",
+  "name": "Void Charge on Room",
+  "eid": "707",
+  "rt": "voidcharge",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.pos2pms",
+  "ctype": "xml",
+  "tags": [
+   "POS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-09",
+  "name": "Update POS Receipt No",
+  "eid": "710",
+  "rt": "updatevoucherno",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.pos2pms",
+  "ctype": "xml",
+  "tags": [
+   "POS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-10",
+  "name": "Retrieve Post to Room Information",
+  "eid": "712",
+  "rt": "roomlist",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.pos2pms",
+  "ctype": "xml",
+  "tags": [
+   "POS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-11",
+  "name": "Retrieve Post to Room Information for specific room",
+  "eid": "715",
+  "rt": "roomquery",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.pos2pms",
+  "ctype": "xml",
+  "tags": [
+   "POS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-12",
+  "name": "Room Sales Data",
+  "eid": "719",
+  "rt": "get_sales_report",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/channelbookings/vacation_rental.php",
+  "ctype": "json",
+  "tags": [
+   "Vacation Rental"
+  ]
+ },
+ {
+  "sid": "BKG-13",
+  "name": "Reserved Rooms Calendar",
+  "eid": "732",
+  "rt": "get_calendar",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/channelbookings/vacation_rental.php",
+  "ctype": "json",
+  "tags": [
+   "Vacation Rental"
+  ]
+ },
+ {
+  "sid": "BKG-14",
+  "name": "Retrieve Physical Rooms",
+  "eid": "737",
+  "rt": "get_rooms",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/channelbookings/vacation_rental.php",
+  "ctype": "json",
+  "tags": [
+   "Vacation Rental"
+  ]
+ },
+ {
+  "sid": "BKG-15",
+  "name": "Todays CheckIn-Checkout",
+  "eid": "740",
+  "rt": "get_calendar",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/channelbookings/vacation_rental.php",
+  "ctype": "json",
+  "tags": [
+   "Vacation Rental"
+  ]
+ },
+ {
+  "sid": "BKG-16",
+  "name": "Reservation Details of a Room",
+  "eid": "742",
+  "rt": "get_reservation",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/channelbookings/vacation_rental.php",
+  "ctype": "json",
+  "tags": [
+   "Vacation Rental"
+  ]
+ },
+ {
+  "sid": "BKG-17",
+  "name": "Pull Historical Bookings",
+  "eid": "751",
+  "rt": "Booking",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/getdataAPI.php",
+  "ctype": "xml",
+  "tags": [
+   "RMS"
+  ]
+ },
+ {
+  "sid": "BKG-18",
+  "name": "Post Create Bookings Actions",
+  "eid": "762",
+  "rt": "ProcessBooking",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=ProcessBooking&HotelCode=XXX&APIKey=XXX&Process_Data={",
+  "ctype": "",
+  "tags": [
+   "eZee Reservation Required",
+   "Meta Search"
+  ]
+ },
+ {
+  "sid": "BKG-19",
+  "name": "Retrieve a Booking Based on Parameters",
+  "eid": "770",
+  "rt": "BookingList",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=BookingList&HotelCode=XXX&APIKey=XXX&arrival_from",
+  "ctype": "",
+  "tags": [
+   "Meta Search",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-20",
+  "name": "Read a Booking",
+  "eid": "774",
+  "rt": "ReadBooking",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=ReadBooking&HotelCode=XXXX&APIKey=XXXXXXXXXXXXXXXXX&language=en&ResNo=3",
+  "ctype": "",
+  "tags": [
+   "eZee Reservation Required",
+   "Meta Search"
+  ]
+ },
+ {
+  "sid": "BKG-21",
+  "name": "Cancel a Booking",
+  "eid": "777",
+  "rt": "CancelBooking",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=CancelBooking&HotelCode=xxxx&APIKey=xxxxxxxxxxxxxxxx&language=en&ResNo=167&SubNo=&language=en",
+  "ctype": "",
+  "tags": [
+   "Meta Search",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-22",
+  "name": "Autosync Future Bookings and its modifications",
+  "eid": "1533",
+  "rt": "",
+  "method": "GET",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "RMS"
+  ]
+ },
+ {
+  "sid": "BKG-23",
+  "name": "Guest Data Update",
+  "eid": "2064",
+  "rt": "UploadDocument",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-24",
+  "name": "Add Payment",
+  "eid": "2104",
+  "rt": "AddPayment",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-25",
+  "name": "Add Guest Profile to Bookings",
+  "eid": "2151",
+  "rt": "AddSharer",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-26",
+  "name": "Guest Check In",
+  "eid": "2172",
+  "rt": "GuestCheckIn",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-27",
+  "name": "Room Assignment",
+  "eid": "2197",
+  "rt": "AssignRoom",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-28",
+  "name": "Guest Check Out",
+  "eid": "2252",
+  "rt": "GuestCheckOut",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-29",
+  "name": "Retrieve List of Bills",
+  "eid": "2274",
+  "rt": "RetrieveListofBills",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "BKG-30",
+  "name": "Retrieve Transaction Details",
+  "eid": "2370",
+  "rt": "GetTransactionDetails",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Open",
+   "PMS Connectivity"
+  ]
+ },
+ {
+  "sid": "BKG-31",
+  "name": "Create a Booking",
+  "eid": "2412",
+  "rt": "InsertBooking",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=InsertBooking&HotelCode=xxxxx&APIKey=XXXXXXXXXXXXXXXX&BookingData={",
+  "ctype": "",
+  "tags": [
+   "eZee Reservation Required",
+   "Meta Search"
+  ]
+ },
+ {
+  "sid": "BKG-32",
+  "name": "Add Extra Charge",
+  "eid": "2794",
+  "rt": "AddExtraCharge",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.kioskconnectivity",
+  "ctype": "json",
+  "tags": [
+   "Kiosk Connectivity",
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-01",
+  "name": "Retrieve Extras",
+  "eid": "592",
+  "rt": "ExtraCharges",
+  "method": "",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?request_type=ExtraCharges&HotelCode=XXX&APIKey=XXX&language=en",
+  "ctype": "",
+  "tags": [
+   "Meta Search",
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-02",
+  "name": "Retrieve Hotel Expenses",
+  "eid": "802",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.voucher",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-03",
+  "name": "Retrieve Bills",
+  "eid": "805",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.posting",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-04",
+  "name": "Retrieve Financial Accounts",
+  "eid": "1719",
+  "rt": "XERO_GET_CONFIG_DATA",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.PMSAccountAPI",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-05",
+  "name": "Retrieve Revenues",
+  "eid": "1733",
+  "rt": "XERO_GET_TRANSACTION_DATA",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.PMSAccountAPI",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-06",
+  "name": "Retrieve Outwards Payments",
+  "eid": "1736",
+  "rt": "XERO_GET_PAYMENT_DATA",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.PMSAccountAPI",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-07",
+  "name": "Retrieve Inwards Payments",
+  "eid": "1738",
+  "rt": "XERO_GET_RECEIPT_DATA",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.PMSAccountAPI",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-08",
+  "name": "Retrieve Journals",
+  "eid": "1741",
+  "rt": "XERO_GENERAL_JOURNAL_INFO",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.PMSAccountAPI",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-09",
+  "name": "Retrieve Incidental Invoices",
+  "eid": "1743",
+  "rt": "XERO_INCIDENTAL_INVOICE",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.PMSAccountAPI",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-10",
+  "name": "Retrieve Outwards Folio wise Payments",
+  "eid": "2783",
+  "rt": "XERO_GET_PAYMENT_DATA_FOLIOUNKID",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.PMSAccountAPI",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "FIN-11",
+  "name": "Retrieve Inwards Folio wise Payments",
+  "eid": "2787",
+  "rt": "XERO_GET_RECEIPT_DATA_FOLIOUNKID",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.PMSAccountAPI",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "HK-01",
+  "name": "Retrieve Inhouse Room Status",
+  "eid": "786",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.hkinfoforkaterina",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "HK-02",
+  "name": "Update Room Status",
+  "eid": "792",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.hkupdatestatus",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "HK-03",
+  "name": "Set out of Order (Block Room)",
+  "eid": "797",
+  "rt": "SetoutofOrder",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "HK-04",
+  "name": "Unblock room",
+  "eid": "2012",
+  "rt": "UnblockRoom",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "OTA-01",
+  "name": "Request Room Information",
+  "eid": "1820",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "OTA-02",
+  "name": "Push Inventory",
+  "eid": "1830",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "OTA-03",
+  "name": "Push Linear Rates (Room Base Rates)",
+  "eid": "1833",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "OTA-04",
+  "name": "Push Non-Linear Rates (Occupancy Base rates)",
+  "eid": "1836",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "OTA-05",
+  "name": "Push Minimum Nights",
+  "eid": "1839",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "OTA-06",
+  "name": "Push Stop Sell",
+  "eid": "1843",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "OTA-07",
+  "name": "Push Close On Arrival",
+  "eid": "1848",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "OTA-08",
+  "name": "Push Close on Departure",
+  "eid": "1857",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "OTA-09",
+  "name": "Get Bookings to YCS",
+  "eid": "1860",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "",
+  "tags": [
+   "OTA Connectivity",
+   "RMS"
+  ]
+ },
+ {
+  "sid": "FNB-01",
+  "name": "Menu",
+  "eid": "2653",
+  "rt": "",
+  "method": "",
+  "endpoint": "",
+  "ctype": "json",
+  "tags": [
+   "eZee Optimus",
+   "F & B"
+  ]
+ },
+ {
+  "sid": "FNB-02",
+  "name": "Orders",
+  "eid": "2686",
+  "rt": "",
+  "method": "",
+  "endpoint": "",
+  "ctype": "json",
+  "tags": [
+   "eZee Optimus",
+   "F & B"
+  ]
+ },
+ {
+  "sid": "FNB-03",
+  "name": "Outlet and Store Information [F&B]",
+  "eid": "2748",
+  "rt": "",
+  "method": "",
+  "endpoint": "",
+  "ctype": "json",
+  "tags": [
+   "eZee Optimus",
+   "F & B"
+  ]
+ },
+ {
+  "sid": "FNB-04",
+  "name": "Financial Accounts [F&B]",
+  "eid": "2708",
+  "rt": "",
+  "method": "",
+  "endpoint": "",
+  "ctype": "json",
+  "tags": [
+   "eZee Optimus",
+   "F & B"
+  ]
+ },
+ {
+  "sid": "FNB-05",
+  "name": "Sales [F&B]",
+  "eid": "2720",
+  "rt": "",
+  "method": "",
+  "endpoint": "",
+  "ctype": "json",
+  "tags": [
+   "eZee Optimus",
+   "F & B"
+  ]
+ },
+ {
+  "sid": "FNB-06",
+  "name": "Purchases [F&B]",
+  "eid": "2759",
+  "rt": "",
+  "method": "",
+  "endpoint": "",
+  "ctype": "json",
+  "tags": [
+   "eZee Optimus",
+   "F & B"
+  ]
+ },
+ {
+  "sid": "FNB-07",
+  "name": "API Authentication Guide",
+  "eid": "2822",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "",
+  "ctype": "json",
+  "tags": []
+ },
+ {
+  "sid": "OTH-01",
+  "name": "Retrieve Guest Stays Statistics",
+  "eid": "808",
+  "rt": "",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/index.php/page/service.guestdatabase",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "OTH-02",
+  "name": "Retrieve a Company",
+  "eid": "811",
+  "rt": "CompanyList",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "OTH-03",
+  "name": "Retrieve A Travel Agent",
+  "eid": "814",
+  "rt": "TravelAgentList",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ },
+ {
+  "sid": "OTH-04",
+  "name": "Create a Travel Agent",
+  "eid": "818",
+  "rt": "InsertTravelAgent",
+  "method": "GET",
+  "endpoint": "https://live.ipms247.com/booking/reservation_api/listing.php?APIKey=XX&request_type=InsertTravelAgent&name=XX&businessname=GreenTravel&salutation=MR&country=India&email=XX&HotelCode=XX&percentdiscount=10&businesssource=true&isusercreated=true&ismailsend=true",
+  "ctype": "",
+  "tags": [
+   "eZee Reservation Required",
+   "Meta Search"
+  ]
+ },
+ {
+  "sid": "OTH-05",
+  "name": "Retrieve Guest",
+  "eid": "1200",
+  "rt": "GuestList",
+  "method": "POST",
+  "endpoint": "https://live.ipms247.com/pmsinterface/pms_connectivity.php",
+  "ctype": "json",
+  "tags": [
+   "Open"
+  ]
+ }
+]

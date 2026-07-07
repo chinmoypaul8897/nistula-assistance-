@@ -1,6 +1,8 @@
 # ── Secrets — NEVER commit (plan.md §3.6 credentials rule) ──
 .env
 .env.*
+# .env.example is the one exception: §3.7 names only, never values
+!.env.example
 credentials-local/
 CREDENTIALS.md
 
