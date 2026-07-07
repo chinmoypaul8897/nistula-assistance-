@@ -8,6 +8,10 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 22 exercises the engines floor; 24 matches the dev machine
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -16,7 +20,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
