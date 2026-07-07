@@ -56,9 +56,14 @@ export const messageStatusEnum = pgEnum('message_status', [
 export const rawEventSourceEnum = pgEnum('raw_event_source', ['whatsapp', 'ezee']);
 
 // §4 preamble: every table gets uuid pk + created_at/updated_at timestamptz.
+// $onUpdate keeps updated_at honest on every future drizzle UPDATE without
+// each call site remembering to set it (client-side, no migration needed).
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .$onUpdate(() => new Date())
+    .notNull(),
 };
 
 /** One row per WhatsApp number; phone is always E.164 via lib/phone.ts. */
