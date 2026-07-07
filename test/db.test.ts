@@ -23,37 +23,28 @@ const TEST_URL =
 let client: ReturnType<typeof postgres>;
 let db: Db;
 
+// Database creation + first migration happen once per run in the vitest
+// globalSetup (test/setup/db-global-setup.ts); this file only connects.
 beforeAll(async () => {
-  // Create the test database on the same server if missing (42P04 = exists).
-  const adminUrl = new URL(TEST_URL);
-  const testDbName = adminUrl.pathname.slice(1);
-  adminUrl.pathname = '/postgres';
-  const admin = postgres(adminUrl.toString(), { max: 1, onnotice: () => {} });
-  try {
-    await admin.unsafe(`CREATE DATABASE "${testDbName}"`);
-  } catch (error) {
-    if ((error as { code?: string }).code !== '42P04') throw error;
-  } finally {
-    await admin.end();
-  }
-
-  // Done-when criterion: migrations apply cleanly TWICE (idempotent).
-  await runMigrations(TEST_URL);
-  await runMigrations(TEST_URL);
-
   client = postgres(TEST_URL, { max: 5, onnotice: () => {} });
   db = drizzle(client, { schema });
   await db.execute(sql`TRUNCATE messages, conversations, raw_events, guests CASCADE`);
-}, 60_000);
+}, 30_000);
 
 afterAll(async () => {
   await client?.end();
 });
 
+describe('migrations', () => {
+  it('re-apply cleanly on an already-migrated database (done-when: twice)', async () => {
+    await expect(runMigrations(TEST_URL)).resolves.toBeUndefined();
+  });
+});
+
 describe('upsertGuestByPhone', () => {
   it('is idempotent — same phone twice yields one row, same id', async () => {
-    const first = await upsertGuestByPhone(db, '+918810358517', 'Rahul');
-    const second = await upsertGuestByPhone(db, '+918810358517', 'Rahul M');
+    const first = await upsertGuestByPhone(db, '+917700900010', 'Rahul');
+    const second = await upsertGuestByPhone(db, '+917700900010', 'Rahul M');
     expect(second.id).toBe(first.id);
     expect(second.waProfileName).toBe('Rahul M');
     const all = await db.select().from(schema.guests);
@@ -61,7 +52,7 @@ describe('upsertGuestByPhone', () => {
   });
 
   it('does not blank the profile name when none is provided', async () => {
-    const touched = await upsertGuestByPhone(db, '+918810358517');
+    const touched = await upsertGuestByPhone(db, '+917700900010');
     expect(touched.waProfileName).toBe('Rahul M');
   });
 });

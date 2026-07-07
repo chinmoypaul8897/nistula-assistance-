@@ -83,8 +83,8 @@ describe('loadConfig (plan §3.7 registry)', () => {
 
 describe('roster integrity at config load (§3.3)', () => {
   it('normalises OPS_NUMBERS entries to E.164', () => {
-    const config = loadConfig({ ...minimalEnv, OPS_NUMBERS: '08810358517, +1 415 555 2671' });
-    expect(config.opsNumbers).toEqual(['+918810358517', '+14155552671']);
+    const config = loadConfig({ ...minimalEnv, OPS_NUMBERS: '07700900010, +1 415 555 2671' });
+    expect(config.opsNumbers).toEqual(['+917700900010', '+14155552671']);
   });
 
   it('fails boot on an unnormalisable OPS_NUMBERS entry', () => {
@@ -96,15 +96,15 @@ describe('roster integrity at config load (§3.3)', () => {
   it('collapses OPS_NUMBERS duplicates spelled differently', () => {
     const config = loadConfig({
       ...minimalEnv,
-      OPS_NUMBERS: '+918810358517, 08810358517,8810358517',
+      OPS_NUMBERS: '+917700900010, 07700900010,7700900010',
     });
-    expect(config.opsNumbers).toEqual(['+918810358517']);
+    expect(config.opsNumbers).toEqual(['+917700900010']);
   });
 
   it('refuses a roster where two members share one phone', () => {
     const roster = JSON.stringify([
-      { name: 'Meera', phone: '8810358517', role: 'frontdesk', villas: ['B1'] },
-      { name: 'Ravi', phone: '08810358517', role: 'housekeeping', villas: ['B3'] },
+      { name: 'Meera', phone: '7700900010', role: 'frontdesk', villas: ['B1'] },
+      { name: 'Ravi', phone: '07700900010', role: 'housekeeping', villas: ['B3'] },
     ]);
     expect(() => loadConfig({ ...minimalEnv, STAFF_ROSTER_JSON: roster })).toThrow(
       /Meera.*Ravi|share one phone/,
@@ -113,11 +113,11 @@ describe('roster integrity at config load (§3.3)', () => {
 
   it('parses and normalises STAFF_ROSTER_JSON', () => {
     const roster = JSON.stringify([
-      { name: 'Meera', phone: '91 88103 58517', role: 'frontdesk', villas: ['B1', 'B3'] },
+      { name: 'Meera', phone: '91 77009 00010', role: 'frontdesk', villas: ['B1', 'B3'] },
     ]);
     const config = loadConfig({ ...minimalEnv, STAFF_ROSTER_JSON: roster });
     expect(config.staffRoster).toEqual([
-      { name: 'Meera', phone: '+918810358517', role: 'frontdesk', villas: ['B1', 'B3'] },
+      { name: 'Meera', phone: '+917700900010', role: 'frontdesk', villas: ['B1', 'B3'] },
     ]);
   });
 
@@ -142,7 +142,7 @@ describe('configSummary (secret-free boot print)', () => {
       ADMIN_BEARER_TOKEN: 'bearer-value',
       DATABASE_URL: 'postgres://user:dbpassword@host/db',
       HEALTHCHECKS_URL: 'https://hc-ping.com/secret-uuid',
-      OPS_NUMBERS: '08810358517',
+      OPS_NUMBERS: '07700900010',
     });
     const summary = configSummary(config);
     for (const secret of [
@@ -153,7 +153,7 @@ describe('configSummary (secret-free boot print)', () => {
       'bearer-value',
       'dbpassword',
       'secret-uuid',
-      '8810358517',
+      '7700900010',
     ]) {
       expect(summary).not.toContain(secret);
     }
