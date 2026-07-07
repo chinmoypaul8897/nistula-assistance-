@@ -11,10 +11,10 @@ describe('normalizePhone (plan §5.2)', () => {
     { input: '8810358517', expected: '+918810358517' },
     // already E.164 → unchanged
     { input: '+918810358517', expected: '+918810358517' },
-    // foreign numbers keep their country code
+    // foreign numbers keep their country code (+44 7700 9xxxxx is Ofcom-reserved)
     { input: '+14155552671', expected: '+14155552671' },
-    { input: '+44 7911 123456', expected: '+447911123456' },
-    { input: '447911123456', expected: '+447911123456' },
+    { input: '+44 7700 900123', expected: '+447700900123' },
+    { input: '447700900123', expected: '+447700900123' },
     // 10 digits starting with 91 is a mobile number, not a country code
     { input: '9198765432', expected: '+919198765432' },
     // unnormalisable → null
@@ -24,6 +24,9 @@ describe('normalizePhone (plan §5.2)', () => {
     { input: '+91 (88103) 58517', expected: null }, // parens are outside §5.2's strip list
     { input: '1234567890123456', expected: null }, // > 15 digits breaks E.164
     { input: '+', expected: null },
+    // country codes never start with 0 — reject, don't store unreachable numbers
+    { input: '+08810358517', expected: null },
+    { input: '00918810358517', expected: null },
   ];
 
   it.each(cases)('normalizePhone($input) → $expected', ({ input, expected }) => {

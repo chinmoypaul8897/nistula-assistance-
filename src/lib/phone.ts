@@ -20,13 +20,15 @@ export function normalizePhone(raw: string): string | null {
   if (!/^\d+$/.test(digits)) return null;
   if (digits.length < MIN_DIGITS || digits.length > MAX_DIGITS) return null;
 
-  // An explicit "+" is already international form — trust it as given.
-  if (hasPlus) return `+${digits}`;
+  // An explicit "+" is already international form — trust it as given,
+  // except that E.164 country codes never start with 0 ("+0…" is noise).
+  if (hasPlus) return digits.startsWith('0') ? null : `+${digits}`;
 
   if (digits.length === 11 && digits.startsWith('0')) return `+91${digits.slice(1)}`;
   if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
   if (digits.length === 10) return `+91${digits}`;
 
-  // Foreign number typed without its "+" — keep with "+" per §5.2.
-  return `+${digits}`;
+  // Foreign number typed without its "+" — keep with "+" per §5.2, unless a
+  // leading 0 ("0091…" dialing form) would forge an impossible country code.
+  return digits.startsWith('0') ? null : `+${digits}`;
 }
