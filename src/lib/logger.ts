@@ -56,5 +56,7 @@ export function loggableBody(body: string): string {
   return process.env.NODE_ENV === 'production' ? '[body withheld in production]' : body;
 }
 
-/** The shared instance — modules import this; request paths derive children from it. */
-export const logger = createLogger();
+// WHY no module-scope singleton: it would read LOG_LEVEL/NODE_ENV at import
+// time, BEFORE main() has loaded .env — the level would silently freeze wrong
+// (proven in the CH-00 post-merge audit). Call createLogger() at boot time;
+// request paths derive children from the fastify instance (app.log).

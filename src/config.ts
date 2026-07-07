@@ -12,8 +12,22 @@ import { normalizePhone } from './lib/phone.js';
 // Range-checked HH:mm — a "25:00" must fail BOOT, not the first night-window
 // call inside message handling.
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
-// IST wall clock for FAKE_NOW_IST, time part range-checked like HHMM.
+// IST wall clock for FAKE_NOW_IST — time part range-checked like HHMM, date
+// part verified against the real calendar (Date.UTC silently rolls Feb 31 →
+// Mar 3; a typo'd fake clock would test the wrong month).
 const IST_WALL_CLOCK = /^\d{4}-\d{2}-\d{2}[T ]([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
+
+function hasRealCalendarDate(wallClock: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(wallClock);
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
 
 const staffMemberSchema = z.object({
   name: z.string().min(1),
@@ -54,7 +68,11 @@ const envSchema = z.object({
   ADMIN_ROUTES_ENABLED: z.enum(['0', '1']).default('0'),
   HEALTHCHECKS_URL: z.url().optional(),
   COST_ALERT_INR_PER_DAY: z.coerce.number().positive().default(1000),
-  FAKE_NOW_IST: z.string().regex(IST_WALL_CLOCK).optional(),
+  FAKE_NOW_IST: z
+    .string()
+    .regex(IST_WALL_CLOCK)
+    .refine(hasRealCalendarDate, 'date does not exist on the calendar')
+    .optional(),
 });
 
 export interface StaffMember {
@@ -156,17 +174,19 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
 // §3.3 roster integrity: staff/ops phones normalise at config load or boot FAILS.
 function parseOpsNumbers(csv: string | undefined): string[] {
-  return (csv ?? '')
+  const numbers: string[] = [];
+  for (const entry of (csv ?? '')
     .split(',')
     .map((s) => s.trim())
-    .filter((s) => s !== '')
-    .map((entry) => {
-      const normal = normalizePhone(entry);
-      if (normal === null) {
-        throw new ConfigError(`OPS_NUMBERS entry not normalisable to E.164: "${entry}"`);
-      }
-      return normal;
-    });
+    .filter((s) => s !== '')) {
+    const normal = normalizePhone(entry);
+    if (normal === null) {
+      throw new ConfigError(`OPS_NUMBERS entry not normalisable to E.164: "${entry}"`);
+    }
+    // The same person spelled two ways must not mean double alerts later.
+    if (!numbers.includes(normal)) numbers.push(normal);
+  }
+  return numbers;
 }
 
 function parseStaffRoster(json: string | undefined): StaffMember[] {
@@ -182,6 +202,9 @@ function parseStaffRoster(json: string | undefined): StaffMember[] {
     const lines = parsed.error.issues.map((issue) => `  ${issue.path.join('.')}: ${issue.message}`);
     throw new ConfigError(`STAFF_ROSTER_JSON invalid:\n${lines.join('\n')}`);
   }
+  // Two roster members sharing one phone would make staff-command matching
+  // (CH-13/14, normalised-vs-normalised) ambiguous — refuse at boot.
+  const nameByPhone = new Map<string, string>();
   return parsed.data.map((member) => {
     const normal = normalizePhone(member.phone);
     if (normal === null) {
@@ -189,6 +212,13 @@ function parseStaffRoster(json: string | undefined): StaffMember[] {
         `STAFF_ROSTER_JSON phone not normalisable to E.164: "${member.phone}" (${member.name})`,
       );
     }
+    const existing = nameByPhone.get(normal);
+    if (existing !== undefined) {
+      throw new ConfigError(
+        `STAFF_ROSTER_JSON: "${existing}" and "${member.name}" share one phone number`,
+      );
+    }
+    nameByPhone.set(normal, member.name);
     return { ...member, phone: normal };
   });
 }

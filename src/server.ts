@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import Fastify from 'fastify';
 import { configSummary, loadConfig } from './config.js';
-import { logger } from './lib/logger.js';
+import { createLogger } from './lib/logger.js';
 
 // package.json is read via require to avoid JSON-module import attributes
 // churn across Node versions; the path is stable relative to src/ and dist/.
@@ -17,7 +17,9 @@ const { version } = require('../package.json') as { version: string };
 
 /** Builds the app without listening — tests inject requests against this. */
 export function buildServer() {
-  const app = Fastify({ loggerInstance: logger });
+  // Logger is constructed at CALL time so it reads env after main() has
+  // loaded .env; a module-scope logger froze the level too early.
+  const app = Fastify({ loggerInstance: createLogger() });
 
   app.get(
     '/health',

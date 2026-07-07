@@ -4,7 +4,7 @@
 
 ## Status
 
-- **Current chunk pointer:** CH-01 (database core) — next up. CH-00 merged pending PR (see entry).
+- **Current chunk pointer:** CH-01 (database core) — next up. CH-00 merged (PR #1) and tagged `vCH-00`; CH-00b post-merge audit fixes merged after it.
 - **Env values:** local `.env` (gitignored) holds `NODE_ENV=development` + `PORT=3000` only — no secrets exist in any env yet. Secrets stay in `credentials-local/` (gitignored, root) until they move to local `.env` + Railway variables. `credentials-local/` must NEVER be committed or copied into docs/.
 - **How to run:** `pnpm install` → `pnpm dev` → `GET http://localhost:3000/health`. Gate: `pnpm check` (typecheck + lint + tests). CI runs the same on Node 22 + 24.
 
@@ -14,6 +14,7 @@
 |---|---|---|---|
 | Pre-CH | Orientation & repo organisation | ✅ DONE 2026-07-07 | [↓](#pre-ch--orientation--repo-organisation--done-2026-07-07) |
 | CH-00 | Repo bootstrap | ✅ DONE 2026-07-07 | [↓](#ch-00--repo-bootstrap--done-2026-07-07) |
+| CH-00b | Post-merge audit fixes | ✅ DONE 2026-07-07 | [↓](#ch-00b--post-merge-audit-fixes--done-2026-07-07) |
 | CH-01 | Database core | ⬜ pending | |
 | CH-02 | WhatsApp client + webhook | ⬜ pending | |
 | CH-03 | Echo pipeline (queue + debounce) | ⬜ pending | |
@@ -131,3 +132,22 @@ nistula-assistance/             ← repo root (folder renamed pre-git-init; Pre-
 **Open questions:** none — both Pre-CH questions closed (Node 24/engines; folder renamed to `nistula-assistance` before git init).
 
 **How to verify:** `pnpm check` (69 tests green) · `pnpm dev` then `GET http://localhost:3000/health` → `{ok:true, version, uptime}` and a secret-free config summary in the boot log · `git log --oneline` shows the CH-00 series with `.gitignore` as the root commit.
+
+---
+
+### CH-00b · Post-merge audit fixes — DONE 2026-07-07
+
+**Built:** a final three-auditor pass over merged main (definition-of-done, repo/remote consistency, behavioural code sweep) returned GREEN/GREEN/YELLOW. The YELLOW's findings, all fixed on `chunk/CH-00b-audit-fixes`:
+- Logger built at buildServer() call time instead of module import — the singleton froze LOG_LEVEL/NODE_ENV before main() loaded `.env`, so the boot summary printed a level it wasn't using (dev/`start` only; prod and tests were unaffected). Proven fixed: `.env LOG_LEVEL=silent` now boots silent while `/health` serves.
+- FAKE_NOW_IST date part now validated against the real calendar (Date.UTC silently rolled `2026-02-31` → Mar 3 past the regex).
+- OPS_NUMBERS duplicates (same person, different spellings) collapse to one entry; two roster members sharing a phone now refuse boot by name (staff-command matching must stay unambiguous).
+
+**Decisions made while building:** `pnpm build` + `pnpm start` exercised for the first time (both work; `dist/` correct); orphaned node child from a stopped `pnpm start` held port 3000 — killed by PID; production FAKE_NOW_IST boot-refusal verified end-to-end against `dist/`.
+
+**Observed reality:** GitHub emits Node-20 deprecation annotations on `actions/*@v4` — runs still green; bump action majors in a later chunk. `pnpm audit`: unchanged (1 moderate, below the high gate).
+
+**Deviations from plan.md:** none — CH-00b is a §9-style mini-chunk (fix-only, no new scope).
+
+**Open questions:** none.
+
+**How to verify:** `pnpm check` (74 tests) · put `LOG_LEVEL=silent` in `.env`, `pnpm dev` → no output, `/health` still 200 (remove the line after) · `loadConfig({NODE_ENV:'test',PORT:'3000',FAKE_NOW_IST:'2026-02-31T10:00'})` throws.

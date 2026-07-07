@@ -35,6 +35,8 @@ describe('loadConfig (plan §3.7 registry)', () => {
     { name: 'bad GRAPH_BASE_URL', env: { ...minimalEnv, GRAPH_BASE_URL: 'not-a-url' } },
     { name: 'non-wall-clock FAKE_NOW_IST', env: { ...minimalEnv, FAKE_NOW_IST: 'tomorrow' } },
     { name: 'out-of-range FAKE_NOW_IST time', env: { ...minimalEnv, FAKE_NOW_IST: '2026-12-20T99:99' } },
+    { name: 'month-13 FAKE_NOW_IST', env: { ...minimalEnv, FAKE_NOW_IST: '2026-13-01T10:00' } },
+    { name: 'Feb-31 FAKE_NOW_IST', env: { ...minimalEnv, FAKE_NOW_IST: '2026-02-31T10:00' } },
   ])('rejects $name', ({ env }) => {
     expect(() => loadConfig(env)).toThrow(ConfigError);
   });
@@ -71,6 +73,12 @@ describe('loadConfig (plan §3.7 registry)', () => {
     const config = loadConfig({ ...minimalEnv, FAKE_NOW_IST: '2026-12-20T23:42' });
     expect(config.fakeNowIst).toBe('2026-12-20T23:42');
   });
+
+  it('accepts a leap-day FAKE_NOW_IST', () => {
+    expect(loadConfig({ ...minimalEnv, FAKE_NOW_IST: '2028-02-29T10:00' }).fakeNowIst).toBe(
+      '2028-02-29T10:00',
+    );
+  });
 });
 
 describe('roster integrity at config load (§3.3)', () => {
@@ -82,6 +90,24 @@ describe('roster integrity at config load (§3.3)', () => {
   it('fails boot on an unnormalisable OPS_NUMBERS entry', () => {
     expect(() => loadConfig({ ...minimalEnv, OPS_NUMBERS: '+91881035, hello' })).toThrow(
       /OPS_NUMBERS/,
+    );
+  });
+
+  it('collapses OPS_NUMBERS duplicates spelled differently', () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      OPS_NUMBERS: '+918810358517, 08810358517,8810358517',
+    });
+    expect(config.opsNumbers).toEqual(['+918810358517']);
+  });
+
+  it('refuses a roster where two members share one phone', () => {
+    const roster = JSON.stringify([
+      { name: 'Meera', phone: '8810358517', role: 'frontdesk', villas: ['B1'] },
+      { name: 'Ravi', phone: '08810358517', role: 'housekeeping', villas: ['B3'] },
+    ]);
+    expect(() => loadConfig({ ...minimalEnv, STAFF_ROSTER_JSON: roster })).toThrow(
+      /Meera.*Ravi|share one phone/,
     );
   });
 
