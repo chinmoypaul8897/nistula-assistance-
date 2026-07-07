@@ -30,9 +30,35 @@ describe('loadConfig (plan §3.7 registry)', () => {
     { name: 'non-numeric PORT', env: { NODE_ENV: 'test', PORT: 'abc' } },
     { name: 'out-of-range PORT', env: { NODE_ENV: 'test', PORT: '70000' } },
     { name: 'bad NIGHT_START', env: { ...minimalEnv, NIGHT_START: '8pm' } },
+    { name: 'out-of-range NIGHT_START', env: { ...minimalEnv, NIGHT_START: '25:00' } },
+    { name: 'out-of-range NIGHT_END', env: { ...minimalEnv, NIGHT_END: '20:71' } },
     { name: 'bad GRAPH_BASE_URL', env: { ...minimalEnv, GRAPH_BASE_URL: 'not-a-url' } },
+    { name: 'non-wall-clock FAKE_NOW_IST', env: { ...minimalEnv, FAKE_NOW_IST: 'tomorrow' } },
+    { name: 'out-of-range FAKE_NOW_IST time', env: { ...minimalEnv, FAKE_NOW_IST: '2026-12-20T99:99' } },
   ])('rejects $name', ({ env }) => {
     expect(() => loadConfig(env)).toThrow(ConfigError);
+  });
+
+  it('treats empty-string values as unset so defaults apply (dotenv blank lines)', () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      LOG_LEVEL: '',
+      GRAPH_BASE_URL: '',
+      MODEL_ID: '',
+      DRAFT_MODE: '',
+      NIGHT_START: '',
+      ADMIN_ROUTES_ENABLED: '',
+      COST_ALERT_INR_PER_DAY: '',
+      FAKE_NOW_IST: '',
+    });
+    expect(config.logLevel).toBe('info');
+    expect(config.graphBaseUrl).toBe('https://graph.facebook.com/v23.0');
+    expect(config.modelId).toBe('claude-sonnet-4-5');
+    expect(config.draftMode).toBe(true);
+    expect(config.nightStart).toBe('20:00');
+    expect(config.adminRoutesEnabled).toBe(false);
+    expect(config.costAlertInrPerDay).toBe(1000);
+    expect(config.fakeNowIst).toBeUndefined();
   });
 
   it('refuses FAKE_NOW_IST in production (§3.7 boot-refusal)', () => {

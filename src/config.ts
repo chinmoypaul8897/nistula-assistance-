@@ -9,7 +9,11 @@
 import { z } from 'zod';
 import { normalizePhone } from './lib/phone.js';
 
-const HHMM = /^\d{2}:\d{2}$/;
+// Range-checked HH:mm — a "25:00" must fail BOOT, not the first night-window
+// call inside message handling.
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+// IST wall clock for FAKE_NOW_IST, time part range-checked like HHMM.
+const IST_WALL_CLOCK = /^\d{4}-\d{2}-\d{2}[T ]([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
 
 const staffMemberSchema = z.object({
   name: z.string().min(1),
@@ -50,7 +54,7 @@ const envSchema = z.object({
   ADMIN_ROUTES_ENABLED: z.enum(['0', '1']).default('0'),
   HEALTHCHECKS_URL: z.url().optional(),
   COST_ALERT_INR_PER_DAY: z.coerce.number().positive().default(1000),
-  FAKE_NOW_IST: z.string().optional(),
+  FAKE_NOW_IST: z.string().regex(IST_WALL_CLOCK).optional(),
 });
 
 export interface StaffMember {
@@ -96,7 +100,12 @@ export class ConfigError extends Error {}
 
 /** Validates env (default process.env) into the typed Config; throws ConfigError listing every problem. */
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
-  const parsed = envSchema.safeParse(env);
+  // dotenv and Railway deliver blank lines ("VAR=") as '' — treat as unset so
+  // registry defaults apply (zod .default() only fires on undefined).
+  const cleaned = Object.fromEntries(
+    Object.entries(env).filter(([, value]) => value !== undefined && value !== ''),
+  );
+  const parsed = envSchema.safeParse(cleaned);
   if (!parsed.success) {
     const lines = parsed.error.issues.map(
       (issue) => `  ${issue.path.join('.') || '(root)'}: ${issue.message}`,
@@ -106,7 +115,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const raw = parsed.data;
 
   // FAKE_NOW_IST is a dev/test lever only — production must never boot with it (§3.7).
-  if (raw.NODE_ENV === 'production' && raw.FAKE_NOW_IST !== undefined && raw.FAKE_NOW_IST !== '') {
+  if (raw.NODE_ENV === 'production' && raw.FAKE_NOW_IST !== undefined) {
     throw new ConfigError('FAKE_NOW_IST must not be set in production (plan.md §3.7)');
   }
 
