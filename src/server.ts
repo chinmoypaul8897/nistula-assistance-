@@ -7,7 +7,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import Fastify from 'fastify';
-import { configSummary, loadConfig } from './config.js';
+import { ConfigError, configSummary, loadConfig } from './config.js';
+import { runMigrations } from './db/migrate.js';
+import { closeDb } from './db/client.js';
 import { createLogger } from './lib/logger.js';
 
 // package.json is read via require to avoid JSON-module import attributes
@@ -47,6 +49,12 @@ export function buildServer() {
 
 async function main(): Promise<void> {
   const config = loadConfig(); // fail-fast before anything listens
+  // Phase model (§3.7): the DB feature boots from CH-01, so its variable is
+  // required from here on.
+  if (config.databaseUrl === undefined) {
+    throw new ConfigError('DATABASE_URL is required from CH-01 (plan.md §3.7 phase model)');
+  }
+  await runMigrations(config.databaseUrl); // idempotent, before listen (CH-01)
   const app = buildServer();
   app.log.info(`config: ${configSummary(config)}`);
 
@@ -60,13 +68,16 @@ async function main(): Promise<void> {
       // WHY the timer: a hung connection must not block a redeploy — exit
       // with a nonzero code before the platform resorts to SIGKILL.
       setTimeout(() => process.exit(1), 10_000).unref();
-      app.close().then(
-        () => process.exit(0),
-        (error: unknown) => {
-          app.log.error(error, 'error during shutdown');
-          process.exit(1);
-        },
-      );
+      app
+        .close()
+        .then(() => closeDb())
+        .then(
+          () => process.exit(0),
+          (error: unknown) => {
+            app.log.error(error, 'error during shutdown');
+            process.exit(1);
+          },
+        );
     });
   }
 
