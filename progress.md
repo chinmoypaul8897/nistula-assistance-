@@ -4,9 +4,9 @@
 
 ## Status
 
-- **Current chunk pointer:** CH-01 (database core) — next up. CH-00 merged (PR #1) and tagged `vCH-00`; CH-00b post-merge audit fixes merged after it.
-- **Env values:** local `.env` (gitignored) holds `NODE_ENV=development` + `PORT=3000` only — no secrets exist in any env yet. Secrets stay in `credentials-local/` (gitignored, root) until they move to local `.env` + Railway variables. `credentials-local/` must NEVER be committed or copied into docs/.
-- **How to run:** `pnpm install` → `pnpm dev` → `GET http://localhost:3000/health`. Gate: `pnpm check` (typecheck + lint + tests). CI runs the same on Node 22 + 24.
+- **Current chunk pointer:** CH-02 (WhatsApp client + webhook) — next up. CH-00/CH-00b merged and tagged; CH-01 complete on `chunk/CH-01-database-core` (PR #3).
+- **Env values:** local `.env` (gitignored) holds `NODE_ENV=development`, `PORT=3100` (3000 is taken by another local project), `DATABASE_URL` → local docker Postgres. No secrets exist in any env yet. **Railway project + Postgres: DEFERRED by Paul — must be done BEFORE CH-02** (its manual step deploys the webhook there). Secrets stay in `credentials-local/` until they move to local `.env` + Railway variables.
+- **How to run:** `docker compose up -d postgres` → `pnpm dev` (migrations apply at boot) → `GET http://localhost:3100/health`. Gate: `pnpm check` (typecheck + lint + tests incl. DB suite). CI runs the same on Node 22 + 24 with a postgres service container.
 
 ## Table of contents (chunk ledger)
 
@@ -15,7 +15,7 @@
 | Pre-CH | Orientation & repo organisation | ✅ DONE 2026-07-07 | [↓](#pre-ch--orientation--repo-organisation--done-2026-07-07) |
 | CH-00 | Repo bootstrap | ✅ DONE 2026-07-07 | [↓](#ch-00--repo-bootstrap--done-2026-07-07) |
 | CH-00b | Post-merge audit fixes | ✅ DONE 2026-07-07 | [↓](#ch-00b--post-merge-audit-fixes--done-2026-07-07) |
-| CH-01 | Database core | ⬜ pending | |
+| CH-01 | Database core | ✅ DONE 2026-07-07 | [↓](#ch-01--database-core--done-2026-07-07) |
 | CH-02 | WhatsApp client + webhook | ⬜ pending | |
 | CH-03 | Echo pipeline (queue + debounce) | ⬜ pending | |
 | CH-04 | Brain v1 — voice | ⬜ pending | |
@@ -151,3 +151,34 @@ nistula-assistance/             ← repo root (folder renamed pre-git-init; Pre-
 **Open questions:** none.
 
 **How to verify:** `pnpm check` (74 tests) · put `LOG_LEVEL=silent` in `.env`, `pnpm dev` → no output, `/health` still 200 (remove the line after) · `loadConfig({NODE_ENV:'test',PORT:'3000',FAKE_NOW_IST:'2026-02-31T10:00'})` throws.
+
+---
+
+### CH-01 · Database core — DONE 2026-07-07
+
+**Built:**
+- `src/db/schema.ts`: the four §4 tables (`guests`, `conversations`, `messages`, `raw_events`) column-for-column — pg enums verbatim, uuid pks, timestamptz stamps with `$onUpdate` auto-touch on `updated_at`, unique `guests.phone`, nullable-unique `messages.wa_message_id`, unique `conversations.guest_id`, `messages(conversation_id, created_at)` index. `last_processed_message_id` deliberately absent (CH-03's migration).
+- First migration `drizzle/0000_conversation-core.sql` committed; `src/db/migrate.ts` applies migrations idempotently at boot BEFORE listen, module-relative (works from any cwd — proven from `$env:TEMP`); `DATABASE_URL` is now required at boot (§3.7 phase model).
+- `src/db/client.ts`: single postgres.js pool via `getDb(url)` — a different URL on a later call throws. `src/db/repos.ts`: `upsertGuestByPhone` (profile name updates only when provided), `getOrCreateConversation` (race-safe via onConflictDoNothing + re-select), `insertMessage` (duplicate `wa_message_id` → `isNew:false` no-op), `insertRawEvent`.
+- `docker-compose.yml` (postgres:16, healthcheck, `pgdata` volume) + CI postgres service container on both matrix legs; DB test suite (8 tests) against a self-provisioned `nistula_test` database via vitest globalSetup (degrades gracefully when Postgres is down — unit tests still run); runbook documents both database paths and the migration workflow.
+
+**Decisions made while building:**
+- **Railway manual step DEFERRED by Paul (explicit approval) to before CH-02** — CH-01 runs fully on the local Docker path; CH-02's webhook deploy needs Railway, so the step is now a CH-02 precondition.
+- Local dev `PORT=3100`: Docker Desktop startup auto-restarts another project's containers (`drdroid-llm-control-plane`, a kind cluster) which binds 3000 — left untouched.
+- Repositories live in `src/db/repos.ts` (§3.2 lists only schema/client/migrate — small addition, keeps db module cohesive).
+- Column defaults where §4 is silent: `register_pref`/`lang_pref` default `'unknown'`, `conversations.status` default `'ai_active'`, `degraded_notified`/`marketing_opt_in`/`processed` default false.
+- pg-boss installed now per CH-01 step 1 (first used CH-03) so its Node floor is locked into the lockfile.
+- Test phone data standardised on the reserved-style `+91 7700 900xxx` range; the real business number remains only in the plan-prescribed `phone.ts` normalisation cases.
+
+**Observed reality:**
+- Drizzle wraps Postgres errors ("Failed query: …") — the real message (enum/unique violation) lives on `error.cause`; tests must flatten the cause chain.
+- `migrationsFolder` is cwd-relative by default — found by the pre-push review as a would-be Railway boot crash; fixed module-relative.
+- vitest runs test FILES in parallel → DB provisioning must live in globalSetup (concurrent `CREATE DATABASE` races: codes 42P04/23505).
+- Docker daemon startup resurrects other projects' containers; port collisions on shared dev machines are real — check `docker ps` before assuming a port.
+- Pre-push 3-agent review (spec §4 column-by-column / behavioural probes / hygiene): spec column-check fully compliant, hygiene zero findings; all code findings fixed (cwd migrations, `$onUpdate`, url-locked pool, globalSetup, test numbers).
+
+**Deviations from plan.md:** `src/db/repos.ts` addition (above) · commit `edcb848` subject is 51 chars (one over §3.6's 50; left — unshared history churn not worth it, recorded) · two commits were initially scope-less and reworded to `ci(db)`/`docs(db)` before push.
+
+**Open questions:** none.
+
+**How to verify:** `docker compose up -d postgres` · `pnpm check` (83 tests incl. DB suite) · `pnpm dev` → boot log shows migrations, then `GET http://localhost:3100/health` → 200 · `docker exec nistula-assistance-postgres-1 psql -U nistula -d nistula -c '\dt'` → the four tables.

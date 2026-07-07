@@ -1,0 +1,21 @@
+# Local dev database (plan.md CH-01 step 4). Credentials are local-only
+# throwaways — the real DATABASE_URL lives in Railway variables.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: nistula
+      POSTGRES_PASSWORD: nistula
+      POSTGRES_DB: nistula
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nistula']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
