@@ -1,0 +1,18 @@
+# ── Secrets — NEVER commit (plan.md §3.6 credentials rule) ──
+.env
+.env.*
+credentials-local/
+CREDENTIALS.md
+
+# ── Dependencies & build output ──
+node_modules/
+dist/
+
+# ── Database dumps / backups ──
+*.dump
+
+# ── Logs & OS noise ──
+*.log
+*.stackdump
+.DS_Store
+Thumbs.db
