@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { loadConfig } from '../src/config.js';
 import { createLogger, loggableBody } from '../src/lib/logger.js';
 
 function captureLogger() {
@@ -23,6 +24,33 @@ describe('createLogger redaction (CH-00 security box)', () => {
       expect(out).not.toContain(secret);
     }
     expect(out).toContain('[redacted]');
+  });
+
+  it('redacts a whole Config object logged wholesale', () => {
+    vi.stubEnv('LOG_LEVEL', 'info');
+    const { logger, output } = captureLogger();
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      PORT: '3000',
+      ANTHROPIC_API_KEY: 'sk-cfg-secret',
+      WA_ACCESS_TOKEN: 'EAAG-cfg-secret',
+      WA_APP_SECRET: 'appsecret-cfg',
+      EZEE_AUTH_CODE: 'ezee-cfg-secret',
+      DATABASE_URL: 'postgres://u:pw-cfg-secret@h/db',
+      ADMIN_BEARER_TOKEN: 'bearer-cfg-secret',
+    });
+    logger.info({ config });
+    const out = output();
+    for (const secret of [
+      'sk-cfg-secret',
+      'EAAG-cfg-secret',
+      'appsecret-cfg',
+      'ezee-cfg-secret',
+      'pw-cfg-secret',
+      'bearer-cfg-secret',
+    ]) {
+      expect(out).not.toContain(secret);
+    }
   });
 
   it('respects LOG_LEVEL from the environment', () => {

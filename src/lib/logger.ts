@@ -6,9 +6,29 @@
  */
 import { pino, type LoggerOptions } from 'pino';
 
-// The CH-00 security box names these four; `*.` variants catch them one
-// level deep, which covers every log-call shape we use.
-const SECRET_KEYS = ['WA_ACCESS_TOKEN', 'EZEE_AUTH_CODE', 'ANTHROPIC_API_KEY', 'authorization'];
+// The CH-00 security box names the first four; the rest cover both the env
+// spelling and the camelCase Config-object spelling so logging a whole
+// loadConfig() result is safe. `*.` variants catch keys one level deep,
+// which covers every log-call shape we use (logger.info({ config })).
+const SECRET_KEYS = [
+  'WA_ACCESS_TOKEN',
+  'EZEE_AUTH_CODE',
+  'ANTHROPIC_API_KEY',
+  'authorization',
+  'WA_APP_SECRET',
+  'WA_VERIFY_TOKEN',
+  'DATABASE_URL',
+  'ADMIN_BEARER_TOKEN',
+  'HEALTHCHECKS_URL',
+  'waAccessToken',
+  'waAppSecret',
+  'waVerifyToken',
+  'ezeeAuthCode',
+  'anthropicApiKey',
+  'databaseUrl',
+  'adminBearerToken',
+  'healthchecksUrl',
+];
 const REDACT_PATHS = [
   ...SECRET_KEYS,
   ...SECRET_KEYS.map((key) => `*.${key}`),
