@@ -1,0 +1,37 @@
+name: CI
+
+on: push
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version comes from package.json "packageManager"
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The gate: typecheck + lint + tests (plan §3.1)
+      - run: pnpm check
+
+      # Dependency audit (plan §3.3)
+      - run: pnpm audit --audit-level high
+
+      # Fixture PII guard (plan §3.6 — CI grep enforces no real numbers in
+      # fixtures; fixture-scrub.ts lands in CH-02 and may refine this pattern)
+      - name: Fixture PII guard
+        run: |
+          if grep -rEn '\+91[0-9]{5,}' test/fixtures/; then
+            echo '::error::Real-looking +91 number found in test/fixtures'
+            exit 1
+          fi
