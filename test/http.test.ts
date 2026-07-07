@@ -64,7 +64,8 @@ describe('createHttp (plan §3.4 retry doctrine)', () => {
   it('aborts a hung request via the timeout signal', async () => {
     const hangingFetch = ((_url, init) =>
       new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(init.signal.reason));
+        const signal = init?.signal;
+        signal?.addEventListener('abort', () => reject(signal.reason));
       })) as typeof fetch;
     const http = createHttp({ fetchImpl: hangingFetch, sleepImpl: instantSleep });
     await expect(http('https://example.test/', { timeoutMs: 20 })).rejects.toThrow();

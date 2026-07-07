@@ -4,7 +4,7 @@
  * logs a whole config or headers object. Request-id / conversation-id ride on
  * pino child loggers — `logger.child({ conversationId })` — per §3.1.
  */
-import { pino } from 'pino';
+import { pino, type LoggerOptions } from 'pino';
 
 // The CH-00 security box names these four; `*.` variants catch them one
 // level deep, which covers every log-call shape we use.
@@ -17,7 +17,7 @@ const REDACT_PATHS = [
 
 /** Creates the app logger; tests pass a stream to capture output. */
 export function createLogger(stream?: { write: (msg: string) => void }) {
-  const options: pino.LoggerOptions = {
+  const options: LoggerOptions = {
     level: process.env.LOG_LEVEL ?? 'info',
     redact: { paths: REDACT_PATHS, censor: '[redacted]' },
   };
