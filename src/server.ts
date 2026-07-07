@@ -3,7 +3,6 @@
  * (§3.1); the only public surface is /health until CH-02 adds the webhook —
  * §3.3 allows nothing else without the admin gate.
  */
-import 'dotenv/config';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -50,10 +49,22 @@ async function main(): Promise<void> {
   app.log.info(`config: ${configSummary(config)}`);
 
   // TODO(CH-03): stop pg-boss before closing the server on shutdown.
+  let shuttingDown = false;
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
+      if (shuttingDown) return; // both signals can arrive — close only once
+      shuttingDown = true;
       app.log.info({ signal }, 'shutting down');
-      void app.close().then(() => process.exit(0));
+      // WHY the timer: a hung connection must not block a redeploy — exit
+      // with a nonzero code before the platform resorts to SIGKILL.
+      setTimeout(() => process.exit(1), 10_000).unref();
+      app.close().then(
+        () => process.exit(0),
+        (error: unknown) => {
+          app.log.error(error, 'error during shutdown');
+          process.exit(1);
+        },
+      );
     });
   }
 
@@ -64,6 +75,10 @@ async function main(): Promise<void> {
 // WHY the lowercasing: Windows reports drive letters with inconsistent case.
 const entryPath = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : '';
 if (entryPath === fileURLToPath(import.meta.url).toLowerCase()) {
+  // .env loads only when actually booting — importing buildServer (tests)
+  // must stay free of process.env side effects.
+  const { default: dotenv } = await import('dotenv');
+  dotenv.config({ quiet: true });
   main().catch((error) => {
     // Config errors must reach the console even before any logger exists.
     console.error(error instanceof Error ? error.message : error);
