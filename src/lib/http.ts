@@ -40,6 +40,9 @@ export function createHttp(deps: HttpDeps = {}) {
           signal: AbortSignal.timeout(timeoutMs),
         });
         if (response.status >= 500 && attempt < MAX_TRIES) {
+          // Free the socket — an unconsumed body pins the undici keep-alive
+          // connection until GC, which bites exactly when we retry most.
+          void response.body?.cancel().catch(() => {});
           await sleepImpl(backoffMs(attempt, randomImpl));
           continue;
         }
