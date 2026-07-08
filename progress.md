@@ -4,8 +4,9 @@
 
 ## Status
 
-- **Current chunk pointer:** CH-02 (WhatsApp client + webhook) — next up. CH-00/CH-00b merged and tagged; CH-01 complete on `chunk/CH-01-database-core` (PR #3).
-- **Env values:** local `.env` (gitignored) holds `NODE_ENV=development`, `PORT=3100` (3000 is taken by another local project), `DATABASE_URL` → local docker Postgres. No secrets exist in any env yet. **Railway project + Postgres: DEFERRED by Paul — must be done BEFORE CH-02** (its manual step deploys the webhook there). Secrets stay in `credentials-local/` until they move to local `.env` + Railway variables.
+- **Current chunk pointer:** CH-02 (WhatsApp client + webhook) — next up, waiting ONLY on the four Meta values (`WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`). CH-00/CH-00b/CH-01 merged and tagged (`vCH-00`, `vCH-00b`, `vCH-01`).
+- **Railway: DONE and CLI-verified 2026-07-08** — project `nistula-assistance` (production), Postgres Online with persistent volume, app service connected to the private repo with `DATABASE_URL=${{Postgres.DATABASE_URL}}` reference; app intentionally undeployed until CH-02 (an accidental first build sits harmlessly "Crashed" — fail-fast config refused to boot without variables); auto-deploy to be kept Disabled until CH-02.
+- **Env values:** local `.env` (gitignored) holds `NODE_ENV=development`, `PORT=3100` (3000 is owned by another local project), `DATABASE_URL` → local docker Postgres. No secrets in any env yet. Secrets stay in `credentials-local/` until they move to local `.env` + Railway variables.
 - **How to run:** `docker compose up -d postgres` → `pnpm dev` (migrations apply at boot) → `GET http://localhost:3100/health`. Gate: `pnpm check` (typecheck + lint + tests incl. DB suite). CI runs the same on Node 22 + 24 with a postgres service container.
 
 ## Table of contents (chunk ledger)
@@ -66,6 +67,23 @@ nistula-assistance/             ← repo root (folder renamed pre-git-init; Pre-
     source/
       voice-guide.md            ← Nistula voice guide v1.1 (feeds CH-04 system prompt)
 ```
+
+## Rented-track status (plan §10 — Paul-side, updated 2026-07-08)
+
+| Item | Status |
+|---|---|
+| GitHub repo + doc inputs | ✅ done (Pre-CH/CH-00) |
+| Railway project + Postgres | ✅ done, CLI-verified 2026-07-08 |
+| Meta dev app + test number + System User token | 🕐 in progress — personal FB account created 2026-07-08 (locked-down, 2FA on), deliberately aging 1–2 days to avoid Meta's new-account checkpoint; Parts 2B/3/4 of the setup-guide artifact planned ~2026-07-10 |
+| Meta business verification | ⬜ after the portfolio exists (guide Part 4) |
+| Anthropic API key (CH-04) | ⬜ this week — no-Facebook guide artifact covers it |
+| Website content export + quirks template (CH-06) | 🕐 quirks template being sent to villa team; content export now CLAUDE-side (see website note below) |
+| Staff roster + DONE briefing (CH-13) | ⬜ collection format in the no-Facebook guide |
+| BSP signed, v4 coexistence in writing (before 15 Oct 2026) | ⬜ outreach starting — MSG91 → Dualhook → 360dialog per §10 |
+| Website `/api/debug/*` gating | 🕐 queued for Claude (see website note) |
+| healthchecks.io (CH-17) · Railway Hobby upgrade · test SIM | ⬜ optional-now items in the no-Facebook guide |
+
+**Website (new facts, 2026-07-08):** the site was recently rebuilt and is NOT yet on nistula.life — preview at `https://nistula-website.vercel.app` (candidate dev `WEBSITE_BASE_URL` per §3.7; confirm at CH-05). Codebase: private repo `chinmoypaul8897/nistula-website`; Paul granted Claude **read-only** access — NO changes/pushes there without explicit approval per change. ⚠️ The preview calls the LIVE eZee API: never touch booking-creating endpoints; only polite GETs to `/api/quote`/`/api/availability`. The §10 debug-gating task = Claude analyses read-only and proposes a fix for Paul's approval.
 
 ---
 
