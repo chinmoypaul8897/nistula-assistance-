@@ -159,25 +159,26 @@ describe('golden path — burst in, exactly one reply out', () => {
       expect(graphCalls).toHaveLength(1);
       expect(graphCalls[0]?.to).toBe('+917700900001');
 
-      // Window columns + pointer: written by the worker (closes CH-02's D2
-      // deferral), derived from the newest guest MESSAGE time.
-      const [newest] = await db
+      // The burst itself is intact and deduped-clean. Ack-then-ingest means
+      // the three POSTs persist CONCURRENTLY — row order is not POST order
+      // (seen on CI), so "newest" is computed the way the worker defines it:
+      // greatest (created_at, id) tuple.
+      const inbound = await db
         .select()
         .from(schema.messages)
-        .where(eq(schema.messages.waMessageId, 'wamid.GOLDEN-0003'));
+        .where(eq(schema.messages.direction, 'in'))
+        .orderBy(schema.messages.createdAt, schema.messages.id);
+      expect(inbound).toHaveLength(3);
+      const newest = inbound.at(-1);
+
+      // Window columns + pointer: written by the worker (closes CH-02's D2
+      // deferral), derived from the newest guest MESSAGE time.
       const [conv] = await db.select().from(schema.conversations);
       expect(conv?.lastProcessedMessageId).toBe(newest?.id);
       expect(conv?.lastGuestMsgAt?.getTime()).toBe(newest?.createdAt.getTime());
       expect(conv?.serviceWindowExpiresAt?.getTime()).toBe(
         (newest?.createdAt.getTime() ?? 0) + 24 * 60 * 60 * 1000,
       );
-
-      // The burst itself is intact and deduped-clean.
-      const inbound = await db
-        .select()
-        .from(schema.messages)
-        .where(eq(schema.messages.direction, 'in'));
-      expect(inbound).toHaveLength(3);
     },
   );
 });
