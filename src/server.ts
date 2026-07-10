@@ -9,8 +9,9 @@ import path from 'node:path';
 import Fastify from 'fastify';
 import { ConfigError, configSummary, loadConfig } from './config.js';
 import { runMigrations } from './db/migrate.js';
-import { closeDb } from './db/client.js';
+import { closeDb, getDb } from './db/client.js';
 import { createLogger } from './lib/logger.js';
+import { waWebhookRoutes } from './wa/webhook.js';
 
 // package.json is read via require to avoid JSON-module import attributes
 // churn across Node versions; the path is stable relative to src/ and dist/.
@@ -51,11 +52,31 @@ async function main(): Promise<void> {
   const config = loadConfig(); // fail-fast before anything listens
   // Phase model (§3.7): the DB feature boots from CH-01, so its variable is
   // required from here on.
-  if (config.databaseUrl === undefined) {
+  const { databaseUrl, waPhoneNumberId, waAccessToken, waAppSecret, waVerifyToken } = config;
+  if (databaseUrl === undefined) {
     throw new ConfigError('DATABASE_URL is required from CH-01 (plan.md §3.7 phase model)');
   }
-  await runMigrations(config.databaseUrl); // idempotent, before listen (CH-01)
+  // WhatsApp boots from CH-02 — all four WA variables are required now, even
+  // the two the server itself doesn't use (fail-fast completeness: a partial
+  // set would only surface at the first send).
+  if (
+    waPhoneNumberId === undefined ||
+    waAccessToken === undefined ||
+    waAppSecret === undefined ||
+    waVerifyToken === undefined
+  ) {
+    throw new ConfigError(
+      'WA_PHONE_NUMBER_ID, WA_ACCESS_TOKEN, WA_APP_SECRET and WA_VERIFY_TOKEN ' +
+        'are required from CH-02 (plan.md §3.7 phase model)',
+    );
+  }
+  await runMigrations(databaseUrl); // idempotent, before listen (CH-01)
   const app = buildServer();
+  await app.register(waWebhookRoutes, {
+    db: getDb(databaseUrl).db,
+    appSecret: waAppSecret,
+    verifyToken: waVerifyToken,
+  });
   app.log.info(`config: ${configSummary(config)}`);
 
   // TODO(CH-03): stop pg-boss before closing the server on shutdown.
