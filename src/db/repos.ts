@@ -93,7 +93,11 @@ export async function updateRawEvent(
 
 // --- CH-03 conversation-cursor repositories --------------------------------
 
-export type MessageCursor = { createdAt: Date; id: string };
+// created_at travels as Postgres TEXT, never a JS Date: timestamptz holds
+// MICROSECONDS, Date only milliseconds — a truncated cursor makes the newest
+// message match its own "newer than" query and the re-check loops forever
+// (caught live by the golden-path test).
+export type MessageCursor = { createdAtIso: string; id: string };
 
 /**
  * Resolves the conversation's processed-pointer into a (created_at, id)
@@ -108,7 +112,10 @@ export async function resolveMessageCursor(
 ): Promise<{ cursor: MessageCursor | null; dangling: boolean }> {
   if (messageId === null) return { cursor: null, dangling: false };
   const [row] = await db
-    .select({ createdAt: messages.createdAt, id: messages.id })
+    .select({
+      createdAtIso: sql`${messages.createdAt}::text`.mapWith(String),
+      id: messages.id,
+    })
     .from(messages)
     .where(eq(messages.id, messageId));
   return row === undefined ? { cursor: null, dangling: true } : { cursor: row, dangling: false };
@@ -123,10 +130,13 @@ export async function getUnprocessedGuestMessages(
   conversationId: string,
   cursor: MessageCursor | null,
 ): Promise<Message[]> {
+  // Text param, not a Date object: raw-sql params skip drizzle's column
+  // mapping (a Date crashes postgres.js serialization) and the ::text
+  // round-trip keeps the microseconds a JS Date would truncate.
   const afterCursor =
     cursor === null
       ? undefined
-      : sql`(${messages.createdAt}, ${messages.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`;
+      : sql`(${messages.createdAt}, ${messages.id}) > (${cursor.createdAtIso}::timestamptz, ${cursor.id}::uuid)`;
   return db
     .select()
     .from(messages)
@@ -186,7 +196,13 @@ export async function getConversationTurnContext(
   conversationId: string,
 ): Promise<{ conversation: Conversation; guestPhone: string; dbNow: Date } | null> {
   const [row] = await db
-    .select({ conversation: conversations, guestPhone: guests.phone, dbNow: sql<Date>`now()` })
+    .select({
+      conversation: conversations,
+      guestPhone: guests.phone,
+      // Raw sql fields bypass the driver's type mapping and arrive as
+      // strings (observed on drizzle 0.45 + postgres.js) — map explicitly.
+      dbNow: sql`now()`.mapWith((value: unknown) => new Date(value as string)),
+    })
     .from(conversations)
     .innerJoin(guests, eq(guests.id, conversations.guestId))
     .where(eq(conversations.id, conversationId));
