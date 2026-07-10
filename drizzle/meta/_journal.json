@@ -8,6 +8,13 @@
       "when": 1783444294623,
       "tag": "0000_conversation-core",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783693022761,
+      "tag": "0001_conversation-cursor",
+      "breakpoints": true
     }
   ]
 }

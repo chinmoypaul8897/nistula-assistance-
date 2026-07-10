@@ -36,7 +36,11 @@ export function captureLog(): LogCapture {
 }
 
 /** Builds an injectable app with the webhook routes registered. */
-export async function buildWaApp(db: Db, capture?: LogCapture) {
+export async function buildWaApp(
+  db: Db,
+  capture?: LogCapture,
+  opts?: { enqueue?: (conversationId: string) => Promise<void> },
+) {
   const app = Fastify(
     capture === undefined ? {} : { loggerInstance: pino({ level: 'debug' }, capture.stream) },
   );
@@ -44,6 +48,8 @@ export async function buildWaApp(db: Db, capture?: LogCapture) {
     db,
     appSecret: TEST_APP_SECRET,
     verifyToken: TEST_VERIFY_TOKEN,
+    // CH-02-era tests exercise storage, not the queue — no-op by default.
+    enqueue: opts?.enqueue ?? (async () => {}),
   });
   return app;
 }

@@ -10,7 +10,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
-import { buildWaApp, signBody, TEST_VERIFY_TOKEN } from './helpers/wa.js';
+import { buildWaApp, captureLog, signBody, TEST_VERIFY_TOKEN } from './helpers/wa.js';
 
 const TEST_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://nistula:nistula@localhost:5432/nistula_test';
@@ -21,12 +21,18 @@ const fixture = (name: string): string =>
 let client: ReturnType<typeof postgres>;
 let db: Db;
 let app: Awaited<ReturnType<typeof buildWaApp>>;
+// CH-03: every NEW guest message must enqueue exactly once (isNew-gated).
+const enqueueCalls: string[] = [];
 
 beforeAll(async () => {
   client = postgres(TEST_URL, { max: 5, onnotice: () => {} });
   db = drizzle(client, { schema });
   await db.execute(sql`TRUNCATE messages, conversations, raw_events, guests CASCADE`);
-  app = await buildWaApp(db);
+  app = await buildWaApp(db, undefined, {
+    enqueue: async (conversationId) => {
+      enqueueCalls.push(conversationId);
+    },
+  });
 }, 30_000);
 
 afterAll(async () => {
@@ -146,6 +152,9 @@ describe('inbound message persistence', () => {
     expect(conversation?.lastGuestMsgAt).toBeNull();
     expect(conversation?.serviceWindowExpiresAt).toBeNull();
 
+    // CH-03: the new message enqueued its conversation exactly once.
+    expect(enqueueCalls).toEqual([message?.conversationId]);
+
     const [raw] = await db.select().from(schema.rawEvents);
     expect(raw).toMatchObject({ source: 'whatsapp', eventType: 'messages', processed: true });
     expect(raw?.error).toBeNull();
@@ -163,6 +172,8 @@ describe('inbound message persistence', () => {
     // Both deliveries are audited, both processed clean.
     const raw = await db.select().from(schema.rawEvents);
     expect(raw.filter((r) => r.processed)).toHaveLength(2);
+    // CH-03: the replay did NOT re-enqueue (the isNew guard sits in front).
+    expect(enqueueCalls).toHaveLength(1);
   });
 
   it('maps an unrecognised message type to `unsupported`', async () => {
@@ -276,5 +287,75 @@ describe('tolerant parsing (§5.3 — never 500)', () => {
       .from(schema.messages)
       .where(eq(schema.messages.waMessageId, 'wamid.BAD-PHONE'));
     expect(msgs).toHaveLength(0);
+  });
+});
+
+describe('enqueue failure isolation (CH-03 — the sweeper is the net)', () => {
+  it('a throwing enqueue still yields 200, a stored message and a CLEAN raw event', async () => {
+    const capture = captureLog();
+    const throwingApp = await buildWaApp(db, capture, {
+      enqueue: async () => {
+        throw new Error('boss unavailable');
+      },
+    });
+    const payload = JSON.stringify({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: 'e3',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                contacts: [{ profile: { name: 'Test Guest 4' }, wa_id: '917700900004' }],
+                messages: [
+                  {
+                    from: '917700900004',
+                    id: 'wamid.FIXTURE-INBOUND-0004',
+                    timestamp: '1720620300',
+                    type: 'text',
+                    text: { body: 'x' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const res = await throwingApp.inject({
+      method: 'POST',
+      url: '/webhooks/whatsapp',
+      payload,
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': signBody(payload) },
+    });
+    expect(res.statusCode).toBe(200);
+    try {
+      // Settle on the raw event CLOSE-OUT, not the message row — the message
+      // insert precedes both the enqueue attempt and the D6 close-out, so
+      // polling it races the writes this test asserts on (seen flaky in CI).
+      let thisEvent: typeof schema.rawEvents.$inferSelect | undefined;
+      for (let i = 0; i < 300; i++) {
+        const raw = await db.select().from(schema.rawEvents);
+        thisEvent = raw.find((r) =>
+          JSON.stringify(r.payload).includes('wamid.FIXTURE-INBOUND-0004'),
+        );
+        if (thisEvent !== undefined && (thisEvent.processed || thisEvent.error !== null)) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      // The enqueue error is a warn, never a failed raw event (D6 stays clean).
+      expect(thisEvent).toMatchObject({ processed: true, error: null });
+      const stored = await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.waMessageId, 'wamid.FIXTURE-INBOUND-0004'));
+      expect(stored).toHaveLength(1);
+      const warned = capture.lines.find(
+        (line) => typeof line.msg === 'string' && line.msg.includes('enqueue failed'),
+      );
+      expect(warned).toBeDefined();
+    } finally {
+      await throwingApp.close();
+    }
   });
 });

@@ -184,6 +184,36 @@ describe('sendText — failure paths (never throws; row is the audit)', () => {
     });
     expect(result).toMatchObject({ ok: false, error: 'Graph 2xx without a message id' });
   });
+
+  it('returns ok:false (never throws) when the INTENT INSERT itself fails — CH-03 fix', async () => {
+    // A db whose insert dies simulates pool exhaustion / connection loss at
+    // the one write that used to sit outside the failure envelope.
+    const brokenDb = {
+      insert() {
+        throw new Error('pool exhausted');
+      },
+    } as unknown as Db;
+    const log = { error: vi.fn(), warn: vi.fn() };
+    const wa = createWaClient({
+      db: brokenDb,
+      log,
+      graphBaseUrl: GRAPH,
+      phoneNumberId: PHONE_ID,
+      accessToken: 'test-token-never-logged',
+      httpImpl: async () => {
+        throw new Error('Graph must never be reached without a committed intent');
+      },
+    });
+    const result = await wa.sendText('+917700900016', 'never sent', {
+      conversationId: null,
+      sender: 'system',
+    });
+    expect(result).toMatchObject({ ok: false, messageId: null, error: 'Error: pool exhausted' });
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ opsAlert: 'wa_send_failed' }),
+      expect.stringContaining('[OPS-ALERT]'),
+    );
+  });
 });
 
 describe('markRead', () => {

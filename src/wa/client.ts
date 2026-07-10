@@ -12,7 +12,7 @@
 // TODO(CH-12): enforce the 24h window here — free-form only in-window,
 // closed window → template path, 131047 → failed + ops alert (§5.3).
 import { and, eq } from 'drizzle-orm';
-import type { Db } from '../db/client.js';
+import type { Db, DbLike } from '../db/client.js';
 import { insertMessage, type Message } from '../db/repos.js';
 import { messages } from '../db/schema.js';
 import { http as defaultHttp } from '../lib/http.js';
@@ -35,6 +35,14 @@ export interface SendOptions {
 export type SendResult =
   | { ok: true; messageId: string; waMessageId: string }
   | { ok: false; messageId: string | null; error: string };
+
+/** Dispatch of a committed intent row — messages has no phone column, so the caller restates the target. */
+export interface DispatchArgs {
+  messageId: string;
+  toE164: string;
+  body: string;
+  conversationId: string | null;
+}
 
 export interface WaClientLogger extends AlertLogger {
   warn: (obj: Record<string, unknown>, msg?: string) => void;
@@ -60,17 +68,17 @@ export function createWaClient(deps: WaClientDeps) {
   };
 
   /**
-   * Sends a free-form text (§5.3) with the §3.4 send-intent pattern: the row
-   * commits BEFORE the Graph call so a crash can never leave an un-audited
-   * send, and a crash-retry that finds it never re-sends. Returns a result,
-   * never throws — callers own their failure policy; the row is the audit.
+   * Inserts the §3.4 send-intent row (status 'queued') WITHOUT calling
+   * Graph. Composable into a caller's transaction — CH-03's worker commits
+   * intent + turn-claim atomically (decision CH-03/D2); standalone callers
+   * pass deps.db and the awaited autocommit IS the pre-call commit.
+   * Throws on failure so an enclosing transaction rolls back.
    */
-  async function sendText(toE164: string, body: string, opts: SendOptions): Promise<SendResult> {
+  async function createSendIntent(dbLike: DbLike, body: string, opts: SendOptions): Promise<Message> {
     // WHY 'queued': it is the §4 enum's spelling of §3.4's 'sending' — no
     // other use assigns messages.status='queued' anywhere in the plan
     // (CH-02 decision D1; CH-12/13/16/17 inherit this, do not reopen it).
-    // No explicit transaction: the awaited autocommit IS the pre-call commit.
-    const { message } = await insertMessage(deps.db, {
+    const { message } = await insertMessage(dbLike, {
       conversationId: opts.conversationId,
       direction: 'out',
       sender: opts.sender,
@@ -80,10 +88,19 @@ export function createWaClient(deps: WaClientDeps) {
     });
     if (message === null) {
       // Unreachable without a wa_message_id conflict; guarded for honesty.
-      return { ok: false, messageId: null, error: 'send-intent row insert returned no row' };
+      throw new Error('send-intent row insert returned no row');
     }
+    return message;
+  }
+
+  /**
+   * Performs the Graph call for an already-COMMITTED intent row and settles
+   * it 'sent' or 'failed' (+ ops alert). Never throws — the row is the audit
+   * and callers own their failure policy.
+   */
+  async function dispatchText(args: DispatchArgs): Promise<SendResult> {
     // TODO(CH-17): stale-'queued' reconciliation sweep + alert (§3.4 —
-    // a crash between here and the Graph call leaves an inert intent row).
+    // a crash between the intent commit and here leaves an inert intent row).
     //
     // waMessageId is hoisted OUTSIDE the try so failure paths after a Graph
     // 2xx still record it — without it on the row, status webhooks match
@@ -96,19 +113,19 @@ export function createWaClient(deps: WaClientDeps) {
         headers,
         body: JSON.stringify({
           messaging_product: 'whatsapp',
-          to: toE164,
+          to: args.toE164,
           type: 'text',
-          text: { body },
+          text: { body: args.body },
         }),
       });
       httpStatus = response.status;
       if (!response.ok) {
-        return await failSend(message.id, opts.conversationId, await graphFailure(response));
+        return await failSend(args.messageId, args.conversationId, await graphFailure(response));
       }
       const parsed = (await response.json().catch(() => ({}))) as WaSendResponse;
       waMessageId = parsed.messages?.[0]?.id;
       if (waMessageId === undefined) {
-        return await failSend(message.id, opts.conversationId, {
+        return await failSend(args.messageId, args.conversationId, {
           errorText: 'Graph 2xx without a message id',
           httpStatus,
         });
@@ -119,22 +136,49 @@ export function createWaClient(deps: WaClientDeps) {
       const updated = await deps.db
         .update(messages)
         .set({ status: 'sent', waMessageId })
-        .where(and(eq(messages.id, message.id), eq(messages.status, 'queued')))
+        .where(and(eq(messages.id, args.messageId), eq(messages.status, 'queued')))
         .returning({ id: messages.id });
       if (updated.length === 0) {
-        deps.log.warn({ messageId: message.id }, 'queued→sent update applied to no row');
+        deps.log.warn({ messageId: args.messageId }, 'queued→sent update applied to no row');
       }
-      return { ok: true, messageId: message.id, waMessageId };
+      return { ok: true, messageId: args.messageId, waMessageId };
     } catch (error) {
       // summarizeError, never raw messages: a thrown DB error embeds bound
       // params (§3.3) — and this row/alert text must stay content-free.
       return await failSend(
-        message.id,
-        opts.conversationId,
+        args.messageId,
+        args.conversationId,
         { errorText: summarizeError(error), httpStatus },
         waMessageId,
       );
     }
+  }
+
+  /**
+   * Sends a free-form text (§5.3): createSendIntent then dispatchText — the
+   * §3.4 send-intent pattern. Returns a result, never throws.
+   */
+  async function sendText(toE164: string, body: string, opts: SendOptions): Promise<SendResult> {
+    let message: Message;
+    try {
+      message = await createSendIntent(deps.db, body, opts);
+    } catch (error) {
+      // A transient DB error here used to escape as a throw, contradicting
+      // this function's never-throws contract (found in the CH-03 pre-build
+      // review). No row exists to mark 'failed' — alert and return.
+      await alertOps(deps.log, {
+        kind: 'wa_send_failed',
+        summary: 'WhatsApp send-intent insert failed',
+        detail: { conversationId: opts.conversationId },
+      });
+      return { ok: false, messageId: null, error: summarizeError(error) };
+    }
+    return dispatchText({
+      messageId: message.id,
+      toE164,
+      body,
+      conversationId: opts.conversationId,
+    });
   }
 
   interface SendFailure {
@@ -201,8 +245,10 @@ export function createWaClient(deps: WaClientDeps) {
     }
   }
 
-  return { sendText, markRead };
+  return { sendText, markRead, createSendIntent, dispatchText };
 }
+
+export type WaClient = ReturnType<typeof createWaClient>;
 
 /** Token-free failure from a Graph error response: status + Meta's own code/type/message. */
 async function graphFailure(response: Response): Promise<{

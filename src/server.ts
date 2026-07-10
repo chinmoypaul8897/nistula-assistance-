@@ -10,7 +10,9 @@ import Fastify from 'fastify';
 import { ConfigError, configSummary, loadConfig } from './config.js';
 import { runMigrations } from './db/migrate.js';
 import { closeDb, getDb } from './db/client.js';
+import { getBoss, registerJobs, stopBoss } from './jobs/index.js';
 import { createLogger } from './lib/logger.js';
+import { createWaClient } from './wa/client.js';
 import { waWebhookRoutes } from './wa/webhook.js';
 
 // package.json is read via require to avoid JSON-module import attributes
@@ -89,14 +91,27 @@ async function main(): Promise<void> {
   }
   await runMigrations(databaseUrl); // idempotent, before listen (CH-01)
   const app = buildServer();
+  const { db } = getDb(databaseUrl);
+  // Queue + workers boot BEFORE listen (CH-03): a webhook that acks before
+  // the boss is started would enqueue into nothing.
+  const boss = getBoss(databaseUrl);
+  await boss.start();
+  const wa = createWaClient({
+    db,
+    log: app.log,
+    graphBaseUrl: config.graphBaseUrl,
+    phoneNumberId: waPhoneNumberId,
+    accessToken: waAccessToken,
+  });
+  const jobs = await registerJobs({ boss, db, wa, log: app.log });
   await app.register(waWebhookRoutes, {
-    db: getDb(databaseUrl).db,
+    db,
     appSecret: waAppSecret,
     verifyToken: waVerifyToken,
+    enqueue: jobs.enqueueConversationProcess,
   });
   app.log.info(`config: ${configSummary(config)}`);
 
-  // TODO(CH-03): stop pg-boss before closing the server on shutdown.
   let shuttingDown = false;
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
@@ -104,10 +119,14 @@ async function main(): Promise<void> {
       shuttingDown = true;
       app.log.info({ signal }, 'shutting down');
       // WHY the timer: a hung connection must not block a redeploy — exit
-      // with a nonzero code before the platform resorts to SIGKILL.
-      setTimeout(() => process.exit(1), 10_000).unref();
+      // with a nonzero code before the platform resorts to SIGKILL. 30s
+      // clears the 25s boss drain below (CH-03).
+      setTimeout(() => process.exit(1), 30_000).unref();
       app
         .close()
+        // Drain active jobs before their pool closes — a worker mid-turn
+        // gets its bounded grace, then failWip marks leftovers for retry.
+        .then(() => stopBoss())
         .then(() => closeDb())
         .then(
           () => process.exit(0),

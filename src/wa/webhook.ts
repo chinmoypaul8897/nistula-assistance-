@@ -26,6 +26,12 @@ export interface WaWebhookOptions {
   db: Db;
   appSecret: string;
   verifyToken: string;
+  /**
+   * CH-03: wakes the debounced worker after a NEW guest message is stored
+   * (jobs/index.ts binds it). Injected, not imported — the webhook never
+   * sees queue mechanics and tests pass a recorder.
+   */
+  enqueue: (conversationId: string) => Promise<void>;
 }
 
 /** Fastify plugin carrying both /webhooks/whatsapp routes; register at boot with live deps. */
@@ -84,7 +90,7 @@ export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app,
     // on timeout and wa_message_id dedupe makes redelivery a no-op.
     await reply.code(200).send();
     try {
-      await ingest(raw, opts.db, request.log);
+      await ingest(raw, opts.db, request.log, opts.enqueue);
     } catch (error) {
       // Post-ack there is nothing to return to Meta; the raw row (when it
       // was written) carries the error per the D6 write contract.
@@ -94,8 +100,10 @@ export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app,
   });
 };
 
+type Enqueue = WaWebhookOptions['enqueue'];
+
 /** One raw_events row per verified POST body, then per-entry tolerant parsing (D6). */
-async function ingest(raw: Buffer, db: Db, log: FastifyBaseLogger): Promise<void> {
+async function ingest(raw: Buffer, db: Db, log: FastifyBaseLogger, enqueue: Enqueue): Promise<void> {
   let body: WaWebhookBody;
   try {
     body = JSON.parse(raw.toString('utf8')) as WaWebhookBody;
@@ -133,7 +141,7 @@ async function ingest(raw: Buffer, db: Db, log: FastifyBaseLogger): Promise<void
   for (const [index, entry] of entries.entries()) {
     try {
       for (const change of entry.changes ?? []) {
-        await handleChange(change, db, log);
+        await handleChange(change, db, log, enqueue);
       }
     } catch (error) {
       // summarizeError, never error.message: drizzle's message embeds bound
@@ -147,7 +155,12 @@ async function ingest(raw: Buffer, db: Db, log: FastifyBaseLogger): Promise<void
   });
 }
 
-async function handleChange(change: WaChange, db: Db, log: FastifyBaseLogger): Promise<void> {
+async function handleChange(
+  change: WaChange,
+  db: Db,
+  log: FastifyBaseLogger,
+  enqueue: Enqueue,
+): Promise<void> {
   if (change.field !== 'messages') {
     // smb_message_echoes / history land in CH-14/CH-18 — until then unknown
     // fields are a tolerated, logged no-op with the payload kept raw (§5.3).
@@ -156,7 +169,7 @@ async function handleChange(change: WaChange, db: Db, log: FastifyBaseLogger): P
   }
   const value = change.value ?? {};
   for (const message of value.messages ?? []) {
-    await handleInbound(message, value, db, log);
+    await handleInbound(message, value, db, log, enqueue);
   }
   for (const status of value.statuses ?? []) {
     await handleStatus(status, db, log);
@@ -168,6 +181,7 @@ async function handleInbound(
   value: WaValue,
   db: Db,
   log: FastifyBaseLogger,
+  enqueue: Enqueue,
 ): Promise<void> {
   if (message.from === undefined || message.id === undefined) {
     log.warn({ waMessageId: message.id }, 'inbound message missing from/id — skipped, raw stored');
@@ -201,6 +215,18 @@ async function handleInbound(
     { conversationId: conversation.id, waMessageId: message.id, type: message.type },
     'inbound message stored',
   );
+  // CH-03: wake the debounced worker — only for NEW rows (a replay past the
+  // isNew guard never reaches here). Failure is log-and-continue: the
+  // message IS stored, the sweeper is the recovery net, and an enqueue
+  // error must not mark the raw event failed.
+  try {
+    await enqueue(conversation.id);
+  } catch (error) {
+    log.warn(
+      { conversationId: conversation.id, err: summarizeError(error) },
+      'conversation enqueue failed — sweeper will recover',
+    );
+  }
 }
 
 async function handleStatus(status: WaStatus, db: Db, log: FastifyBaseLogger): Promise<void> {

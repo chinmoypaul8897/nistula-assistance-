@@ -1,9 +1,8 @@
 /**
- * Drizzle schema — conversation core (plan.md §4, created in CH-01).
+ * Drizzle schema — conversation core (plan.md §4, created in CH-01; the
+ * CH-03 migration added conversations.last_processed_message_id).
  * Column definitions copy §4 exactly; booking/lifecycle/task tables arrive
  * with their feature chunks. Changes only via committed migrations.
- * NOTE: conversations.last_processed_message_id is deliberately absent —
- * plan §4 assigns it to a CH-03 migration.
  */
 import {
   boolean,
@@ -96,6 +95,11 @@ export const conversations = pgTable('conversations', {
   degradedNotified: boolean('degraded_notified').notNull().default(false),
   summary: text('summary'),
   summaryUptoMessageId: uuid('summary_upto_message_id'),
+  // WHY no FK on either message pointer: they are cursors, not relations —
+  // §4 marks fks explicitly and deliberately omits them on all three
+  // message-id pointers. A missing pointed-to row is handled in code
+  // (resolveMessageCursor treats it as "process all"), never by constraint.
+  lastProcessedMessageId: uuid('last_processed_message_id'),
   ...timestamps,
 });
 

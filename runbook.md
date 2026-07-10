@@ -103,6 +103,47 @@ local `.env`, rerun the same script. CH-18a commits a parameterised copy as
   CH-12 the sender switches to templates automatically; before that it is an
   expected failure recorded on the message row.
 
+## Queue + worker (CH-03)
+
+One pg-boss instance rides the same Postgres (schema `pgboss`, created at
+boot). Two queues:
+
+- `conversation.process` — the debounced conversation worker. One job per
+  conversation at a time (policy `stately`, singletonKey = conversation id);
+  a job wakes ~15s after the last guest message and holds a burst at most
+  45s, then replies once. Retries: 3, backoff from 10s.
+- `conversation.sweep` — the recovery net, cron `*/2 * * * *` (Asia/Kolkata):
+  re-enqueues any conversation whose oldest unprocessed guest message is
+  older than 60s (crashed enqueues, lost jobs, later model failures).
+
+The timing values are code constants in `src/brain/debounce.ts` — they are
+the plan.md spec, not env config; changing them is a planning-chat decision.
+
+**Inspecting jobs** (local: `docker exec -it nistula-assistance-postgres-1
+psql -U nistula -d nistula` · Railway: `railway connect postgres`):
+
+```sql
+SELECT name, state, singleton_key, start_after, retry_count
+FROM pgboss.job ORDER BY created_on DESC LIMIT 20;
+```
+
+States: `created` (waiting) → `active` (worker running) → `completed`
+(`failed` after retries; `retry` between attempts). A conversation that
+never answers: check its `conversations.last_processed_message_id` against
+its newest `messages` row — unprocessed + no `created` job means the sweeper
+will pick it up within ~3 minutes.
+
+**Shutdown:** SIGTERM drains active jobs for up to 25s before the process
+exits (Railway redeploys wait for this); jobs still active at the deadline
+are failed as "pg-boss shut down while active" and retried by the next
+deploy's worker.
+
+**Known trap (pg-boss 12.25.1):** `createQueue()` on an existing queue is a
+silent no-op — changing retry/expiry options in `src/jobs/index.ts` requires
+a matching `updateQueue()` migration step (or deleting the queue once in a
+maintenance window). The test helper re-creates queues every run for this
+reason.
+
 ## Sections to come
 
 - Red-team probe script (10 messages + expected behaviours) — CH-04
