@@ -1,0 +1,35 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "000000000000000",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "915551798672",
+              "phone_number_id": "000000000000000"
+            },
+            "contacts": [
+              {
+                "profile": { "name": "Test Guest 1" },
+                "wa_id": "917700900001"
+              }
+            ],
+            "messages": [
+              {
+                "from": "917700900001",
+                "id": "wamid.FIXTURE-INBOUND-0001",
+                "timestamp": "1720620000",
+                "text": { "body": "Lorem ipsum dolor sit amet." },
+                "type": "text"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
