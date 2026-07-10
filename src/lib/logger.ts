@@ -56,6 +56,21 @@ export function loggableBody(body: string): string {
   return process.env.NODE_ENV === 'production' ? '[body withheld in production]' : body;
 }
 
+/**
+ * One safe line from any thrown value — for logs and raw_events.error.
+ * WHY: drizzle wraps query failures in DrizzleQueryError whose MESSAGE
+ * embeds every bound parameter ("Failed query: …\nparams: <phone, guest
+ * body…>") — persisting or logging it verbatim violates §3.3. Prefer the
+ * driver's own message on error.cause; always take the first line only.
+ */
+export function summarizeError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error).slice(0, 200);
+  const cause = error.cause;
+  const message = cause instanceof Error && cause.message !== '' ? cause.message : error.message;
+  const firstLine = message.split('\n', 1)[0] ?? '';
+  return `${error.name}: ${firstLine}`.slice(0, 300);
+}
+
 // WHY no module-scope singleton: it would read LOG_LEVEL/NODE_ENV at import
 // time, BEFORE main() has loaded .env — the level would silently freeze wrong
 // (proven in the CH-00 post-merge audit). Call createLogger() at boot time;

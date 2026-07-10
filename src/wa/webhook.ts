@@ -16,6 +16,7 @@ import {
   upsertGuestByPhone,
   type NewMessage,
 } from '../db/repos.js';
+import { summarizeError } from '../lib/logger.js';
 import { normalizePhone } from '../lib/phone.js';
 import { alertOps } from '../ops/alerts.js';
 import { timingSafeStringEqual, verifySignature } from './signature.js';
@@ -57,7 +58,18 @@ export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app,
   });
 
   app.post('/webhooks/whatsapp', async (request, reply) => {
-    const raw = request.body as Buffer;
+    const raw = request.body;
+    // A POST with no content-type skips Fastify's parsers entirely and
+    // arrives with body undefined — that is an unverified probe, not a 500
+    // (§3.3: "401, logged, counted"; anyone on the internet can send it).
+    if (!Buffer.isBuffer(raw)) {
+      unverifiedCount += 1;
+      request.log.warn(
+        { unverifiedCount, ip: request.ip },
+        'webhook POST without a parseable body — dropped',
+      );
+      return reply.code(401).send();
+    }
     const header = request.headers['x-hub-signature-256'];
     const headerValue = Array.isArray(header) ? undefined : header;
     if (!verifySignature(raw, headerValue, opts.appSecret)) {
@@ -76,7 +88,8 @@ export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app,
     } catch (error) {
       // Post-ack there is nothing to return to Meta; the raw row (when it
       // was written) carries the error per the D6 write contract.
-      request.log.error({ err: error }, 'webhook ingest failed after ack');
+      // summarizeError: a raw DB error message embeds bound params (§3.3).
+      request.log.error({ err: summarizeError(error) }, 'webhook ingest failed after ack');
     }
   });
 };
@@ -98,12 +111,15 @@ async function ingest(raw: Buffer, db: Db, log: FastifyBaseLogger): Promise<void
     return;
   }
 
-  // Array.isArray, not ?? — a malformed non-array `entry` must still land
-  // in raw_events (D6 contract) rather than throwing before the insert.
+  // Array.isArray / optional chains, not bare ?? — a malformed entry (null
+  // elements, non-array changes) must still land in raw_events (D6 contract)
+  // rather than throwing before the insert.
   const entries = Array.isArray(body.entry) ? body.entry : [];
   const fields = [
     ...new Set(
-      entries.flatMap((entry) => entry.changes ?? []).map((change) => change.field ?? 'unknown'),
+      entries
+        .flatMap((entry) => (Array.isArray(entry?.changes) ? entry.changes : []))
+        .map((change) => (typeof change?.field === 'string' ? change.field : 'unknown')),
     ),
   ].join(',');
   const rawEvent = await insertRawEvent(db, {
@@ -120,8 +136,9 @@ async function ingest(raw: Buffer, db: Db, log: FastifyBaseLogger): Promise<void
         await handleChange(change, db, log);
       }
     } catch (error) {
-      // Exception text only — never payload excerpts (§3.3 PII discipline).
-      errors.push(`entry[${index}]: ${error instanceof Error ? error.message : String(error)}`);
+      // summarizeError, never error.message: drizzle's message embeds bound
+      // params — guest phone and body — and this text persists (§3.3, D6).
+      errors.push(`entry[${index}]: ${summarizeError(error)}`);
     }
   }
   await updateRawEvent(db, rawEvent.id, {
@@ -192,6 +209,9 @@ async function handleStatus(status: WaStatus, db: Db, log: FastifyBaseLogger): P
     return;
   }
   const errorText = statusErrorText(status.errors);
+  // Structured code/title for logs (D4 — CH-17 keys off errorCode); the free
+  // text incl. Meta's error_data.details goes ONLY to messages.error.
+  const firstError = status.errors?.[0];
   const result = await applyStatusUpdate(db, status.id, status.status, errorText);
   switch (result.outcome) {
     case 'applied':
@@ -199,16 +219,27 @@ async function handleStatus(status: WaStatus, db: Db, log: FastifyBaseLogger): P
         await alertOps(log, {
           kind: 'wa_status_failed',
           summary: 'outbound message failed at Meta',
-          detail: { messageId: result.messageId, waMessageId: status.id, error: errorText },
+          detail: {
+            messageId: result.messageId,
+            conversationId: result.conversationId,
+            waMessageId: status.id,
+            errorCode: firstError?.code,
+            errorTitle: firstError?.title,
+          },
         });
       }
       break;
     case 'stale':
       if (status.status === 'failed') {
         // Delivery evidence outranks failed (Meta's multi-device case, D3) —
-        // keep the discarded error visible in logs; payload is in raw_events.
+        // keep the discard visible in logs; full payload is in raw_events.
         log.warn(
-          { waMessageId: status.id, currentStatus: result.currentStatus, error: errorText },
+          {
+            waMessageId: status.id,
+            currentStatus: result.currentStatus,
+            errorCode: firstError?.code,
+            errorTitle: firstError?.title,
+          },
           'failed status discarded — delivery evidence outranks it',
         );
       } else {

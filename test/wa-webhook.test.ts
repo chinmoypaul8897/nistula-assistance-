@@ -50,15 +50,20 @@ function post(payload: string, header?: string) {
 // ingest is the updateRawEvent close-out (D6), so "every raw event settled"
 // (processed, or errored) is the reliable barrier — waiting on row COUNT
 // alone would race the message inserts that happen between the two writes.
+// EXACT count, not >=: D6's "one row per POST body" must fail loudly if a
+// refactor ever writes per-entry rows (review finding).
 async function waitForRawEvents(count: number): Promise<void> {
+  let observed = 0;
   for (let i = 0; i < 300; i++) {
     const rows = await db
       .select({ processed: schema.rawEvents.processed, error: schema.rawEvents.error })
       .from(schema.rawEvents);
-    if (rows.length >= count && rows.every((r) => r.processed || r.error !== null)) return;
+    observed = rows.length;
+    if (rows.length === count && rows.every((r) => r.processed || r.error !== null)) return;
+    if (rows.length > count) break; // over-count never self-heals — fail now
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`raw_events never settled at ${count} rows`);
+  throw new Error(`raw_events never settled at exactly ${count} rows (saw ${observed})`);
 }
 
 describe('GET handshake', () => {
@@ -101,6 +106,13 @@ describe('POST signature gate (§3.3: 401, logged, counted — never stored)', (
       headers: { 'content-type': 'application/json' },
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  it('401s (never 500s) a bodyless POST with no content-type — internet probe', async () => {
+    const res = await app.inject({ method: 'POST', url: '/webhooks/whatsapp' });
+    expect(res.statusCode).toBe(401);
+    const raw = await db.select().from(schema.rawEvents);
+    expect(raw).toHaveLength(0);
   });
 });
 

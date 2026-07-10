@@ -1,6 +1,34 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config.js';
-import { createLogger, loggableBody } from '../src/lib/logger.js';
+import { createLogger, loggableBody, summarizeError } from '../src/lib/logger.js';
+
+describe('summarizeError (CH-02 — §3.3: exception text without payload)', () => {
+  it('strips the drizzle params tail that embeds guest phone and body', () => {
+    // The realistic leak: DrizzleQueryError.message = "Failed query: <sql>\nparams: <values>"
+    const wrapped = new Error(
+      'Failed query: insert into "messages" ("body", ...) values ($1, $2)\n' +
+        'params: need a late checkout, call me on 919812345678,guest,text',
+    );
+    wrapped.name = 'DrizzleQueryError';
+    const summary = summarizeError(wrapped);
+    expect(summary).not.toContain('919812345678');
+    expect(summary).not.toContain('late checkout');
+    expect(summary).toContain('DrizzleQueryError');
+  });
+
+  it('prefers the driver message on error.cause (the real pg reason)', () => {
+    const wrapped = new Error('Failed query: insert into "messages" ...\nparams: secret-stuff');
+    wrapped.cause = new Error('invalid input value for enum message_type: "bogus"');
+    expect(summarizeError(wrapped)).toBe(
+      'Error: invalid input value for enum message_type: "bogus"',
+    );
+  });
+
+  it('handles plain errors and non-Error throws', () => {
+    expect(summarizeError(new TypeError('x is not iterable'))).toBe('TypeError: x is not iterable');
+    expect(summarizeError('string throw')).toBe('string throw');
+  });
+});
 
 function captureLogger() {
   const lines: string[] = [];
