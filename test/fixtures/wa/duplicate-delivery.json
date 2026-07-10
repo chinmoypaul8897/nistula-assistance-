@@ -1,35 +1,41 @@
 {
-  "object": "whatsapp_business_account",
   "entry": [
     {
       "id": "000000000000000",
       "changes": [
         {
+          "field": "messages",
           "value": {
-            "messaging_product": "whatsapp",
-            "metadata": {
-              "display_phone_number": "917700900099",
-              "phone_number_id": "000000000000000"
-            },
             "contacts": [
               {
-                "profile": { "name": "Test Guest 1" },
-                "wa_id": "917700900001"
+                "wa_id": "917700900001",
+                "profile": {
+                  "name": "Test Guest 1"
+                },
+                "user_id": "IN.917700900002"
               }
             ],
             "messages": [
               {
+                "id": "wamid.SCRUBBED-0001",
                 "from": "917700900001",
-                "id": "wamid.FIXTURE-INBOUND-0001",
-                "timestamp": "1720620000",
-                "text": { "body": "Lorem ipsum dolor sit amet." },
-                "type": "text"
+                "text": {
+                  "body": "Lorem ipsum dolor sit amet."
+                },
+                "type": "text",
+                "timestamp": "1783686828",
+                "from_user_id": "IN.917700900002"
               }
-            ]
-          },
-          "field": "messages"
+            ],
+            "metadata": {
+              "phone_number_id": "000000000000000",
+              "display_phone_number": "917700900003"
+            },
+            "messaging_product": "whatsapp"
+          }
         }
       ]
     }
-  ]
+  ],
+  "object": "whatsapp_business_account"
 }

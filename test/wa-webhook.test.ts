@@ -131,7 +131,7 @@ describe('inbound message persistence', () => {
     const [message] = await db
       .select()
       .from(schema.messages)
-      .where(eq(schema.messages.waMessageId, 'wamid.FIXTURE-INBOUND-0001'));
+      .where(eq(schema.messages.waMessageId, 'wamid.SCRUBBED-0001'));
     expect(message).toMatchObject({
       direction: 'in',
       sender: 'guest',
@@ -158,7 +158,7 @@ describe('inbound message persistence', () => {
     const msgs = await db
       .select()
       .from(schema.messages)
-      .where(eq(schema.messages.waMessageId, 'wamid.FIXTURE-INBOUND-0001'));
+      .where(eq(schema.messages.waMessageId, 'wamid.SCRUBBED-0001'));
     expect(msgs).toHaveLength(1);
     // Both deliveries are audited, both processed clean.
     const raw = await db.select().from(schema.rawEvents);

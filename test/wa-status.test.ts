@@ -143,7 +143,7 @@ describe('statuses through the webhook route', () => {
     );
     const { message } = await insertMessage(db, {
       conversationId: null,
-      waMessageId: 'wamid.FIXTURE-OUTBOUND-0001',
+      waMessageId: 'wamid.SCRUBBED-OUT-0001',
       direction: 'out',
       sender: 'ai',
       type: 'text',
@@ -163,11 +163,11 @@ describe('statuses through the webhook route', () => {
       expect(res.statusCode).toBe(200);
       // Bounded settle: ingest runs after the ack.
       for (let i = 0; i < 200; i++) {
-        const row = await statusOf('wamid.FIXTURE-OUTBOUND-0001');
+        const row = await statusOf('wamid.SCRUBBED-OUT-0001');
         if (row?.status === 'delivered') break;
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      expect((await statusOf('wamid.FIXTURE-OUTBOUND-0001'))?.status).toBe('delivered');
+      expect((await statusOf('wamid.SCRUBBED-OUT-0001'))?.status).toBe('delivered');
     } finally {
       await app.close();
     }
