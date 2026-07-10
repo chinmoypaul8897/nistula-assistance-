@@ -42,3 +42,13 @@ export async function closeDb(): Promise<void> {
 }
 
 export type Db = ReturnType<typeof create>['db'];
+
+/** A transaction handle from db.transaction() — same query surface as Db. */
+export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/**
+ * Pool db or an in-flight transaction. Repos that must be composable into a
+ * caller's transaction (CH-03: send intent + turn claim commit atomically)
+ * accept this instead of Db.
+ */
+export type DbLike = Db | Tx;

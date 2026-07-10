@@ -4,7 +4,7 @@
  * feature modules, never here.
  */
 import { and, eq, sql } from 'drizzle-orm';
-import type { Db } from './client.js';
+import type { Db, DbLike } from './client.js';
 import { conversations, guests, messages, rawEvents } from './schema.js';
 
 export type Guest = typeof guests.$inferSelect;
@@ -52,9 +52,10 @@ export async function getOrCreateConversation(db: Db, guestId: string): Promise<
 /**
  * Stores a message. Meta retries webhooks, so duplicates on wa_message_id
  * must be no-ops (§3.4): returns isNew=false and no row for a duplicate.
+ * DbLike: CH-03's worker inserts the send intent inside its claim transaction.
  */
 export async function insertMessage(
-  db: Db,
+  db: DbLike,
   message: NewMessage,
 ): Promise<{ message: Message | null; isNew: boolean }> {
   if (message.waMessageId === undefined || message.waMessageId === null) {
