@@ -4,7 +4,7 @@
 
 ## Status
 
-- **Current chunk pointer:** CH-03 (Echo pipeline) — next up. CH-00/CH-00b/CH-01/CH-02 merged and tagged (`vCH-00`, `vCH-00b`, `vCH-01`, `vCH-02`).
+- **Current chunk pointer:** CH-04 (Brain v1 — voice) — next up; its preconditions are `ANTHROPIC_API_KEY` (still unset — hard blocker) and `kb/source/voice-guide.md` (already in place). CH-00/CH-00b/CH-01/CH-02/CH-03 merged and tagged (`vCH-00`…`vCH-03`). NOTE: until CH-04 lands, the live service echoes every inbound on the test line (test numbers only deliver to registered recipients, so exposure is nil).
 - **LIVE on Railway (2026-07-10):** service `nistula-assistance-` (trailing hyphen is the real service name) at **`https://nistula-assistance-production.up.railway.app`**, `/health` healthcheck gate via committed `railway.json`. Meta webhook wired end-to-end: callback verified, `messages` field subscribed, and the **WABA-level `subscribed_apps` link created via API** (the dashboard never creates it — see CH-02 entry). Live round trip proven: guest message → DB → `sendText` reply → phone; statuses walked the rank lattice; dedupe replay was a no-op. Auto-deploy from main: Paul enables post-merge (one click). Stray empty Railway project `fantastic-motivation` (created by a mislinked `railway up` during a CLI re-auth) — Paul to delete.
 - **Env values (2026-07-10):** local `.env` holds `NODE_ENV=development`, `PORT=3100` (3000 is owned by another local project), `DATABASE_URL` → local docker Postgres, all four WA values. Railway service variables hold the four WA values + `NODE_ENV=production` + `TZ` (set via the CH-02 stdin-script pattern — values never transit chat/shell history; token rotation reuses it). `WA_VERIFY_TOKEN` ROTATED 2026-07-10 after Meta's handshake wrote it into pre-fix request logs (logging fixed same session; Meta still holds the OLD token and only needs the new one at the next webhook-config edit — paste from `.env` then). Test number `+1 555-179-8672`; WABA ID `1377084767847948`. `ANTHROPIC_API_KEY` still unset — hard blocker at CH-04.
 - **Standing dev workflow (CH-02 decision D8):** Meta's callback points permanently at the Railway domain — no tunnels, ever. Daily iteration = fixtures + signed local POSTs; end-of-chunk live demo = `railway up` the chunk working tree PRE-merge (doubles as env-completeness check); merge → auto-deploy ships identical content. Binding topology rule (D2): EVERY outbound anywhere goes through `wa/client.ts` `sendText`.
@@ -19,7 +19,7 @@
 | CH-00b | Post-merge audit fixes | ✅ DONE 2026-07-07 | [↓](#ch-00b--post-merge-audit-fixes--done-2026-07-07) |
 | CH-01 | Database core | ✅ DONE 2026-07-07 | [↓](#ch-01--database-core--done-2026-07-07) |
 | CH-02 | WhatsApp client + webhook | ✅ DONE 2026-07-10 | [↓](#ch-02--whatsapp-client--webhook--done-2026-07-10) |
-| CH-03 | Echo pipeline (queue + debounce) | ⬜ pending | |
+| CH-03 | Echo pipeline (queue + debounce) | ✅ DONE 2026-07-10 | [↓](#ch-03--echo-pipeline-queue--debounce--golden-path--done-2026-07-10) |
 | CH-04 | Brain v1 — voice | ⬜ pending | |
 | CH-05 | Price tools | ⬜ pending | |
 | CH-06 | Knowledge base | ⬜ pending | |
@@ -60,12 +60,15 @@ nistula-assistance/             ← repo root (folder renamed pre-git-init; Pre-
   .railwayignore                ← secrets structurally excluded from railway up uploads
   src/
     config.ts                   ← zod-validated §3.7 registry, fail-fast, secret-free summary
-    server.ts                   ← fastify bootstrap, GET /health, webhook mount, query-free request logs
+    server.ts                   ← fastify bootstrap, GET /health, boss boot + drain, webhook mount
     lib/                        ← phone.ts · time.ts · http.ts · logger.ts (+ summarizeError)
-    wa/                         ← signature.ts · webhook.ts · client.ts · types.ts (CH-02)
+    wa/                         ← signature.ts · webhook.ts · client.ts (intent+dispatch split) · types.ts
+    brain/                      ← debounce.ts (windows + pure decision) · worker.ts (echo turn v0, CH-03)
+    jobs/                       ← index.ts (boss singleton, queues, registerJobs, scheduleCron)
     ops/                        ← alerts.ts (log-only alertOps seam until CH-17)
   scripts/                      ← fixture-scrub.ts (PII scrubber for captured payloads)
-  test/                         ← unit + integration tests (140) · fixtures/wa/ (scrubbed live captures)
+  test/                         ← unit + integration tests (167) · fixtures/wa/ (scrubbed live captures)
+                                  golden-path.test.ts = the forever-green e2e (CH-04 edits one assertion)
   docs/
     product-picture.md          ← the six acceptance scenarios (CH-19 contract)
     ezee/                       ← eZee Connectivity API mirror (00_INDEX.md … 09, FULL, _inventory.json)
@@ -244,3 +247,36 @@ nistula-assistance/             ← repo root (folder renamed pre-git-init; Pre-
 **Open questions:** none.
 
 **How to verify:** `pnpm check` (140 tests) · message the test line `+1 555-179-8672` from Paul's phone → row in Railway Postgres (`railway connect postgres` → `SELECT direction, sender, status FROM messages ORDER BY created_at`) · `curl https://nistula-assistance-production.up.railway.app/health` → `{ok:true}` · unsigned `curl -X POST .../webhooks/whatsapp` → 401.
+
+---
+
+### CH-03 · Echo pipeline (queue + debounce + golden path) — DONE 2026-07-10
+
+**Built:**
+- `src/jobs/index.ts`: pg-boss singleton (`getBoss`/`stopBoss`, url-locked like `getDb`), queues `conversation.process` (policy **stately**, retryLimit 3, retryDelay 10 + backoff, expire 120s) and `conversation.sweep` (standard, retryLimit 0, expire 110s), `registerJobs()` (workers + `boss.on('error')` + sweeper schedule), `scheduleCron(name, cron, tz)`, `makeEnqueue()` — the ONE binding of the debounce windows shared by webhook, worker re-check and sweeper.
+- `src/brain/debounce.ts`: `DEBOUNCE_WINDOWS` (15s quiet / 45s max / 60s sweep threshold / `*/2` cron — module constants, NOT env; the literals ARE the spec) + pure `decideDebounce()`. `src/brain/worker.ts`: `processConversation` (cursor-resolved unprocessed messages → quiet/max-wait decision → **claim-LAST in one tx with the send intent** → dispatch → mandated end-of-run re-check) + `sweepStrandedConversations`.
+- Migration `0001_conversation-cursor`: `conversations.last_processed_message_id` (plain nullable uuid, NO fk — §4 marks fks explicitly; all three message-pointer columns are deliberately unconstrained cursors). Repos: `resolveMessageCursor` (in-code dangling fallback → process-all + `conversation_cursor_dangling` alert), `getUnprocessedGuestMessages` ((created_at,id) tuple order), `claimConversationTurn` (optimistic CAS; window columns derive from newest guest MESSAGE time), `getConversationTurnContext` (conversation + guest phone + DB `now()` in one read), `findStaleConversations`. `DbLike` (pool-or-tx) type on `db/client.ts`.
+- `wa/client.ts` split: `createSendIntent(dbLike,…)` (tx-composable) + `dispatchText()` (Graph call + settle); public `sendText` unchanged = the composition (D2 chokepoint intact). Fixed a latent CH-02 bug: the intent insert sat OUTSIDE the try and could throw despite the never-throws contract.
+- Webhook: injected `enqueue(conversationId)` fired only past the `isNew` guard; enqueue failure = warn-and-continue (raw event stays clean — sweeper is the net). `server.ts`: boot = migrations → `boss.start()` → wa client → `registerJobs` → webhook → listen; shutdown = `app.close()` → `stopBoss()` (25s drain) → `closeDb()`, force-exit timer 10s→30s.
+- Tests 140→167 in three tiers: pure decision math at real 15s/45s (`debounce.test.ts`, runs with PG down) · zero-sleep boss/worker suites via `fetch({ignoreStartAfter})` + backdated `created_at` (`jobs.test.ts` incl. two STATELY CANARIES, `brain-worker.test.ts` incl. dangling-pointer and microseconds regressions) · **`golden-path.test.ts`** — the forever-green e2e (3 signed POSTs → barrier → real `work()` at 0.5s → exactly ONE echo + queue quiescence). Helpers: `test/helpers/boss.ts` (queue-RESET + spies), `seed.ts`; `buildWaApp` gained an optional `enqueue`.
+
+**Decisions made while building** (D1–D6 pre-reviewed by six independent design-review agents, Paul-approved via the session plan):
+- **D1 debounce ≠ `sendDebounced`.** Verified on installed 12.25.1: it is a leading-edge wall-clock-slot throttle — first send in a slot runs IMMEDIATELY (a burst would echo twice) and slot uniqueness (index `job_i4`) spans completed jobs (~7d), silently swallowing the spec's end-of-run re-enqueue. The equivalent built: policy `stately` (index `job_i3`: max one created AND one active per singletonKey — one of each may coexist, so mid-run arrivals always enqueue; two actives impossible even multi-replica) + `startAfter` + worker-side quiet check (quiet ⇔ age ≥ QUIET; re-enqueue at newest+QUIET+1s, DB clock only). BINDING: `batchSize`/`localConcurrency` stay 1 (one stately fetch conflict aborts the ENTIRE fetch statement); boss constructor carries `monitorIntervalSeconds/queueCacheIntervalSeconds: 15` (default 60s leaves a follow-up job invisible ~2min after a long run — matters from CH-04).
+- **D2 claim-LAST, atomic with the send intent** (supersedes CH-03 step 3's echo-then-store prose): all fallible think-work precedes the claim; ONE tx = optimistic pointer/window CAS + `'queued'` intent row → commit → Graph dispatch. Every failure state observable: pre-claim throw → pg-boss retry/sweeper (at-least-once processing); post-commit crash → stale `'queued'` row (CH-17 sweep); dispatch failure → `'failed'` + ops alert, NO worker retry (§6.6). **Forward gates: CH-04 keeps the claim AFTER the model call and must raise `expireInSeconds` above the worst-case tool-loop (+ internal handler deadline — expiration re-inserts the job while the old handler still runs); CH-16's draft row joins this same claim tx; CH-17 must actually spec the stale-'queued' sweep (today only a TODO).**
+- **D3 cursor column**: plain uuid, no FK (spec-conformant, not a deviation); cursor resolution in CODE, never a scalar subquery — a dangling pointer degrades to process-all + alert instead of silently wedging the guest AND blinding the sweeper.
+- **D4 timing values = module constants** with DI seams (§3.7 untouched); env promotion only if CH-17 data demands (planning-chat decision). Invariant quiet ≤ maxWait < sweepAfter is unit-tested.
+- **D5 commit scope `jobs`** adopted — §3.6 defines "scope = the module" and §3.2 lists `src/jobs/`; the enumerated list (which also omits `drafts`/`lib`) is read as illustrative. CH-12/17 will reuse it.
+- **D6 golden path = posting-first** (burst settles before `work()` registers): with a live worker, a CI stall between POSTs makes a second echo CORRECT behaviour — the assertion would flake on a correct system. Live interleaving is covered zero-sleep in Tier B; live timing by the phone demo. Echo body: bodies joined with `\n`; null-body media renders `[<type>]` and still advances the pointer.
+
+**Observed reality:**
+- **The golden path caught a REAL production bug the seeded tests could not:** `timestamptz` carries microseconds, JS `Date` only milliseconds — a cursor round-tripped through `Date` truncates, the newest message matches its own "newer than" query, and the re-check loops forever re-echoing the last message (observed live: 11 loop iterations before timeout). Fix: the cursor travels as Postgres TEXT (`created_at::text` → `::timestamptz`). Seeded rows (explicit JS-Date `createdAt`, µs=000) can never reproduce this — regression test uses a `defaultNow()` row.
+- Drizzle raw-`sql` selections bypass driver type mapping: `sql\`now()\`` arrives as a STRING (fixed with `.mapWith`), and a JS `Date` passed as a raw-sql param crashes postgres.js serialization (`ERR_INVALID_ARG_TYPE`) — bind ISO/text strings in raw fragments.
+- **pg-boss 12.25.1 verified from installed source:** `createQueue()` on an existing queue is a SILENT NO-OP (`ON CONFLICT DO NOTHING` — options NOT updated; `updateQueue()` is the only way; queue rows outlive test-table TRUNCATEs, so the test helper deletes + recreates queues). `stop({graceful:true})` fully awaits the drain. An unhandled `'error'` EventEmitter event kills the process. `__test__enableSpies`/`getSpy` ride the real `work()` pipeline. Retry state sits BESIDE created/active in the stately index (one per state), and a failed job's retry re-insert can be silently dropped when a sibling occupies the slot — payload is only `{conversationId}`, so the re-check/sweeper cover it.
+- A dispatch that gets a duplicate wamid back (test fake) hits the unique index at queued→sent, falls to `failSend`, whose OWN update also conflicts → row stays `'queued'` inert — exactly the CH-17 sweep target; real Meta wamids are unique so this is test-only, but it validated the never-throws envelope.
+- Stale dev server from a previous session held port 3100 (`EADDRINUSE` while `/health` answered from the OLD build — uptime gave it away). Check `netstat`/uptime before trusting a local demo.
+
+**Deviations from plan.md:** D1 (spec's own VERIFY clause), D2 (supersedes step-3 prose order; §3.4 doctrine wins — CH-02 D1 precedent), D5 (scope list extension), D6 (test sequencing) — all recorded above with reasons. `DEBOUNCE_WINDOWS` lives in `src/brain/debounce.ts` rather than `src/jobs/index.ts` (keeps Tier A tests import-light; jobs re-imports it). Commit order ran brain-before-jobs so every commit compiles.
+
+**Open questions:** none.
+
+**How to verify:** `pnpm check` (167 tests incl. `golden-path.test.ts`) · burst 3 messages from Paul's phone to `+1 555-179-8672` within ~5s → exactly ONE combined `echo:` reply ~16s after the last message · `railway connect postgres` → `SELECT direction, status, body FROM messages ORDER BY created_at DESC LIMIT 5` shows one `out/sent` echo row · `SELECT name, state FROM pgboss.job ORDER BY created_on DESC LIMIT 5` shows completed jobs · local: `docker compose up -d postgres` → `pnpm dev` → 3 signed POSTs (fixture phone) → one combined echo row with status `failed`/`131030` (fixture phone isn't an allowed recipient — the honest audit row).
