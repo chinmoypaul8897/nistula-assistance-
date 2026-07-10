@@ -5,6 +5,7 @@
  */
 import { createHmac } from 'node:crypto';
 import Fastify from 'fastify';
+import { pino } from 'pino';
 import type { Db } from '../../src/db/client.js';
 import { waWebhookRoutes } from '../../src/wa/webhook.js';
 
@@ -16,9 +17,29 @@ export function signBody(body: string | Buffer, secret: string = TEST_APP_SECRET
   return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
 }
 
+export interface LogCapture {
+  lines: Record<string, unknown>[];
+  stream: { write: (msg: string) => void };
+}
+
+/** In-memory pino sink so tests can assert what the routes actually logged. */
+export function captureLog(): LogCapture {
+  const lines: Record<string, unknown>[] = [];
+  return {
+    lines,
+    stream: {
+      write(msg: string) {
+        lines.push(JSON.parse(msg) as Record<string, unknown>);
+      },
+    },
+  };
+}
+
 /** Builds an injectable app with the webhook routes registered. */
-export async function buildWaApp(db: Db) {
-  const app = Fastify();
+export async function buildWaApp(db: Db, capture?: LogCapture) {
+  const app = Fastify(
+    capture === undefined ? {} : { loggerInstance: pino({ level: 'debug' }, capture.stream) },
+  );
   await app.register(waWebhookRoutes, {
     db,
     appSecret: TEST_APP_SECRET,

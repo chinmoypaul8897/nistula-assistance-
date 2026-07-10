@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/client.js';
 import { applyStatusUpdate, insertMessage } from '../src/db/repos.js';
 import * as schema from '../src/db/schema.js';
-import { buildWaApp, signBody } from './helpers/wa.js';
+import { buildWaApp, captureLog, signBody, type LogCapture } from './helpers/wa.js';
 
 const TEST_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://nistula:nistula@localhost:5432/nistula_test';
@@ -232,6 +232,89 @@ describe('statuses through the webhook route', () => {
         status: 'failed',
         error: '131047: Re-engagement message — Message failed: 24h window',
       });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('failed-status alert policy (D3/D4 — alert on APPLY only)', () => {
+  function failedPayload(waMessageId: string): string {
+    return JSON.stringify({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: 'e1',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                statuses: [
+                  {
+                    id: waMessageId,
+                    status: 'failed',
+                    timestamp: '1720620400',
+                    recipient_id: '917700900001',
+                    errors: [{ code: 131026, title: 'Undeliverable' }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  async function postAndSettle(
+    app: Awaited<ReturnType<typeof buildWaApp>>,
+    payload: string,
+    settled: () => boolean,
+  ): Promise<void> {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/whatsapp',
+      payload,
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': signBody(payload) },
+    });
+    expect(res.statusCode).toBe(200);
+    for (let i = 0; i < 300 && !settled(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(settled()).toBe(true);
+  }
+
+  const alertLines = (capture: LogCapture) =>
+    capture.lines.filter((l) => l['opsAlert'] === 'wa_status_failed');
+
+  it('alerts ONCE on an applied failed; the webhook retry is rank-guarded silent', async () => {
+    const { waMessageId } = await outboundRow('sent');
+    const capture = captureLog();
+    const app = await buildWaApp(db, capture);
+    try {
+      // First delivery: transition applies → exactly one structured alert.
+      await postAndSettle(app, failedPayload(waMessageId), () => alertLines(capture).length >= 1);
+      expect(alertLines(capture)[0]).toMatchObject({ errorCode: 131026, waMessageId });
+      // Meta retry (same payload): rank guard absorbs it → warn, NO new alert.
+      await postAndSettle(app, failedPayload(waMessageId), () =>
+        capture.lines.some((l) => String(l['msg']).includes('failed status discarded')),
+      );
+      expect(alertLines(capture)).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('never alerts when delivery evidence outranks the failed (warn only)', async () => {
+    const { waMessageId } = await outboundRow('delivered');
+    const capture = captureLog();
+    const app = await buildWaApp(db, capture);
+    try {
+      await postAndSettle(app, failedPayload(waMessageId), () =>
+        capture.lines.some((l) => String(l['msg']).includes('failed status discarded')),
+      );
+      expect(alertLines(capture)).toHaveLength(0);
+      expect((await statusOf(waMessageId))?.status).toBe('delivered');
     } finally {
       await app.close();
     }

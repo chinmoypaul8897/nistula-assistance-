@@ -16,6 +16,7 @@ import type { Db } from '../db/client.js';
 import { insertMessage, type Message } from '../db/repos.js';
 import { messages } from '../db/schema.js';
 import { http as defaultHttp } from '../lib/http.js';
+import { summarizeError } from '../lib/logger.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { WaSendResponse } from './types.js';
 
@@ -83,6 +84,12 @@ export function createWaClient(deps: WaClientDeps) {
     }
     // TODO(CH-17): stale-'queued' reconciliation sweep + alert (§3.4 —
     // a crash between here and the Graph call leaves an inert intent row).
+    //
+    // waMessageId is hoisted OUTSIDE the try so failure paths after a Graph
+    // 2xx still record it — without it on the row, status webhooks match
+    // nothing and the D3 rank-lattice heal is impossible (review finding).
+    let waMessageId: string | undefined;
+    let httpStatus: number | undefined;
     try {
       const response = await httpFn(endpoint, {
         method: 'POST',
@@ -94,13 +101,17 @@ export function createWaClient(deps: WaClientDeps) {
           text: { body },
         }),
       });
+      httpStatus = response.status;
       if (!response.ok) {
-        return await failSend(message.id, await graphErrorText(response));
+        return await failSend(message.id, opts.conversationId, await graphFailure(response));
       }
-      const parsed = (await response.json()) as WaSendResponse;
-      const waMessageId = parsed.messages?.[0]?.id;
+      const parsed = (await response.json().catch(() => ({}))) as WaSendResponse;
+      waMessageId = parsed.messages?.[0]?.id;
       if (waMessageId === undefined) {
-        return await failSend(message.id, 'Graph 2xx without a message id');
+        return await failSend(message.id, opts.conversationId, {
+          errorText: 'Graph 2xx without a message id',
+          httpStatus,
+        });
       }
       // eq(status,'queued') IS the rank guard for this transition (D3):
       // 'queued' is the only rank below 'sent' our own row can hold, and no
@@ -115,24 +126,61 @@ export function createWaClient(deps: WaClientDeps) {
       }
       return { ok: true, messageId: message.id, waMessageId };
     } catch (error) {
-      return await failSend(message.id, error instanceof Error ? error.message : String(error));
+      // summarizeError, never raw messages: a thrown DB error embeds bound
+      // params (§3.3) — and this row/alert text must stay content-free.
+      return await failSend(
+        message.id,
+        opts.conversationId,
+        { errorText: summarizeError(error), httpStatus },
+        waMessageId,
+      );
     }
   }
 
-  async function failSend(messageId: string, errorText: string): Promise<SendResult> {
-    // A DB error thrown AFTER a successful Graph call can land here and mark
-    // a delivered send 'failed' — the later delivered/read status webhook
-    // heals it via the rank lattice (failed < delivered, D3).
-    await deps.db
-      .update(messages)
-      .set({ status: 'failed', error: errorText })
-      .where(and(eq(messages.id, messageId), eq(messages.status, 'queued')));
+  interface SendFailure {
+    errorText: string;
+    errorCode?: number;
+    errorTitle?: string;
+    httpStatus?: number;
+  }
+
+  async function failSend(
+    messageId: string,
+    conversationId: string | null,
+    failure: SendFailure,
+    waMessageId?: string,
+  ): Promise<SendResult> {
+    try {
+      // Writing waMessageId when known keeps a post-2xx failure healable:
+      // the later delivered/read webhook matches the row and the D3 lattice
+      // (failed < delivered) corrects the false 'failed'.
+      await deps.db
+        .update(messages)
+        .set({
+          status: 'failed',
+          error: failure.errorText,
+          ...(waMessageId === undefined ? {} : { waMessageId }),
+        })
+        .where(and(eq(messages.id, messageId), eq(messages.status, 'queued')));
+    } catch {
+      // DB gone mid-failure: the row stays 'queued' — inert by design; the
+      // TODO(CH-17) stale-queued sweep is the recovery net. Alert regardless.
+    }
+    // Structured fields per D4 (CH-17 dedupe keys off them); free error text
+    // stays on the message row, never in logs.
     await alertOps(deps.log, {
       kind: 'wa_send_failed',
       summary: 'WhatsApp send failed',
-      detail: { messageId, error: errorText },
+      detail: {
+        messageId,
+        conversationId,
+        waMessageId,
+        errorCode: failure.errorCode,
+        errorTitle: failure.errorTitle,
+        httpStatus: failure.httpStatus,
+      },
     });
-    return { ok: false, messageId, error: errorText };
+    return { ok: false, messageId, error: failure.errorText };
   }
 
   /** Marks an inbound message read (§5.3, optional nicety) — no message row. */
@@ -156,16 +204,30 @@ export function createWaClient(deps: WaClientDeps) {
   return { sendText, markRead };
 }
 
-/** Token-free error line from a Graph failure response: status + Meta's own code/message. */
-async function graphErrorText(response: Response): Promise<string> {
+/** Token-free failure from a Graph error response: status + Meta's own code/type/message. */
+async function graphFailure(response: Response): Promise<{
+  errorText: string;
+  errorCode?: number;
+  errorTitle?: string;
+  httpStatus: number;
+}> {
   let detail = '';
+  let errorCode: number | undefined;
+  let errorTitle: string | undefined;
   try {
     const parsed = (await response.json()) as WaSendResponse;
     if (parsed.error !== undefined) {
+      errorCode = parsed.error.code;
+      errorTitle = parsed.error.type;
       detail = ` ${parsed.error.code ?? ''} ${parsed.error.message ?? ''}`.trimEnd();
     }
   } catch {
     // Non-JSON error body — the status code alone still tells the story.
   }
-  return `Graph ${response.status}${detail}`.slice(0, 300);
+  return {
+    errorText: `Graph ${response.status}${detail}`.slice(0, 300),
+    errorCode,
+    errorTitle,
+    httpStatus: response.status,
+  };
 }

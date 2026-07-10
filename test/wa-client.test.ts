@@ -139,8 +139,15 @@ describe('sendText — failure paths (never throws; row is the audit)', () => {
         .where(eq(schema.messages.id, result.messageId ?? ''));
       expect(row).toMatchObject({ status: 'failed', error: result.error });
     }
+    // D4: structured fields, free error text stays on the row, not in logs.
     expect(log.error).toHaveBeenCalledWith(
-      expect.objectContaining({ opsAlert: 'wa_send_failed' }),
+      expect.objectContaining({
+        opsAlert: 'wa_send_failed',
+        errorCode: 131030,
+        errorTitle: 'OAuthException',
+        httpStatus: 400,
+        conversationId: null,
+      }),
       expect.stringContaining('[OPS-ALERT]'),
     );
   });
@@ -153,7 +160,7 @@ describe('sendText — failure paths (never throws; row is the audit)', () => {
       conversationId: null,
       sender: 'system',
     });
-    expect(result).toMatchObject({ ok: false, error: 'fetch failed' });
+    expect(result).toMatchObject({ ok: false, error: 'TypeError: fetch failed' });
     if (!result.ok) {
       const [row] = await db
         .select()

@@ -115,7 +115,7 @@ function isOutboundStatus(value: string): value is OutboundStatus {
 }
 
 export type StatusUpdateResult =
-  | { outcome: 'applied'; messageId: string }
+  | { outcome: 'applied'; messageId: string; conversationId: string | null }
   | { outcome: 'stale'; currentStatus: Message['status'] }
   | { outcome: 'missing' }
   | { outcome: 'unknown_status' };
@@ -153,9 +153,11 @@ export async function applyStatusUpdate(
             END < ${rank}`,
       ),
     )
-    .returning({ id: messages.id });
+    .returning({ id: messages.id, conversationId: messages.conversationId });
   const row = applied[0];
-  if (row !== undefined) return { outcome: 'applied', messageId: row.id };
+  if (row !== undefined) {
+    return { outcome: 'applied', messageId: row.id, conversationId: row.conversationId };
+  }
   // 0 rows — one classify SELECT: unknown wa id (dashboard hello_world,
   // staff-app sends) vs a stale/duplicate delivery the rank guard absorbed.
   const [existing] = await db
