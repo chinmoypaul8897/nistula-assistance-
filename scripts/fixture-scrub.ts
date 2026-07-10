@@ -23,12 +23,14 @@ export interface ScrubStats {
   phones: number;
   bodies: number;
   names: number;
+  wamids: number;
 }
 
 /** Deep-scrubs a parsed payload; deterministic (same input phone → same reserved number). */
 export function scrubFixture(value: unknown): { scrubbed: unknown; stats: ScrubStats } {
   const phoneMap = new Map<string, string>();
-  const stats: ScrubStats = { phones: 0, bodies: 0, names: 0 };
+  const wamidMap = new Map<string, string>();
+  const stats: ScrubStats = { phones: 0, bodies: 0, names: 0, wamids: 0 };
 
   const reserve = (original: string): string => {
     const existing = phoneMap.get(original);
@@ -39,12 +41,27 @@ export function scrubFixture(value: unknown): { scrubbed: unknown; stats: ScrubS
     return next;
   };
 
+  // WHY wamids are rewritten, not preserved: real Cloud API message ids
+  // BASE64-EMBED the counterpart's phone number (wamid.HBgM<base64(91…)>…) —
+  // an un-rewritten wamid commits real PII the +91 grep can never see.
+  // Deterministic mapping keeps cross-references (statuses citing the same
+  // id) intact within a capture.
+  const reserveWamid = (original: string): string => {
+    const existing = wamidMap.get(original);
+    if (existing !== undefined) return existing;
+    const next = `wamid.SCRUBBED-${String(wamidMap.size + 1).padStart(4, '0')}`;
+    wamidMap.set(original, next);
+    stats.wamids += 1;
+    return next;
+  };
+
   const walk = (node: unknown, parentKey: string | undefined): unknown => {
     if (Array.isArray(node)) return node.map((item) => walk(item, parentKey));
     if (node !== null && typeof node === 'object') {
       return Object.fromEntries(
         Object.entries(node as Record<string, unknown>).map(([key, child]) => {
           if (typeof child === 'string') {
+            if (child.startsWith('wamid.')) return [key, reserveWamid(child)];
             if (PHONE_KEYS.has(key)) return [key, reserve(child)];
             if (BODY_KEYS.has(key)) {
               stats.bodies += 1;
@@ -84,7 +101,8 @@ async function main(): Promise<void> {
     const { scrubbed, stats } = scrubFixture(parsed);
     await writeFile(file, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
     console.log(
-      `${file}: ${stats.phones} phone(s), ${stats.bodies} body(ies), ${stats.names} name(s) scrubbed`,
+      `${file}: ${stats.phones} phone(s), ${stats.bodies} body(ies), ` +
+        `${stats.names} name(s), ${stats.wamids} wamid(s) scrubbed`,
     );
   }
 }

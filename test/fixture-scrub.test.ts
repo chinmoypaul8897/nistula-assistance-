@@ -74,15 +74,33 @@ describe('scrubFixture', () => {
     expect(value?.statuses?.[0]?.errors?.[0]?.error_data?.details).not.toContain('9812345678');
   });
 
-  it('leaves timestamps and wamids untouched', () => {
+  it('REWRITES wamids — real ids base64-embed the phone number', () => {
     const value = (scrubbed as typeof CAPTURE).entry[0]?.changes[0]?.value;
-    expect(value?.messages?.[0]?.timestamp).toBe('1720620000');
-    expect(value?.messages?.[0]?.id).toBe('wamid.HBgMOTE5ODEyMzQ1Njc4FQIAEhg=');
+    // The capture's own wamid contains base64('919812345678') — proof that
+    // preserving wamids would commit the real number in recoverable form.
+    expect(value?.messages?.[0]?.id).toMatch(/^wamid\.SCRUBBED-\d{4}$/);
+    expect(value?.statuses?.[0]?.id).toMatch(/^wamid\.SCRUBBED-\d{4}$/);
+    // Distinct originals get distinct synthetic ids.
+    expect(value?.messages?.[0]?.id).not.toBe(value?.statuses?.[0]?.id);
+    expect(stats.wamids).toBe(2);
   });
 
-  it('emits nothing the CI +91 guard would catch, and no source number survives', () => {
+  it('keeps the same synthetic id for a wamid cited twice (cross-references survive)', () => {
+    const twice = scrubFixture({ a: { id: 'wamid.SAME' }, b: { id: 'wamid.SAME' } });
+    const pair = twice.scrubbed as { a: { id: string }; b: { id: string } };
+    expect(pair.a.id).toBe(pair.b.id);
+  });
+
+  it('leaves timestamps untouched', () => {
+    const value = (scrubbed as typeof CAPTURE).entry[0]?.changes[0]?.value;
+    expect(value?.messages?.[0]?.timestamp).toBe('1720620000');
+  });
+
+  it('emits nothing the CI guards would catch — no source number in any encoding', () => {
     expect(json).not.toMatch(/\+91[0-9]{5,}/);
     expect(json).not.toContain('9812345678');
+    // base64('919812345678') — the wamid embedding must be gone too.
+    expect(json).not.toContain('OTE5ODEyMzQ1Njc4');
   });
 
   it('is deterministic within a run: distinct phones get distinct reserved numbers', () => {
@@ -93,12 +111,32 @@ describe('scrubFixture', () => {
   });
 });
 
-describe('committed fixtures hygiene (the CI guard, enforced locally too)', () => {
-  it('no fixture contains a +91 form or a real-looking name', () => {
-    const dir = new URL('./fixtures/wa/', import.meta.url);
+describe('committed fixtures hygiene (stricter than the CI grep backstop)', () => {
+  const dir = new URL('./fixtures/wa/', import.meta.url);
+
+  it('every 91-prefixed digit run is in the reserved test range', () => {
     for (const file of readdirSync(dir)) {
       const content = readFileSync(new URL(file, dir), 'utf8');
       expect(content, file).not.toMatch(/\+91[0-9]{5,}/);
+      // Meta's wire form is PLUSLESS — the +91 grep alone would miss a real
+      // number pasted verbatim (review finding). Only 9177009… is allowed.
+      for (const run of content.match(/91\d{10}/g) ?? []) {
+        expect(run, `${file}: ${run}`).toMatch(/^9177009/);
+      }
+    }
+  });
+
+  it('every profile name is a placeholder and every wamid is synthetic-safe', () => {
+    for (const file of readdirSync(dir)) {
+      const content = readFileSync(new URL(file, dir), 'utf8');
+      for (const name of content.match(/"name":\s*"([^"]*)"/g) ?? []) {
+        expect(name, file).toMatch(/Test Guest \d+/);
+      }
+      // Committed wamids must never carry a base64 phone: authored fixtures
+      // use FIXTURE-*, scrubbed captures use SCRUBBED-*.
+      for (const id of content.match(/wamid\.[^"]+/g) ?? []) {
+        expect(id, file).toMatch(/^wamid\.(FIXTURE|SCRUBBED)-/);
+      }
     }
   });
 });
