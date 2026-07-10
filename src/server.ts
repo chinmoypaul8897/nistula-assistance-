@@ -18,11 +18,28 @@ import { waWebhookRoutes } from './wa/webhook.js';
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
 
-/** Builds the app without listening — tests inject requests against this. */
-export function buildServer() {
+/** Builds the app without listening — tests inject requests against this (optionally capturing logs). */
+export function buildServer(logStream?: { write: (msg: string) => void }) {
   // Logger is constructed at CALL time so it reads env after main() has
   // loaded .env; a module-scope logger froze the level too early.
-  const app = Fastify({ loggerInstance: createLogger() });
+  // WHY disableRequestLogging: Fastify's own request log prints the FULL
+  // URL — Meta's webhook handshake carries WA_VERIFY_TOKEN in the query
+  // string, which landed verbatim in production logs (found live, CH-02).
+  // The onResponse hook below restores per-request logs, query-stripped.
+  const app = Fastify({ loggerInstance: createLogger(logStream), disableRequestLogging: true });
+
+  app.addHook('onResponse', (request, reply, done) => {
+    request.log.info(
+      {
+        method: request.method,
+        path: request.url.split('?')[0],
+        statusCode: reply.statusCode,
+        responseTime: reply.elapsedTime,
+      },
+      'request completed',
+    );
+    done();
+  });
 
   app.get(
     '/health',
