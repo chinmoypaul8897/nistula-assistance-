@@ -331,22 +331,25 @@ describe('enqueue failure isolation (CH-03 — the sweeper is the net)', () => {
     });
     expect(res.statusCode).toBe(200);
     try {
-      // Settle on THIS app's ingest: its message row appearing is the barrier.
-      let stored: (typeof schema.messages.$inferSelect)[] = [];
-      for (let i = 0; i < 300 && stored.length === 0; i++) {
-        stored = await db
-          .select()
-          .from(schema.messages)
-          .where(eq(schema.messages.waMessageId, 'wamid.FIXTURE-INBOUND-0004'));
-        if (stored.length === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+      // Settle on the raw event CLOSE-OUT, not the message row — the message
+      // insert precedes both the enqueue attempt and the D6 close-out, so
+      // polling it races the writes this test asserts on (seen flaky in CI).
+      let thisEvent: typeof schema.rawEvents.$inferSelect | undefined;
+      for (let i = 0; i < 300; i++) {
+        const raw = await db.select().from(schema.rawEvents);
+        thisEvent = raw.find((r) =>
+          JSON.stringify(r.payload).includes('wamid.FIXTURE-INBOUND-0004'),
+        );
+        if (thisEvent !== undefined && (thisEvent.processed || thisEvent.error !== null)) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      expect(stored).toHaveLength(1);
       // The enqueue error is a warn, never a failed raw event (D6 stays clean).
-      const raw = await db.select().from(schema.rawEvents);
-      const thisEvent = raw.find(
-        (r) => JSON.stringify(r.payload).includes('wamid.FIXTURE-INBOUND-0004'),
-      );
       expect(thisEvent).toMatchObject({ processed: true, error: null });
+      const stored = await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.waMessageId, 'wamid.FIXTURE-INBOUND-0004'));
+      expect(stored).toHaveLength(1);
       const warned = capture.lines.find(
         (line) => typeof line.msg === 'string' && line.msg.includes('enqueue failed'),
       );
