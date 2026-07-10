@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "last_processed_message_id" uuid;
