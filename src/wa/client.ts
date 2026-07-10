@@ -70,14 +70,27 @@ export function createWaClient(deps: WaClientDeps) {
     // other use assigns messages.status='queued' anywhere in the plan
     // (CH-02 decision D1; CH-12/13/16/17 inherit this, do not reopen it).
     // No explicit transaction: the awaited autocommit IS the pre-call commit.
-    const { message } = await insertMessage(deps.db, {
-      conversationId: opts.conversationId,
-      direction: 'out',
-      sender: opts.sender,
-      type: 'text',
-      body,
-      status: 'queued',
-    });
+    let message: Message | null;
+    try {
+      ({ message } = await insertMessage(deps.db, {
+        conversationId: opts.conversationId,
+        direction: 'out',
+        sender: opts.sender,
+        type: 'text',
+        body,
+        status: 'queued',
+      }));
+    } catch (error) {
+      // A transient DB error here used to escape as a throw, contradicting
+      // this function's never-throws contract (found in the CH-03 pre-build
+      // review). No row exists to mark 'failed' — alert and return.
+      await alertOps(deps.log, {
+        kind: 'wa_send_failed',
+        summary: 'WhatsApp send-intent insert failed',
+        detail: { conversationId: opts.conversationId },
+      });
+      return { ok: false, messageId: null, error: summarizeError(error) };
+    }
     if (message === null) {
       // Unreachable without a wa_message_id conflict; guarded for honesty.
       return { ok: false, messageId: null, error: 'send-intent row insert returned no row' };
