@@ -9,19 +9,37 @@ import path from 'node:path';
 import Fastify from 'fastify';
 import { ConfigError, configSummary, loadConfig } from './config.js';
 import { runMigrations } from './db/migrate.js';
-import { closeDb } from './db/client.js';
+import { closeDb, getDb } from './db/client.js';
 import { createLogger } from './lib/logger.js';
+import { waWebhookRoutes } from './wa/webhook.js';
 
 // package.json is read via require to avoid JSON-module import attributes
 // churn across Node versions; the path is stable relative to src/ and dist/.
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
 
-/** Builds the app without listening — tests inject requests against this. */
-export function buildServer() {
+/** Builds the app without listening — tests inject requests against this (optionally capturing logs). */
+export function buildServer(logStream?: { write: (msg: string) => void }) {
   // Logger is constructed at CALL time so it reads env after main() has
   // loaded .env; a module-scope logger froze the level too early.
-  const app = Fastify({ loggerInstance: createLogger() });
+  // WHY disableRequestLogging: Fastify's own request log prints the FULL
+  // URL — Meta's webhook handshake carries WA_VERIFY_TOKEN in the query
+  // string, which landed verbatim in production logs (found live, CH-02).
+  // The onResponse hook below restores per-request logs, query-stripped.
+  const app = Fastify({ loggerInstance: createLogger(logStream), disableRequestLogging: true });
+
+  app.addHook('onResponse', (request, reply, done) => {
+    request.log.info(
+      {
+        method: request.method,
+        path: request.url.split('?')[0],
+        statusCode: reply.statusCode,
+        responseTime: reply.elapsedTime,
+      },
+      'request completed',
+    );
+    done();
+  });
 
   app.get(
     '/health',
@@ -51,11 +69,31 @@ async function main(): Promise<void> {
   const config = loadConfig(); // fail-fast before anything listens
   // Phase model (§3.7): the DB feature boots from CH-01, so its variable is
   // required from here on.
-  if (config.databaseUrl === undefined) {
+  const { databaseUrl, waPhoneNumberId, waAccessToken, waAppSecret, waVerifyToken } = config;
+  if (databaseUrl === undefined) {
     throw new ConfigError('DATABASE_URL is required from CH-01 (plan.md §3.7 phase model)');
   }
-  await runMigrations(config.databaseUrl); // idempotent, before listen (CH-01)
+  // WhatsApp boots from CH-02 — all four WA variables are required now, even
+  // the two the server itself doesn't use (fail-fast completeness: a partial
+  // set would only surface at the first send).
+  if (
+    waPhoneNumberId === undefined ||
+    waAccessToken === undefined ||
+    waAppSecret === undefined ||
+    waVerifyToken === undefined
+  ) {
+    throw new ConfigError(
+      'WA_PHONE_NUMBER_ID, WA_ACCESS_TOKEN, WA_APP_SECRET and WA_VERIFY_TOKEN ' +
+        'are required from CH-02 (plan.md §3.7 phase model)',
+    );
+  }
+  await runMigrations(databaseUrl); // idempotent, before listen (CH-01)
   const app = buildServer();
+  await app.register(waWebhookRoutes, {
+    db: getDb(databaseUrl).db,
+    appSecret: waAppSecret,
+    verifyToken: waVerifyToken,
+  });
   app.log.info(`config: ${configSummary(config)}`);
 
   // TODO(CH-03): stop pg-boss before closing the server on shutdown.

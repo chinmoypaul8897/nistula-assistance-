@@ -19,3 +19,24 @@ describe('GET /health (CH-00 integration seam)', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('request logging strips query strings (CH-02 — found live)', () => {
+  it('never logs a query value — Meta handshakes carry the verify token there', async () => {
+    process.env.LOG_LEVEL = 'info';
+    const lines: string[] = [];
+    const app = buildServer({ write: (msg: string) => void lines.push(msg) });
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/health?hub.verify_token=super-secret-token-value&hub.challenge=42',
+      });
+      expect(res.statusCode).toBe(200);
+      const out = lines.join('');
+      expect(out).toContain('request completed');
+      expect(out).not.toContain('super-secret-token-value');
+    } finally {
+      await app.close();
+      delete process.env.LOG_LEVEL;
+    }
+  });
+});

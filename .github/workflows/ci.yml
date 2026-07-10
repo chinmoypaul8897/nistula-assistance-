@@ -48,11 +48,17 @@ jobs:
       # Dependency audit (plan §3.3)
       - run: pnpm audit --audit-level high
 
-      # Fixture PII guard (plan §3.6 — CI grep enforces no real numbers in
-      # fixtures; fixture-scrub.ts lands in CH-02 and may refine this pattern)
+      # Fixture PII guard (plan §3.6). Two patterns: the +91 form AND the
+      # plusless wire form Meta actually sends — only the reserved test range
+      # (9177009xxxxx) is allowed. The precise per-digit-run check lives in
+      # test/fixture-scrub.test.ts; this grep is the CI backstop.
       - name: Fixture PII guard
         run: |
           if grep -rEn '\+91[0-9]{5,}' test/fixtures/; then
             echo '::error::Real-looking +91 number found in test/fixtures'
+            exit 1
+          fi
+          if grep -rEn '91[0-9]{10}' test/fixtures/ | grep -vE '9177009[0-9]{5}'; then
+            echo '::error::Real-looking plusless 91 number found in test/fixtures'
             exit 1
           fi

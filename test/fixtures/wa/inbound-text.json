@@ -1,0 +1,41 @@
+{
+  "entry": [
+    {
+      "id": "000000000000000",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "contacts": [
+              {
+                "wa_id": "917700900001",
+                "profile": {
+                  "name": "Test Guest 1"
+                },
+                "user_id": "IN.917700900002"
+              }
+            ],
+            "messages": [
+              {
+                "id": "wamid.SCRUBBED-0001",
+                "from": "917700900001",
+                "text": {
+                  "body": "Lorem ipsum dolor sit amet."
+                },
+                "type": "text",
+                "timestamp": "1783686828",
+                "from_user_id": "IN.917700900002"
+              }
+            ],
+            "metadata": {
+              "phone_number_id": "000000000000000",
+              "display_phone_number": "917700900003"
+            },
+            "messaging_product": "whatsapp"
+          }
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

@@ -1,0 +1,8 @@
+# railway up uploads the working tree — secrets must be structurally
+# impossible to ship regardless of CLI gitignore handling (§3.6 absolute rule).
+.env
+.env.*
+credentials-local/
+node_modules/
+dist/
+*.dump
