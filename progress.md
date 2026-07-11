@@ -376,3 +376,79 @@ nistula-assistance/             ← repo root (folder renamed pre-git-init; Pre-
 - Test-coverage gaps to add later: the 5-round cap/forced-prose path, the regenerate→defer→escalate path end-to-end through the worker, and the degraded flag altering prompt output through a full turn.
 
 **Behaviour refinement — type queries quote directly (2026-07-11, `feat/CH-05-type-quote`, Paul-requested from the live demo):** the demo exposed a bad flow — "3bhk 20–22 dec rate?" made the AI list all four villas and ASK "shall I quote?", then (peak dates) reply "no availability" — contradicting acceptance scenario 1 ("exact price in seconds"). Root cause: `get_quote` returned `AMBIGUOUS_VILLA` and block [4] said "ask which one". Fixed: verified all four 3BHK villas share one rate plan (identical price) and booking is type-level (§5.4 — eZee assigns the unit), so "which villa?" is the wrong question. Now a TYPE label makes `get_quote` quote **every unit** and return the single shared price + `available`/`availableCount`/`unitCount`; `websiteApi` preserves the quote on a 200 `available:false` so the rate shows even for taken dates; `get_booking_link` returns a representative unit link for a type; block [4] tells the model to quote directly and never ask/name a unit. Live check for the demo query now returns `{total:136880, available:false, availableCount:0, unitCount:4}` in one call. `pnpm check` 266→270. (`get_availability` for a type still returns `AMBIGUOUS_VILLA` — the model uses `get_quote` for a type's availability; aggregating it too is a small future nicety.)
+
+**CH-06 preparation — website KB export received (2026-07-11):** `nistula-kb-export/` (6 files) was produced by a Claude Code session run ON the `chinmoypaul8897/nistula-website` repo, using the extraction prompt stored in the HTML comment at the very end of this file — **re-runnable**: the site is pre-launch and much of it is placeholder, so Paul will re-run/update the folder as content firms up. **Assessment: high quality — verbatim, cited (`path:line`), faithful, and honest about gaps.**
+- **REAL & usable now:** `policies.md` (the complete verbatim policy surface — check-in 3pm / check-out 12pm, ID rules, security + booking deposits, full cancellation table incl. 22 Dec–2 Jan non-refundable, children/extra-guest/pets/parties/smoking/quiet-hours/house-rules — sourced from the site's own `nistula-policies.md` source-of-truth), `faq.md` (all 30 on-site Q&A verbatim), `occupancy.md` (eZee RoomTypeList snapshot — **matches §5.4 exactly**: Apartment max 5+2c · Villa 7+4c · Siolim 8+6c). These map straight into CH-06's `kb/policies.md` / `kb/faq.md` and the RoomTypeList occupancy refresh.
+- **PLACEHOLDER (flagged, not real yet):** every villa description/headline/highlights ships `placeholder:true`; bedroom counts are a guess for 7/8 (only Siolim's 4BHK is confirmed); floor areas + "from" prices are placeholders; per-villa amenities don't exist (the site shows ONE property-wide amenity list on every villa); B1/B3/C1/Siolim reuse C3's photos.
+- **Still needs the villa team (CH-06 manual step):** the **quirks** (the biggest concierge gap — in no codebase); real per-villa copy; and missing figures — **security-deposit amount, pet fee, late-checkout fee, and whether breakfast is included (EP vs CP)** are all "amount per booking" / "may be chargeable" with no number.
+- **Discrepancies for the planning chat:** (1) **§5.1's deposit formula** `min(₹10,000, ceil(avgNight/1000)×1000)` is NOT on the website — the site's security deposit is "refundable; amount per booking" (no figure) and the booking deposit is "room rate × nights"; reconcile which is authoritative before the AI states any deposit. (2) The concrete ₹ figures the KB WILL carry — **₹1,000/hr early check-in, ₹1,500/night extra adult, ₹750/night extra child** — are the guardrail-1 whitelist values CH-06 must wire into `checkPriceIntegrity`. (3) The "2bhk"→apartment resolver alias stays DEFERRED: the apartment bedroom count is a placeholder, so confirm the real BHK before aliasing.
+
+<!-- ============================================================================
+CH-06 WEBSITE-KB EXTRACTION PROMPT (reusable — paste into a Claude Code session
+opened ON the nistula-website repo; re-run + update nistula-kb-export/ as the
+site's placeholder content is finalised). Stored here per Paul's request 2026-07-11.
+==============================================================================
+
+# Task: Extract the guest-facing knowledge base from this website into Markdown
+
+You are in the nistula-website codebase (a Next.js site for Nistula, a boutique
+villa company in Goa). A SEPARATE project — a WhatsApp AI concierge — needs a
+faithful, structured export of everything this site tells guests: villa
+descriptions, occupancy, amenities, policies, FAQ. Mine this codebase (read-only)
+and write that content, faithfully and with sources, into Markdown files.
+
+## Absolute rules
+1. READ-ONLY. Do not modify, delete, or refactor any website code. Write ONLY into
+   a new folder `nistula-kb-export/` at the repo root.
+2. FAITHFUL, NEVER INVENTED. Transcribe what the code actually renders. For anything
+   policy/price/legal (deposit, cancellation, check-in/out, house rules), copy it
+   VERBATIM. If a fact isn't in the code, write TODO(Paul): … — never guess or fill
+   from general knowledge.
+3. CITE every fact with its source path:line so it can be verified.
+4. Use the CANONICAL LABELS below (join on villaId/RoomID), not just the site's
+   display names.
+
+## Villa identity map (villaId = eZee RoomID -> our label)
+| villaId | Our label | Type |
+| 5220300000000000001 | Apartment 11 | Nistula Apartment |
+| 5220300000000000008 | Apartment 06 | Nistula Apartment |
+| 5220300000000000010 | Apartment 09 | Nistula Apartment |
+| 5220300000000000002 | Villa B1 | Nistula Villa |
+| 5220300000000000011 | Villa B3 | Nistula Villa |
+| 5220300000000000012 | Villa C1 | Nistula Villa |
+| 5220300000000000013 | Villa C3 | Nistula Villa |
+| 5220300000000000015 | Siolim 4BHK | Nistula 4BHK Siolim |
+
+## Method — three phases, IN ORDER
+
+### Phase 1 — Overview (map first, don't extract yet)
+Explore the repo and write nistula-kb-export/00-overview.md:
+- Where does guest-facing CONTENT live? (content/ or data/ dirs, MDX/JSON, hardcoded
+  copy in components, i18n files, or CMS/API fetches.) List key files/dirs.
+- Is each kind of content STATIC (in the repo) or FETCHED at runtime? (note the source, e.g. eZee).
+- A table aligning each villa's on-site display name -> its villaId/RoomID -> our
+  label (from the map above). Flag any villa you can't align.
+Show me this overview before mining, so the map is clear.
+
+### Phase 2 — Extract, one file per topic (be COMPREHENSIVE; length gets trimmed later)
+- villas.md — one "## <Our label>" block per villa: type, bedrooms, sleeps/max guests,
+  layout notes; a faithful 1–3 paragraph description; highlights (bullets); amenities;
+  location/neighbourhood line; the public villa URL/slug. Note shared vs unique copy.
+- occupancy.md — table: Our label · type · RoomID · bedrooms · base guests · max guests ·
+  max children. If occupancy is a live eZee fetch (RoomTypeList), say so + point to the fetch code + shape.
+- policies.md — VERBATIM, each under its own heading: check-in/out times · children · pets ·
+  parties/events · smoking · quiet hours · SECURITY DEPOSIT rule (exact wording/formula) ·
+  CANCELLATION policy (full table/terms, verbatim) · payment terms · other house rules.
+  Missing -> TODO(Paul):.
+- faq.md — every FAQ item as Q/A, faithful. Include anything FAQ-like even if not on a formal FAQ page.
+
+### Phase 3 — Gaps report
+nistula-kb-export/GAPS.md: bullet list of everything (a) missing, (b) ambiguous, (c) fetched
+live so not statically extractable, or (d) that needs a human (e.g. per-villa "quirks" like
+"the second-bedroom AC runs cold" — those are NOT on the website; note they're absent).
+Be explicit — nothing silently skipped.
+
+## When done
+Tell me: which files you wrote, how many villas you fully covered, and the top 3 gaps.
+Do not touch anything outside nistula-kb-export/.
+============================================================================ -->
