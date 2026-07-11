@@ -61,11 +61,14 @@ export interface AvailabilityParams {
   to: string;
 }
 
-/** Quote outcomes — the friendly enum the handlers map to §6.4 tool results. */
+/** Quote outcomes — the friendly enum the handlers map to §6.4 tool results.
+ * `unavailable` from a 200 (available:false) still carries the quote, so a
+ * caller can show the rate for taken dates ("₹X, but those nights are gone");
+ * a 409 carries no body, so `quote` is absent. */
 export type QuoteOutcome =
   | { status: 'ok'; quote: QuoteView }
   | { status: 'min_nights'; quote: QuoteView }
-  | { status: 'unavailable' } // 200 available:false OR 409
+  | { status: 'unavailable'; quote?: QuoteView } // 200 available:false (with quote) OR 409 (without)
   | { status: 'invalid'; kind: string } // 400 / 404
   | { status: 'upstream_down'; retryAfterMs?: number }; // 429 / 502 / network
 
@@ -197,7 +200,7 @@ export function createWebsiteClient(deps: WebsiteApiDeps): WebsiteClient {
       if (body?.ok !== true || quote === undefined) {
         return { status: 'upstream_down' }; // 200 but unparseable — treat as an outage
       }
-      if (quote.available === false) return { status: 'unavailable' };
+      if (quote.available === false) return { status: 'unavailable', quote };
       if (quote.minNights.meetsRequirement === false) return { status: 'min_nights', quote };
       return { status: 'ok', quote };
     }

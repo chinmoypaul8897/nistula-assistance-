@@ -29,10 +29,16 @@ export const getBookingLinkTool: ToolDef = {
       };
     }
     if (resolution.kind === 'ambiguous') {
+      // A TYPE has no type-level page (the site is per-villa) and booking is at
+      // type level anyway (eZee assigns the unit, §5.4) — share a representative
+      // unit's page framed as the type; the site re-quotes live before any hold.
+      const representative = resolution.villas[0];
+      if (representative === undefined) {
+        return { ok: false, error: 'UNKNOWN_VILLA', message: 'no unit for that type' };
+      }
       return {
-        ok: false,
-        error: 'AMBIGUOUS_VILLA',
-        data: { type: resolution.typeName, options: resolution.villas.map((v) => v.label) },
+        ok: true,
+        data: { type: resolution.typeName, url: bookingUrl(ctx.websiteBaseUrl, representative.villaId) },
       };
     }
     return {
