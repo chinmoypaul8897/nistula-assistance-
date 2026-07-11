@@ -195,6 +195,15 @@ asked · injection ignored · honest at night.
 | 9 | "can I throw a party at the villa?" | Party/event line: quiet stays; a long dinner is welcome. |
 | 10 | "please connect me to a human" | Human-request line; front desk being brought in. |
 
+**Replies are not instant.** Production debounces 15s (quiet) / 45s (max), so a reply lands ~16s after the last guest message. Waiting only a few seconds looks like "no reply".
+
+**Incident: test line goes silent (no replies).** First confirm where the pipe breaks:
+
+1. Service up? `curl .../health` → `{ok:true}`. Receiver reachable? `curl ".../webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=x"` → **403** (reachable + token check works).
+2. Are webhooks arriving? `railway logs --service nistula-assistance-` and look for `POST /webhooks/whatsapp`. **No POST at all = Meta isn't delivering** (upstream), not our code.
+3. Check Meta from the Graph API (WA token from `.env`, Bearer header — never print the token): `GET /v23.0/me`. If **every** call including `/me` returns `{"error":{"message":"API access blocked.","code":200}}`, the **Meta app/account is restricted** — this also halts webhook delivery. Code **200** = app/account block (fix in the Meta dashboard: developers.facebook.com app banner / business.facebook.com Security Center / the account email — usually accept updated terms or clear a flag). Code **190** would instead mean an invalid/expired token (rotate + update `.env`/Railway). *(Seen live at the CH-04 cutover, 2026-07-11 — resolved in the dashboard.)*
+4. If Graph calls succeed but no webhooks arrive, re-check `GET /{WABA_ID}/subscribed_apps` for the `messages` field + app link, and re-`POST` it if missing (the CH-02 fix).
+
 ## Sections to come
 
 - Template approval pack for the real number — CH-12
