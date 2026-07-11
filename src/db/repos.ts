@@ -3,9 +3,9 @@
  * helper is one statement or an upsert-then-read; business logic lives in the
  * feature modules, never here.
  */
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Db, DbLike } from './client.js';
-import { conversations, guests, messages, rawEvents } from './schema.js';
+import { conversations, costEvents, guests, messages, rawEvents } from './schema.js';
 
 export type Guest = typeof guests.$inferSelect;
 export type Conversation = typeof conversations.$inferSelect;
@@ -13,6 +13,7 @@ export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 export type RawEvent = typeof rawEvents.$inferSelect;
 export type NewRawEvent = typeof rawEvents.$inferInsert;
+export type NewCostEvent = typeof costEvents.$inferInsert;
 
 /** Insert-or-touch a guest by E.164 phone; profile name updates only when provided. */
 export async function upsertGuestByPhone(
@@ -149,6 +150,32 @@ export async function getUnprocessedGuestMessages(
       ),
     )
     .orderBy(messages.createdAt, messages.id);
+}
+
+/**
+ * The most recent messages of a conversation, any sender/direction, returned
+ * OLDEST-first for the Claude transcript (CH-04). Fetched newest-first with a
+ * limit, then reversed — the (created_at, id) tuple keeps ties deterministic.
+ */
+export async function getRecentMessages(
+  db: Db,
+  conversationId: string,
+  limit = 30,
+): Promise<Message[]> {
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(limit);
+  return rows.reverse();
+}
+
+/** Records token/message spend (CH-04, §5.5). Best-effort caller: telemetry
+ * never blocks a reply. No-op on an empty batch. */
+export async function insertCostEvents(db: Db, rows: NewCostEvent[]): Promise<void> {
+  if (rows.length === 0) return;
+  await db.insert(costEvents).values(rows);
 }
 
 /**
