@@ -52,6 +52,49 @@ export function isNightIST(date: Date, nightStart: string, nightEnd: string): bo
   return current >= start || current < end;
 }
 
+const WEEKDAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const;
+const MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+] as const;
+
+/** IST calendar day as YYYY-MM-DD — the business day for daily cost/lifecycle rollups. */
+export function istCalendarDay(instant: Date): string {
+  const p = istParts(instant);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
+}
+
+/** Human IST stamp for the prompt SITUATION block, e.g. "Saturday 11 July 2026, 3:42 pm IST". */
+export function formatISTDisplay(instant: Date): string {
+  const p = istParts(instant);
+  const shifted = new Date(instant.getTime() + IST_OFFSET_MINUTES * MS_PER_MINUTE);
+  const weekday = WEEKDAYS[shifted.getUTCDay()];
+  const month = MONTHS[p.month - 1];
+  const ampm = p.hour < 12 ? 'am' : 'pm';
+  const hour12 = p.hour % 12 === 0 ? 12 : p.hour % 12;
+  const minute = String(p.minute).padStart(2, '0');
+  return `${weekday} ${p.day} ${month} ${p.year}, ${hour12}:${minute} ${ampm} IST`;
+}
+
 /** IST wall-clock parts of an instant. */
 function istParts(instant: Date): {
   year: number;
