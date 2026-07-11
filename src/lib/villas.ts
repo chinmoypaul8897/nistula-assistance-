@@ -118,9 +118,11 @@ function editDistance(a: string, b: string): number {
 }
 
 /** Typo tolerance CONFINED to "siolim" (edit distance ≤2) — fuzzing the generic
- * type words "villa"/"apartment" would collide, so only this token is fuzzed. */
+ * type words "villa"/"apartment" would collide, so only this token is fuzzed.
+ * Length ≥5 excludes the real word "slim" (length 4, distance 2 from "siolim")
+ * while keeping the intended typos "solim"/"sioli" (length 5, distance 1). */
 function looksLikeSiolim(token: string): boolean {
-  if (token.length < 4) return false;
+  if (token.length < 5) return false;
   return editDistance(token, 'siolim') <= 2;
 }
 
@@ -139,13 +141,21 @@ export function resolveVilla(labelOrType: string): VillaResolution {
     const villaLabel = VILLA_UNIT_ALIASES[token];
     if (villaLabel !== undefined) return { kind: 'match', villa: byLabel(villaLabel) };
   }
+  // A bare digit ("6") must NOT override a coexisting explicit villa/type word —
+  // otherwise "villa 9 dec" (a date) or "a villa for 6 guests" (a headcount)
+  // mis-resolves to an apartment (review finding). A PREFIXED form ("apt 9",
+  // "a9", "apartment 06") is a genuine unit reference and always wins.
+  const hasVillaWord = tokens.includes('villa') || tokens.includes('3bhk');
   for (const token of tokens) {
     // An apartment number — bare ("11") or glued to a prefix ("a9", "apt06",
     // "apartment11"), leading zeros folded (06 ≡ 6). Villa units matched above,
     // so "b1"'s digit never reaches here.
     const m = /^(?:apartment|apt|a)?0*(\d+)$/.exec(token);
     const aptLabel = m ? APARTMENT_UNIT_BY_NUMBER[m[1]!] : undefined;
-    if (aptLabel !== undefined) return { kind: 'match', villa: byLabel(aptLabel) };
+    if (aptLabel === undefined) continue;
+    const bareDigit = /^\d/.test(token); // no apartment-word prefix
+    if (bareDigit && hasVillaWord) continue; // let a real villa/type word win
+    return { kind: 'match', villa: byLabel(aptLabel) };
   }
 
   // 2) Type signal (only if no unit matched).

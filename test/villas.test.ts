@@ -80,8 +80,25 @@ describe('resolveVilla — siolim (single-unit type, typo tolerant)', () => {
   });
 });
 
+describe('resolveVilla — bare digit must not override an explicit type word', () => {
+  it('a bare 6/9/11 alongside "villa"/"3bhk" resolves to the TYPE, not an apartment', () => {
+    for (const input of ['a villa for 6 guests', 'villa 9 dec', '3bhk for 11 nights']) {
+      const r = resolveVilla(input);
+      expect(r.kind).toBe('ambiguous');
+      if (r.kind === 'ambiguous') expect(r.typeName).toBe('Nistula Villa');
+    }
+  });
+
+  it('a PREFIXED apartment number still wins even beside a type word', () => {
+    // "apartment 9" has no conflicting villa word → the apartment unit resolves.
+    const r = resolveVilla('apartment 9');
+    expect(r.kind).toBe('match');
+    if (r.kind === 'match') expect(r.villa.label).toBe('Apartment 09');
+  });
+});
+
 describe('resolveVilla — no match + determinism', () => {
-  it.each(['treehouse', 'the pool one', ''])('%s → none', (input) => {
+  it.each(['treehouse', 'the pool one', '', 'slim'])('%s → none', (input) => {
     expect(resolveVilla(input).kind).toBe('none');
   });
 
