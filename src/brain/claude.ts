@@ -12,13 +12,53 @@ import { summarizeError } from '../lib/logger.js';
 import type { ConverseUsage } from './cost.js';
 import type { SystemBlock } from './prompt.js';
 
+/**
+ * A turn the model sees. content is a plain string (transcript rows) OR a
+ * content-block array (assistant tool_use turns, user tool_result turns) — the
+ * string arm keeps CH-04's mapTranscript output valid without change.
+ */
+export interface TurnMessage {
+  role: 'user' | 'assistant';
+  content: string | Anthropic.ContentBlockParam[];
+}
+
+/** Structural tool spec (§6.4) — registry.ts's ToolSpec satisfies this, so
+ * claude.ts stays decoupled from the tool layer. */
+export interface ConverseTool {
+  name: string;
+  description?: string;
+  input_schema: Record<string, unknown>;
+}
+
+/** One tool call the model requested this round. `input` is NEVER trusted raw —
+ * the handler zod-validates it. */
+export interface ToolUse {
+  id: string; // tool_use_id — the matching tool_result MUST echo this
+  name: string;
+  input: unknown;
+}
+
 export interface ConverseInput {
   system: SystemBlock[];
-  messages: { role: 'user' | 'assistant'; content: string }[];
+  messages: TurnMessage[];
+  /** Omitted/empty ⇒ no `tools` param (identical to CH-04, cache prefix intact). */
+  tools?: ConverseTool[];
+  /** Omitted ⇒ SDK default 'auto'; worker forces {type:'none'} on the last round. */
+  toolChoice?: Anthropic.MessageCreateParams['tool_choice'];
+  /** Per-CALL total deadline (ms) — the loop passes its remaining budget so N
+   * calls can't each burn the full default. Undefined ⇒ deps.totalDeadlineMs. */
+  deadlineMs?: number;
 }
 
 export interface ConverseResult {
+  /** Concatenated text blocks of THIS turn (often '' on a tool_use turn). */
   text: string;
+  /** tool_use blocks parsed out; empty ⇒ the model answered in prose. */
+  toolUses: ToolUse[];
+  stopReason: Anthropic.Message['stop_reason'];
+  /** THIS assistant turn rebuilt as blocks (text + tool_use), appended verbatim
+   * to the message array before the tool_result turn. */
+  assistantContent: Anthropic.ContentBlockParam[];
   usage: ConverseUsage;
 }
 
@@ -82,8 +122,14 @@ export function createConverse(deps: ConverseDeps): ConverseFn {
       temperature: TEMPERATURE,
       system: input.system,
       messages: input.messages,
+      // Omit `tools` entirely when there are none — an empty array would still
+      // grow the cache prefix and change the request shape from CH-04.
+      ...(input.tools && input.tools.length > 0
+        ? { tools: input.tools as Anthropic.ToolUnion[] }
+        : {}),
+      ...(input.toolChoice ? { tool_choice: input.toolChoice } : {}),
     };
-    const deadline = Date.now() + totalDeadlineMs;
+    const deadline = Date.now() + (input.deadlineMs ?? totalDeadlineMs);
     let lastError: unknown;
     for (let attempt = 0; attempt < maxTries; attempt++) {
       const remaining = deadline - Date.now();
@@ -124,9 +170,27 @@ function parseMessage(message: Anthropic.Message): ConverseResult {
     .map((block) => block.text)
     .join('')
     .trim();
+  const toolUses: ToolUse[] = message.content
+    .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
+    .map((block) => ({ id: block.id, name: block.name, input: block.input }));
+  // Rebuild ONLY text + tool_use as param blocks (we never enable thinking, so
+  // there are no thinking blocks whose signatures would need round-tripping).
+  // This assistant turn is appended verbatim before the tool_result turn.
+  const assistantContent: Anthropic.ContentBlockParam[] = [
+    ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+    ...toolUses.map((use) => ({
+      type: 'tool_use' as const,
+      id: use.id,
+      name: use.name,
+      input: use.input,
+    })),
+  ];
   const { usage } = message;
   return {
     text,
+    toolUses,
+    stopReason: message.stop_reason,
+    assistantContent,
     usage: {
       inputTokens: usage.input_tokens,
       outputTokens: usage.output_tokens,
