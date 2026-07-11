@@ -10,6 +10,7 @@ const situation = buildSituation({
   now: new Date('2026-07-11T18:12:00Z'),
   isNight: false,
   serviceWindowOpen: true,
+  degraded: false,
 });
 const blocks = buildSystemPrompt(situation);
 
@@ -31,15 +32,17 @@ describe('buildSystemPrompt', () => {
     expect(blocks[3]?.cache_control).toBeUndefined();
   });
 
-  it('carries the locked voice rules and the no-tools price-deferral guard', () => {
+  it('carries the locked voice rules and the CH-05 tool pricing guard', () => {
     const voice = blocks[1]?.text ?? '';
     expect(voice).toContain('No exclamation marks');
     expect(voice).toContain('British English');
     expect(voice).toContain('Is this a bot?');
     expect(voice).toContain('discount'); // banned-words guidance present
     const rules = blocks[2]?.text ?? '';
-    expect(rules).toContain('NO price or availability tools yet');
-    expect(rules).toContain('DATA'); // prompt-injection posture
+    // CH-05: tools now exist; ₹ figures must come from a tool result this turn.
+    expect(rules).toContain('get_quote');
+    expect(rules).toContain('only from a tool result in THIS turn');
+    expect(rules).toContain('DATA'); // prompt-injection posture (guest + tool result)
   });
 
   it('renders the SITUATION with no unresolved placeholders (day and night)', () => {
@@ -47,6 +50,7 @@ describe('buildSystemPrompt', () => {
       now: new Date('2026-07-11T18:12:00Z'),
       isNight: true,
       serviceWindowOpen: false,
+      degraded: false,
     });
     expect(night).toContain('IST');
     expect(night).toContain('OFF DUTY');
@@ -58,9 +62,27 @@ describe('buildSystemPrompt', () => {
       now: new Date('2026-07-11T06:00:00Z'),
       isNight: false,
       serviceWindowOpen: true,
+      degraded: false,
     });
     expect(dayOpen).toContain('ON DUTY');
     expect(dayOpen).toContain('within the 24-hour reply window');
+  });
+
+  it('surfaces the degraded flag so the model stops quoting (§3.4)', () => {
+    const healthy = buildSituation({
+      now: new Date('2026-07-11T06:00:00Z'),
+      isNight: false,
+      serviceWindowOpen: true,
+      degraded: false,
+    });
+    expect(healthy).not.toContain('Do not state any price this turn');
+    const degraded = buildSituation({
+      now: new Date('2026-07-11T06:00:00Z'),
+      isNight: false,
+      serviceWindowOpen: true,
+      degraded: true,
+    });
+    expect(degraded).toContain('Do not state any price this turn');
   });
 
   it("the static head clears Sonnet 4.5's 1024-token cache floor (chars/3.6 heuristic)", () => {

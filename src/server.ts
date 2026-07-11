@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import Fastify from 'fastify';
 import { createConverse } from './brain/claude.js';
+import { buildToolRegistry } from './brain/tools/index.js';
+import { createDegradedTracker } from './brain/tools/degraded.js';
+import { createWebsiteClient } from './brain/tools/websiteApi.js';
 import { ConfigError, configSummary, loadConfig } from './config.js';
 import { runMigrations } from './db/migrate.js';
 import { closeDb, getDb } from './db/client.js';
@@ -95,6 +98,11 @@ async function main(): Promise<void> {
   if (config.anthropicApiKey === undefined) {
     throw new ConfigError('ANTHROPIC_API_KEY is required from CH-04 (plan.md §3.7 phase model)');
   }
+  // The price tools boot from CH-05 — they can only call the website origin, so
+  // WEBSITE_BASE_URL must be present (dev: the vercel preview).
+  if (config.websiteBaseUrl === undefined) {
+    throw new ConfigError('WEBSITE_BASE_URL is required from CH-05 (plan.md §3.7 phase model)');
+  }
   await runMigrations(databaseUrl); // idempotent, before listen (CH-01)
   const app = buildServer();
   const { db } = getDb(databaseUrl);
@@ -114,12 +122,22 @@ async function main(): Promise<void> {
     modelId: config.modelId,
     log: app.log,
   });
+  // CH-05 price tools: one website client (the origin allowlist), one shared
+  // degraded tracker (process-global health), the tool registry.
+  const website = createWebsiteClient({ baseUrl: config.websiteBaseUrl, log: app.log });
+  const degraded = createDegradedTracker({ log: app.log });
+  const toolRegistry = buildToolRegistry();
   const jobs = await registerJobs({
     boss,
     db,
     wa,
     log: app.log,
     converse,
+    toolRegistry,
+    website,
+    websiteBaseUrl: config.websiteBaseUrl,
+    degraded,
+    opsNumbers: config.opsNumbers,
     nightStart: config.nightStart,
     nightEnd: config.nightEnd,
   });

@@ -8,6 +8,9 @@
 import { PgBoss } from 'pg-boss';
 import type { ConverseFn } from '../brain/claude.js';
 import { DEBOUNCE_WINDOWS, type DebounceWindows } from '../brain/debounce.js';
+import type { DegradedTracker } from '../brain/tools/degraded.js';
+import type { ToolRegistry } from '../brain/tools/registry.js';
+import type { WebsiteClient } from '../brain/tools/websiteApi.js';
 import {
   processConversation,
   sweepStrandedConversations,
@@ -66,12 +69,16 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryLimit: 3, // retries are harmless under the claim guard (D2)
     retryDelay: 10, // default is 0 = instant; give transient DB errors room
     retryBackoff: true,
-    // CH-04 gives converse() a ~55s total deadline (< this 120s), so a single
-    // model turn can never outlive expire. TODO(CH-05): the 5-round tool loop
-    // can exceed 120s — raise expire via updateQueue (createQueue is a no-op
-    // on an existing queue) and size a new internal deadline below it.
-    expireInSeconds: 120,
+    // CH-05: the ≤5-round tool loop has a ~100s internal budget; expire is
+    // raised to 180s so pg-boss never re-inserts a job while a slow turn is
+    // still running (100s loop + dispatch ≪ 180s; earliest expire detection is
+    // ~expire + monitorInterval ≈ 195s). See updateQueue below.
+    expireInSeconds: 180,
   });
+  // createQueue is a SILENT no-op on an ALREADY-created queue (verified 12.25.1)
+  // — production queues were created at 120s in CH-03, so the raise only lands
+  // via updateQueue. Idempotent; merges the given field only.
+  await boss.updateQueue(CONVERSATION_PROCESS_QUEUE, { expireInSeconds: 180 });
   await boss.createQueue(CONVERSATION_SWEEP_QUEUE, {
     policy: 'standard',
     retryLimit: 0, // the next cron tick IS the retry
@@ -106,10 +113,17 @@ export interface JobsDeps {
   /** A STARTED boss (boot calls boss.start() first). */
   boss: PgBoss;
   db: Db;
-  wa: Pick<WaClient, 'createSendIntent' | 'dispatchText'>;
+  wa: Pick<WaClient, 'createSendIntent' | 'dispatchText' | 'sendText'>;
   log: WorkerLogger;
   /** The Claude client (§5.5) — server builds the real one; tests inject a fake. */
   converse: ConverseFn;
+  /** CH-05 price tools — the registry, website client, degraded tracker, base URL. */
+  toolRegistry: ToolRegistry;
+  website: WebsiteClient;
+  websiteBaseUrl: string;
+  degraded: DegradedTracker;
+  /** OPS_NUMBERS (E.164) for the interim price escalation; default none. */
+  opsNumbers?: string[];
   /** Config NIGHT_START/NIGHT_END for the SITUATION block; default 20:00/10:00. */
   nightStart?: string;
   nightEnd?: string;
@@ -139,6 +153,11 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     log: deps.log,
     windows,
     converse: deps.converse,
+    toolRegistry: deps.toolRegistry,
+    website: deps.website,
+    websiteBaseUrl: deps.websiteBaseUrl,
+    degraded: deps.degraded,
+    opsNumbers: deps.opsNumbers ?? [],
     nightStart: deps.nightStart ?? '20:00',
     nightEnd: deps.nightEnd ?? '10:00',
     enqueue,

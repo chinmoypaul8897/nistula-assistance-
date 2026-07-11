@@ -25,6 +25,7 @@ import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import { CONVERSATION_PROCESS_QUEUE, makeEnqueue, registerJobs } from '../src/jobs/index.js';
 import { createWaClient } from '../src/wa/client.js';
+import { noToolDeps, textResult } from './helpers/brain.js';
 import { createTestBoss, waitUntil, TEST_URL } from './helpers/boss.js';
 import { buildWaApp, signBody } from './helpers/wa.js';
 
@@ -36,12 +37,10 @@ const WINDOWS = { quietMs: 1_000, maxWaitMs: 3_000, sweepAfterMs: 4_000, sweepIn
 
 // CH-04: the worker now calls Claude — a fixed mock stands in for the model
 // (no live call, §3.5). Zero usage → no cost_events rows (cost logging is
-// exercised deterministically in brain-worker.test.ts).
+// exercised deterministically in brain-worker.test.ts). CH-05: no toolUses ⇒
+// the loop returns on round 1, so the golden path is byte-identical.
 const MOCK_REPLY = 'Good evening — how can I help with your stay?';
-const mockConverse: ConverseFn = async () => ({
-  text: MOCK_REPLY,
-  usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-});
+const mockConverse: ConverseFn = async () => textResult(MOCK_REPLY);
 
 let client: ReturnType<typeof postgres>;
 let db: Db;
@@ -137,6 +136,7 @@ describe('golden path — burst in, exactly one reply out', () => {
         wa,
         log,
         converse: mockConverse,
+        ...noToolDeps(log),
         windows: WINDOWS,
         pollingIntervalSeconds: 0.5,
       });

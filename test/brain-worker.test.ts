@@ -21,6 +21,7 @@ import {
   resolveMessageCursor,
 } from '../src/db/repos.js';
 import { createWaClient, type WaClientDeps } from '../src/wa/client.js';
+import { noToolDeps, textResult } from './helpers/brain.js';
 import { seedConversation, seedGuestMessage } from './helpers/seed.js';
 
 const TEST_URL =
@@ -91,7 +92,7 @@ function makeRig(httpImpl?: WaClientDeps['httpImpl']) {
   const converseCalls: ConverseInput[] = [];
   const converse: ConverseFn = async (input) => {
     converseCalls.push(input);
-    return { text: MOCK_REPLY, usage: MOCK_USAGE };
+    return textResult(MOCK_REPLY, MOCK_USAGE);
   };
   const deps: WorkerDeps = {
     db,
@@ -99,6 +100,7 @@ function makeRig(httpImpl?: WaClientDeps['httpImpl']) {
     log,
     windows: DEBOUNCE_WINDOWS,
     converse,
+    ...noToolDeps(log),
     nightStart: '20:00',
     nightEnd: '10:00',
     enqueue: async (conversationId, startAfter) => {
@@ -365,13 +367,79 @@ describe('processConversation — the debounced Claude turn', () => {
     // Once the model recovers, the retried job (guest still unprocessed) sends.
     rig.deps.converse = async (input) => {
       rig.converseCalls.push(input);
-      return { text: MOCK_REPLY, usage: MOCK_USAGE };
+      return textResult(MOCK_REPLY, MOCK_USAGE);
     };
     await processConversation(rig.deps, conversation.id);
     const out = await outbound(conversation.id);
     expect(out).toHaveLength(1);
     expect(out[0]?.body).toBe(MOCK_REPLY);
     expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
+  });
+
+  it('runs the tool loop: get_quote result feeds a second round; the reply row carries raw.toolRuns', async () => {
+    const { conversation } = await seedConversation(db, '+917700900045');
+    await seedGuestMessage(db, conversation.id, 'B3 20-22 dec for 4, rate?', 20);
+    const rig = makeRig();
+    // A stub website so the real get_quote handler returns a fixed quote.
+    rig.deps.website = {
+      getQuote: async () => ({
+        status: 'ok',
+        quote: {
+          villaId: '5220300000000000011',
+          checkIn: '2026-12-20',
+          checkOut: '2026-12-22',
+          nights: 2,
+          adults: 4,
+          children: 0,
+          total: 34000,
+          averagePerNight: 17000,
+          perNight: [
+            { date: '2026-12-20', amount: 17000 },
+            { date: '2026-12-21', amount: 17000 },
+          ],
+          minNights: { average: 2, meetsRequirement: true },
+          available: true,
+        },
+      }),
+      getAvailability: async () => ({ status: 'ok', days: [] }),
+    };
+    let round = 0;
+    rig.deps.converse = async (input) => {
+      round += 1;
+      rig.converseCalls.push(input);
+      if (round === 1) {
+        const use = {
+          id: 'tu_1',
+          name: 'get_quote',
+          input: { villa_label: 'B3', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+        };
+        return {
+          text: '',
+          toolUses: [use],
+          stopReason: 'tool_use',
+          assistantContent: [{ type: 'tool_use', id: use.id, name: use.name, input: use.input }],
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        };
+      }
+      return textResult('Your two nights at Villa B3 come to ₹34,000, all in. Here is the link.');
+    };
+
+    await processConversation(rig.deps, conversation.id);
+
+    expect(round).toBe(2);
+    // The second call carries the tool_result user turn back to the model.
+    const secondTurns = rig.converseCalls[1]?.messages ?? [];
+    const lastTurn = secondTurns.at(-1);
+    expect(lastTurn?.role).toBe('user');
+    expect(Array.isArray(lastTurn?.content)).toBe(true);
+
+    const out = await outbound(conversation.id);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.body).toContain('34,000');
+    expect(out[0]?.status).toBe('sent');
+    const runs = (out[0]?.raw as { toolRuns?: { name: string; result: { ok: boolean } }[] } | null)?.toolRuns;
+    expect(runs).toHaveLength(1);
+    expect(runs?.[0]).toMatchObject({ name: 'get_quote', result: { ok: true } });
   });
 });
 
