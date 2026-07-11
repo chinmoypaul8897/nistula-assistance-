@@ -24,12 +24,17 @@ import type { DegradedTracker } from './tools/degraded.js';
 import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
 import type { WebsiteClient } from './tools/websiteApi.js';
 
-// §6.4 max 5 rounds = at most 5 converse calls per turn. The whole loop has a
-// wall-clock budget well under the pg-boss expire (raised to 180s in CH-05);
-// per-call deadline is the smaller of a 30s ceiling and the remaining budget.
+// §6.4 max 5 rounds per loop. A guardrail-1 violation regenerates once, which
+// runs a SECOND loop — so a turn can be up to two loops. TURN_TOTAL_DEADLINE_MS
+// caps BOTH loops together (threaded via LoopArgs.deadlineAt) so the whole turn
+// stays well under the 180s pg-boss expire (earliest detection ≈195s), closing
+// the D2 re-insertion hazard by margin, not only by the claim guard. Each loop
+// also has its own 100s ceiling; the effective budget is min(the two). Per-call
+// deadline is the smaller of a 30s ceiling and the remaining turn budget.
 const MAX_TOOL_ROUNDS = 5;
 const PER_CALL_CEILING_MS = 30_000;
 const LOOP_TOTAL_DEADLINE_MS = 100_000;
+const TURN_TOTAL_DEADLINE_MS = 150_000;
 const MIN_CALL_FLOOR_MS = 3_000;
 
 export interface TurnLogger extends AlertLogger {
@@ -86,13 +91,25 @@ export async function runClaudeTurn(
     log: deps.log,
   };
 
-  const first = await runToolLoop(deps, { system, tools, messages: baseMessages, toolCtx, dbNow, conversationId });
+  // ONE wall-clock budget for the whole turn (first loop + any regenerate loop)
+  // so the two-loop path can never outlive the pg-boss expire (D2).
+  const deadlineAt = Date.now() + TURN_TOTAL_DEADLINE_MS;
+  const first = await runToolLoop(deps, {
+    system,
+    tools,
+    messages: baseMessages,
+    toolCtx,
+    dbNow,
+    conversationId,
+    deadlineAt,
+  });
 
   const outcome = await runGuardrails(
     { draft: first.draft, toolRuns: first.toolRuns },
     {
       // Regenerate once with a corrective system block appended (§6.5) — a fresh
-      // loop over the SAME transcript so the model can call tools again.
+      // loop over the SAME transcript so the model can call tools again, but on
+      // the SAME turn deadline (near-exhausted → it force-proses immediately).
       regenerate: async (nudge) => {
         const nudged: SystemBlock[] = [...system, { type: 'text', text: `[CORRECTION]\n${nudge}` }];
         const again = await runToolLoop(deps, {
@@ -102,6 +119,7 @@ export async function runClaudeTurn(
           toolCtx,
           dbNow,
           conversationId,
+          deadlineAt,
         });
         return { draft: again.draft, toolRuns: again.toolRuns };
       },
@@ -125,6 +143,8 @@ interface LoopArgs {
   toolCtx: ToolContext;
   dbNow: Date;
   conversationId: string;
+  /** Shared per-TURN wall-clock deadline (epoch ms) — caps first + regen loops. */
+  deadlineAt: number;
 }
 
 /**
@@ -139,7 +159,9 @@ async function runToolLoop(
 ): Promise<{ draft: string; toolRuns: ToolRun[] }> {
   const messages = [...args.messages];
   const toolRuns: ToolRun[] = [];
-  const loopDeadline = Date.now() + LOOP_TOTAL_DEADLINE_MS;
+  // The smaller of this loop's own 100s ceiling and the remaining TURN budget,
+  // so the first + regenerate loops together stay under TURN_TOTAL_DEADLINE_MS.
+  const loopDeadline = Math.min(Date.now() + LOOP_TOTAL_DEADLINE_MS, args.deadlineAt);
   let finalText = '';
 
   for (let round = 1; round <= MAX_TOOL_ROUNDS; round++) {
