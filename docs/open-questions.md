@@ -1,8 +1,19 @@
 # Open Questions & Pending Inputs — Nistula Assistance
 
+> ## ⚑ TIMING — dealt with in a FINAL CONTENT PASS, after the last engineering chunk
+> **Standing decision (Paul, 2026-07-11):** none of the questions below block any build
+> chunk. They are content/data inputs (quirks, real copy, missing fees, facts to confirm)
+> that depend on the villa team and the website content being finalised — slow external
+> processes. **Every chunk is built with the content available now** (real policies / FAQ /
+> occupancy + placeholder villa copy + stubbed quirks), wiring the seam so real answers drop
+> in later. The answers here are loaded, the website export re-run, and content-dependent
+> acceptance validated in one final pass **before go-live** — NOT as a prerequisite to any
+> chunk. (A genuine missing *engineering* decision still stops a session per plan §0; that is
+> a different thing from these content inputs.)
+
 > A living register of questions that need a **human answer** — Paul, the villa team,
-> or a **planning-chat decision** — before or during a build chunk. Engineering can
-> proceed around these; this file is where the answers land so nothing is lost.
+> or a **planning-chat decision**. Engineering proceeds around these; this file is where
+> the answers land so nothing is lost, to be resolved in the final content pass above.
 >
 > **How to use:** fill the `**Answer:**` line and flip **Status** to ✅ when resolved;
 > the relevant chunk then consumes it. The exhaustive raw-gap list from the website
