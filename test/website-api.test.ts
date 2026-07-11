@@ -63,20 +63,25 @@ describe('getQuote — outcome mapping', () => {
     if (outcome.status === 'min_nights') expect(outcome.quote.minNights.meetsRequirement).toBe(false);
   });
 
-  it('200 available:false AND 409 both → unavailable', async () => {
+  it('200 available:false AND 409 both → unavailable (200 keeps the price, 409 does not)', async () => {
     const a = createWebsiteClient({
       baseUrl: BASE,
       log,
       http: fakeHttp([jsonResponse(fixture('quote-available-false'))]).http,
     });
-    expect((await a.getQuote(QUOTE)).status).toBe('unavailable');
+    const aOut = await a.getQuote(QUOTE);
+    expect(aOut.status).toBe('unavailable');
+    // A taken 200 still carries the quote so a caller can show the rate.
+    if (aOut.status === 'unavailable') expect(aOut.quote?.total).toBe(34000);
 
     const b = createWebsiteClient({
       baseUrl: BASE,
       log,
       http: fakeHttp([jsonResponse({ ok: false, kind: 'unavailable' }, 409)]).http,
     });
-    expect((await b.getQuote(QUOTE)).status).toBe('unavailable');
+    const bOut = await b.getQuote(QUOTE);
+    expect(bOut.status).toBe('unavailable');
+    if (bOut.status === 'unavailable') expect(bOut.quote).toBeUndefined(); // 409 has no body
   });
 
   it('400/404 → invalid; 404 raises a villa_map_drift alert', async () => {

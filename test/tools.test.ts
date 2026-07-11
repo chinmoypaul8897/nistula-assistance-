@@ -129,16 +129,79 @@ describe('get_quote handler', () => {
     expect(c.recorded).toEqual(['down']);
   });
 
-  it('an ambiguous villa type → AMBIGUOUS_VILLA with the options (no website call)', async () => {
-    const c = ctx();
+  it('a TYPE ("3bhk") quotes all units → shared price + availability, never asks which unit', async () => {
+    const c = ctx(); // default website returns OK_QUOTE for every unit
     const res = await registry.run(
       'get_quote',
       { villa_label: '3bhk', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c.ctx,
     );
-    expect(res).toMatchObject({ ok: false, error: 'AMBIGUOUS_VILLA' });
-    if (!res.ok) expect((res.data as { options: string[] }).options).toHaveLength(4);
-    expect(c.recorded).toEqual([]); // never reached the website
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const d = res.data as { type: string; total: number; available: boolean; availableCount: number; unitCount: number };
+      expect(d.type).toBe('Nistula Villa');
+      expect(d.total).toBe(34000); // shared price
+      expect(d.available).toBe(true);
+      expect(d.availableCount).toBe(4);
+      expect(d.unitCount).toBe(4);
+    }
+    expect(c.recorded).toEqual(['up']); // one health signal for the whole type query
+  });
+
+  it('a TYPE with all units taken → still shows the price, available:false (not a bare refusal)', async () => {
+    // available:false 200 preserves the quote, so the type still has a price.
+    const c = ctx({ quote: { status: 'unavailable', quote: OK_QUOTE.quote } });
+    const res = await registry.run(
+      'get_quote',
+      { villa_label: '3bhk', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      c.ctx,
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const d = res.data as { total: number; available: boolean; availableCount: number };
+      expect(d.total).toBe(34000);
+      expect(d.available).toBe(false);
+      expect(d.availableCount).toBe(0);
+    }
+  });
+
+  it('a TYPE with mixed availability counts only the free units', async () => {
+    const recorded: ('down' | 'up')[] = [];
+    const free = new Set(['5220300000000000002', '5220300000000000011']); // B1, B3 free
+    const c: ToolContext = {
+      website: {
+        getQuote: async (p) =>
+          free.has(p.villaId)
+            ? { status: 'ok', quote: OK_QUOTE.quote }
+            : { status: 'unavailable', quote: OK_QUOTE.quote },
+        getAvailability: async () => ({ status: 'ok', days: [] }),
+      },
+      websiteBaseUrl: BASE,
+      degraded: { record: (o) => recorded.push(o) },
+      log: { error: vi.fn() },
+    };
+    const res = await registry.run(
+      'get_quote',
+      { villa_label: 'villa', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      c,
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const d = res.data as { available: boolean; availableCount: number };
+      expect(d.available).toBe(true);
+      expect(d.availableCount).toBe(2);
+    }
+  });
+
+  it('a TYPE with every unit upstream_down → UPSTREAM_DOWN + one degraded down', async () => {
+    const c = ctx({ quote: { status: 'upstream_down' } });
+    const res = await registry.run(
+      'get_quote',
+      { villa_label: '3bhk', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      c.ctx,
+    );
+    expect(res).toMatchObject({ ok: false, error: 'UPSTREAM_DOWN' });
+    expect(c.recorded).toEqual(['down']);
   });
 
   it('an unknown villa → UNKNOWN_VILLA', async () => {
@@ -182,5 +245,16 @@ describe('get_availability + get_booking_link', () => {
       expect((res.data as { url: string }).url).toBe(`${BASE}/villas/5220300000000000015`);
     }
     expect(c.recorded).toEqual([]);
+  });
+
+  it('get_booking_link for a TYPE returns a representative unit link (no ask)', async () => {
+    const c = ctx();
+    const res = await registry.run('get_booking_link', { villa_label: '3bhk' }, c.ctx);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const d = res.data as { type: string; url: string };
+      expect(d.type).toBe('Nistula Villa');
+      expect(d.url).toMatch(/\/villas\/5220300000000000\d{3}$/);
+    }
   });
 });
