@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import Fastify from 'fastify';
+import { createConverse } from './brain/claude.js';
 import { ConfigError, configSummary, loadConfig } from './config.js';
 import { runMigrations } from './db/migrate.js';
 import { closeDb, getDb } from './db/client.js';
@@ -89,6 +90,11 @@ async function main(): Promise<void> {
         'are required from CH-02 (plan.md §3.7 phase model)',
     );
   }
+  // The brain boots from CH-04 — it cannot speak without a key (MODEL_ID has a
+  // registry default, so only the key can be missing).
+  if (config.anthropicApiKey === undefined) {
+    throw new ConfigError('ANTHROPIC_API_KEY is required from CH-04 (plan.md §3.7 phase model)');
+  }
   await runMigrations(databaseUrl); // idempotent, before listen (CH-01)
   const app = buildServer();
   const { db } = getDb(databaseUrl);
@@ -103,7 +109,20 @@ async function main(): Promise<void> {
     phoneNumberId: waPhoneNumberId,
     accessToken: waAccessToken,
   });
-  const jobs = await registerJobs({ boss, db, wa, log: app.log });
+  const converse = createConverse({
+    apiKey: config.anthropicApiKey,
+    modelId: config.modelId,
+    log: app.log,
+  });
+  const jobs = await registerJobs({
+    boss,
+    db,
+    wa,
+    log: app.log,
+    converse,
+    nightStart: config.nightStart,
+    nightEnd: config.nightEnd,
+  });
   await app.register(waWebhookRoutes, {
     db,
     appSecret: waAppSecret,

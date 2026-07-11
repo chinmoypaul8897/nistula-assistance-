@@ -11,6 +11,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
+import type { ConverseFn, ConverseInput } from '../src/brain/claude.js';
 import { DEBOUNCE_WINDOWS } from '../src/brain/debounce.js';
 import { processConversation, type WorkerDeps } from '../src/brain/worker.js';
 import {
@@ -33,7 +34,7 @@ let db: Db;
 beforeAll(async () => {
   client = postgres(TEST_URL, { max: 5, onnotice: () => {} });
   db = drizzle(client, { schema });
-  await db.execute(sql`TRUNCATE messages, conversations, raw_events, guests CASCADE`);
+  await db.execute(sql`TRUNCATE messages, conversations, raw_events, guests, cost_events CASCADE`);
 }, 30_000);
 
 afterAll(async () => {
@@ -41,6 +42,30 @@ afterAll(async () => {
 });
 
 let outSeq = 0;
+
+// CH-04: the worker calls Claude — a fixed mock captures its input and returns
+// a fixed reply. Cache-cold usage (head written, small dynamic input, short
+// reply) → 3 non-zero cost buckets.
+const MOCK_REPLY = 'Good evening — how may I help with your stay?';
+const MOCK_USAGE = { inputTokens: 50, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 1200 };
+
+/** Inserts a non-guest message (ai/human/system) aged into the past. */
+async function seedOutboundMessage(
+  conversationId: string,
+  sender: 'ai' | 'human' | 'system',
+  body: string,
+  ageSeconds: number,
+): Promise<void> {
+  await insertMessage(db, {
+    conversationId,
+    direction: 'out',
+    sender,
+    type: 'text',
+    body,
+    status: 'sent',
+    createdAt: new Date(Date.now() - ageSeconds * 1000),
+  });
+}
 
 function makeRig(httpImpl?: WaClientDeps['httpImpl']) {
   const graphCalls: { to: string; body: string }[] = [];
@@ -63,16 +88,24 @@ function makeRig(httpImpl?: WaClientDeps['httpImpl']) {
     httpImpl: httpImpl ?? defaultHttp,
   });
   const enqueued: { conversationId: string; startAfter?: Date }[] = [];
+  const converseCalls: ConverseInput[] = [];
+  const converse: ConverseFn = async (input) => {
+    converseCalls.push(input);
+    return { text: MOCK_REPLY, usage: MOCK_USAGE };
+  };
   const deps: WorkerDeps = {
     db,
     wa,
     log,
     windows: DEBOUNCE_WINDOWS,
+    converse,
+    nightStart: '20:00',
+    nightEnd: '10:00',
     enqueue: async (conversationId, startAfter) => {
       enqueued.push({ conversationId, startAfter });
     },
   };
-  return { deps, graphCalls, enqueued, log };
+  return { deps, graphCalls, enqueued, log, converseCalls };
 }
 
 async function outbound(conversationId: string) {
@@ -95,24 +128,27 @@ async function conversationRow(id: string) {
   return row;
 }
 
-describe('processConversation — the debounced echo turn', () => {
-  it('a quiet burst becomes ONE combined echo; window columns + pointer advance; re-run is a no-op', async () => {
+describe('processConversation — the debounced Claude turn', () => {
+  it('a quiet burst becomes ONE Claude reply; the guest turns form the transcript; window columns + pointer advance; re-run is a no-op', async () => {
     const { conversation } = await seedConversation(db, '+917700900031');
     await seedGuestMessage(db, conversation.id, 'hi', 25);
     await seedGuestMessage(db, conversation.id, 'villa free?', 22);
     const newest = await seedGuestMessage(db, conversation.id, '20 dec', 20);
-    const { deps, graphCalls, enqueued } = makeRig();
+    const { deps, graphCalls, enqueued, converseCalls } = makeRig();
 
     await processConversation(deps, conversation.id);
 
     const out = await outbound(conversation.id);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({
-      sender: 'ai',
-      status: 'sent',
-      body: 'echo: hi\nvilla free?\n20 dec',
-    });
-    expect(graphCalls).toEqual([{ to: '+917700900031', body: 'echo: hi\nvilla free?\n20 dec' }]);
+    expect(out[0]).toMatchObject({ sender: 'ai', status: 'sent', body: MOCK_REPLY });
+    expect(graphCalls).toEqual([{ to: '+917700900031', body: MOCK_REPLY }]);
+    // The whole burst reaches Claude as ordered user turns (one converse call).
+    expect(converseCalls).toHaveLength(1);
+    expect(converseCalls[0]?.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'user', content: 'villa free?' },
+      { role: 'user', content: '20 dec' },
+    ]);
 
     const conv = await conversationRow(conversation.id);
     expect(conv?.lastProcessedMessageId).toBe(newest.id);
@@ -123,10 +159,12 @@ describe('processConversation — the debounced echo turn', () => {
     );
     expect(enqueued).toHaveLength(0); // re-check found nothing newer
 
-    // At-least-once safety: a duplicate/retried job finds nothing and no-ops.
+    // At-least-once safety: a duplicate/retried job finds nothing, no-ops, and
+    // never calls the model again.
     await processConversation(deps, conversation.id);
     expect(await outbound(conversation.id)).toHaveLength(1);
     expect(graphCalls).toHaveLength(1);
+    expect(converseCalls).toHaveLength(1);
     expect(enqueued).toHaveLength(0);
   });
 
@@ -155,7 +193,7 @@ describe('processConversation — the debounced echo turn', () => {
 
     const out = await outbound(conversation.id);
     expect(out).toHaveLength(1);
-    expect(out[0]?.body).toBe('echo: first\nstill typing');
+    expect(out[0]?.body).toBe(MOCK_REPLY);
   });
 
   it('drops a job for an unknown conversation without throwing', async () => {
@@ -174,13 +212,15 @@ describe('processConversation — the debounced echo turn', () => {
       .update(schema.conversations)
       .set({ lastProcessedMessageId: randomUUID() })
       .where(eq(schema.conversations.id, conversation.id));
-    const { deps, log } = makeRig();
+    const { deps, log, converseCalls } = makeRig();
 
     await processConversation(deps, conversation.id);
 
     const out = await outbound(conversation.id);
     expect(out).toHaveLength(1);
-    expect(out[0]?.body).toContain('early words');
+    expect(out[0]?.body).toBe(MOCK_REPLY);
+    // Process-all recovery still fed the early message to Claude.
+    expect(converseCalls[0]?.messages).toEqual([{ role: 'user', content: 'early words' }]);
     expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
     expect(log.error).toHaveBeenCalledWith(
       expect.objectContaining({ opsAlert: 'conversation_cursor_dangling' }),
@@ -207,15 +247,17 @@ describe('processConversation — the debounced echo turn', () => {
     expect(rig.enqueued.map((e) => e.conversationId)).toEqual([conversation.id]);
   });
 
-  it('null-body media renders as a type placeholder and still advances the pointer', async () => {
+  it('null-body media becomes a [type] placeholder IN THE TRANSCRIPT and still advances the pointer', async () => {
     const { conversation } = await seedConversation(db, '+917700900036');
     const message = await seedGuestMessage(db, conversation.id, null, 20, 'unsupported');
-    const { deps } = makeRig();
+    const { deps, converseCalls } = makeRig();
 
     await processConversation(deps, conversation.id);
 
     const out = await outbound(conversation.id);
-    expect(out[0]?.body).toBe('echo: [unsupported]');
+    // The reply is the model's; the placeholder now lives in what Claude saw.
+    expect(out[0]?.body).toBe(MOCK_REPLY);
+    expect(converseCalls[0]?.messages).toEqual([{ role: 'user', content: '[unsupported]' }]);
     expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
   });
 
@@ -244,6 +286,92 @@ describe('processConversation — the debounced echo turn', () => {
     );
     await processConversation(rig.deps, conversation.id);
     expect(await outbound(conversation.id)).toHaveLength(1);
+  });
+
+  it('maps the transcript: guest→user, ai/human→assistant (human prefixed), system skipped', async () => {
+    const { conversation } = await seedConversation(db, '+917700900041');
+    await seedGuestMessage(db, conversation.id, 'first question', 40);
+    await seedOutboundMessage(conversation.id, 'ai', 'my earlier reply', 35);
+    await seedOutboundMessage(conversation.id, 'human', 'front desk here', 30);
+    await seedOutboundMessage(conversation.id, 'system', 'internal context row', 28);
+    await seedGuestMessage(db, conversation.id, 'still there?', 20);
+    const { deps, converseCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    expect(converseCalls[0]?.messages).toEqual([
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'my earlier reply' },
+      { role: 'assistant', content: '(Front desk) front desk here' },
+      { role: 'user', content: 'still there?' },
+    ]);
+  });
+
+  it('trims leading non-user turns so the transcript opens on a user message', async () => {
+    const { conversation } = await seedConversation(db, '+917700900042');
+    // The recent window opens on assistant turns (an earlier reply + a staff note).
+    await seedOutboundMessage(conversation.id, 'ai', 'welcome back', 40);
+    await seedOutboundMessage(conversation.id, 'system', 'note', 38);
+    await seedGuestMessage(db, conversation.id, 'hello again', 20);
+    const { deps, converseCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    // ai (leading) trimmed, system skipped → opens on the guest user turn.
+    expect(converseCalls[0]?.messages).toEqual([{ role: 'user', content: 'hello again' }]);
+  });
+
+  it('logs one cost_events row per non-zero token bucket, stamped with the IST day', async () => {
+    await db.execute(sql`TRUNCATE cost_events`);
+    const { conversation } = await seedConversation(db, '+917700900043');
+    await seedGuestMessage(db, conversation.id, 'rate please', 20);
+    const { deps } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    const rows = await db.select().from(schema.costEvents);
+    // MOCK_USAGE = input 50, output 40, cacheWrite 1200, cacheRead 0 → 3 rows.
+    expect(rows).toHaveLength(3);
+    const byKind = Object.fromEntries(rows.map((row) => [row.kind, row.quantity]));
+    expect(byKind).toEqual({
+      anthropic_input: '50',
+      anthropic_output: '40',
+      anthropic_cache_write: '1200',
+    });
+    for (const row of rows) {
+      expect(row.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(Number(row.inrEstimate)).toBeGreaterThan(0);
+    }
+  });
+
+  it('a model failure sends nothing, claims nothing, alerts ops, and rethrows for retry (§6.6)', async () => {
+    const { conversation } = await seedConversation(db, '+917700900044');
+    const message = await seedGuestMessage(db, conversation.id, 'anything', 20);
+    const rig = makeRig();
+    rig.deps.converse = () => {
+      throw Object.assign(new Error('overloaded'), { status: 529 });
+    };
+
+    await expect(processConversation(rig.deps, conversation.id)).rejects.toThrow('overloaded');
+
+    // Pre-claim throw: no reply, pointer untouched, ops alerted.
+    expect(await outbound(conversation.id)).toHaveLength(0);
+    expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBeNull();
+    expect(rig.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ opsAlert: 'model_failed' }),
+      expect.stringContaining('[OPS-ALERT]'),
+    );
+
+    // Once the model recovers, the retried job (guest still unprocessed) sends.
+    rig.deps.converse = async (input) => {
+      rig.converseCalls.push(input);
+      return { text: MOCK_REPLY, usage: MOCK_USAGE };
+    };
+    await processConversation(rig.deps, conversation.id);
+    const out = await outbound(conversation.id);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.body).toBe(MOCK_REPLY);
+    expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
   });
 });
 

@@ -6,8 +6,10 @@
  */
 import {
   boolean,
+  date,
   index,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   text,
@@ -53,6 +55,15 @@ export const messageStatusEnum = pgEnum('message_status', [
   'failed',
 ]);
 export const rawEventSourceEnum = pgEnum('raw_event_source', ['whatsapp', 'ezee']);
+// §4 lists four kinds; `anthropic_cache_write` is a CH-04 addition (Paul-approved)
+// so CH-17's meter can separate the 1.25x cache-write premium from base input.
+export const costEventKindEnum = pgEnum('cost_event_kind', [
+  'anthropic_input',
+  'anthropic_output',
+  'anthropic_cache_read',
+  'anthropic_cache_write',
+  'wa_template',
+]);
 
 // §4 preamble: every table gets uuid pk + created_at/updated_at timestamptz.
 // $onUpdate keeps updated_at honest on every future drizzle UPDATE without
@@ -127,6 +138,18 @@ export const messages = pgTable(
     index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
   ],
 );
+
+/** Token + message spend meter (§4). One row per non-zero usage bucket per
+ * AI call; `day` is the IST business day for the CH-17 daily rollup. quantity
+ * and inr_estimate are numeric (drizzle maps them to strings). */
+export const costEvents = pgTable('cost_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  day: date('day').notNull(),
+  kind: costEventKindEnum('kind').notNull(),
+  quantity: numeric('quantity').notNull(),
+  inrEstimate: numeric('inr_estimate').notNull(),
+  ...timestamps,
+});
 
 /** Every webhook payload as received — audit + replay (§4). */
 export const rawEvents = pgTable('raw_events', {
