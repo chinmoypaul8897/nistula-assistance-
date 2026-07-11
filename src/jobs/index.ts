@@ -69,10 +69,12 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryLimit: 3, // retries are harmless under the claim guard (D2)
     retryDelay: 10, // default is 0 = instant; give transient DB errors room
     retryBackoff: true,
-    // CH-05: the ≤5-round tool loop has a ~100s internal budget; expire is
-    // raised to 180s so pg-boss never re-inserts a job while a slow turn is
-    // still running (100s loop + dispatch ≪ 180s; earliest expire detection is
-    // ~expire + monitorInterval ≈ 195s). See updateQueue below.
+    // CH-05: a turn is up to TWO tool loops (first + one guardrail regenerate),
+    // bounded TOGETHER by turn.ts TURN_TOTAL_DEADLINE_MS (150s) + dispatch, kept
+    // under the 180s expire so pg-boss does not re-insert a still-running job
+    // (earliest expire detection ≈ expire + monitorInterval ≈ 195s). The claim
+    // guard (D2) is the correctness backstop; this margin avoids the wasteful
+    // duplicate tool loop, not a wrong send. See updateQueue below.
     expireInSeconds: 180,
   });
   // createQueue is a SILENT no-op on an ALREADY-created queue (verified 12.25.1)

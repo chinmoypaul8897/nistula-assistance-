@@ -15,7 +15,14 @@ import type { ToolRun } from './tools/registry.js';
 
 // ₹-prefixed amounts ("₹34,000", "₹ 34000") and bare comma-grouped runs
 // ("34,000") — a thousands separator is a money tell even without the symbol.
-// The "34k" shorthand is deferred to CH-07 (the voice guide bans it anyway).
+// KNOWN GAP (deferred to CH-07's full guardrail suite): a comma-less, symbol-
+// less bare integer ("30000") matches neither pattern, so a fabricated price in
+// that exact form fails OPEN. The proper fix is context-aware extraction
+// (numbers adjacent to Rs/per-night/total cues) rather than a bare-integer
+// threshold, which would false-positive on years/pincodes/refs and wrongly
+// defer valid replies. Mitigated meanwhile by the system prompt hard-steering
+// ₹-formatting and this being defence-in-depth. Also deferred: the "34k"
+// shorthand. Review-confirmed; tracked in progress.md for CH-07.
 const RUPEE_AMOUNT = /₹\s?\d[\d,]*(?:\.\d+)?/g;
 const GROUPED_AMOUNT = /\b\d{1,3}(?:,\d{3})+\b/g;
 
@@ -37,10 +44,18 @@ export function extractRupeeAmounts(draft: string): number[] {
   return [...found];
 }
 
-/** Every numeric value anywhere inside a successful tool result's data. */
+/** Every numeric value anywhere inside a successful tool result's data. A
+ * fractional tool figure (e.g. averagePerNight = total/nights) is stored as
+ * BOTH its floor and its round so a draft that floors OR rounds it still
+ * matches — toInt on the draft side always yields an integer, so the backed
+ * side must offer integer forms too (review finding: decimal asymmetry would
+ * escalate a valid quote as an outage). */
 function collectNumbers(value: unknown, into: Set<number>): void {
   if (typeof value === 'number') {
-    if (Number.isFinite(value)) into.add(value);
+    if (Number.isFinite(value)) {
+      into.add(Math.trunc(value));
+      into.add(Math.round(value));
+    }
     return;
   }
   if (Array.isArray(value)) {
@@ -84,12 +99,17 @@ export function checkPriceIntegrity(
 }
 
 // Negotiation / bargaining language (§6.5 guardrail 3). Word-boundary, case-
-// insensitive. "offer" is a bargaining tell here; the voice guide already bans
-// the whole family.
+// insensitive. WHY NOT a bare /\boffer\b/: the voice guide bans "offer" ONLY in
+// the negotiation sense — "the villa offers a private pool" / "we offer
+// breakfast" is permitted hospitality copy the block [4] rules even prime the
+// model to write ("offer the nearest alternative"). A bare match would nuke
+// those clean replies into the discount line (review finding). Bargain-y noun
+// offers ("special/limited/festive offer") stay caught below; a verb bargain
+// ("offer a discount / a lower price") is caught by discount/deal/price terms.
 const NEGOTIATION = [
   /\bdiscount(s|ed|ing)?\b/i,
   /\bdeal(s)?\b/i,
-  /\boffer(s|ed|ing)?\b/i,
+  /\b(special|limited|exclusive|festive|seasonal)\s+offers?\b/i,
   /\bbargain(s|ed|ing)?\b/i,
   /\bnegotiat(e|ed|ing|ion)?\b/i,
   /\bconcession(s)?\b/i,
