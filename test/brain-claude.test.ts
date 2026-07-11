@@ -136,3 +136,80 @@ describe('createConverse', () => {
     expect(() => createConverse({ apiKey: '', modelId: 'm', log })).toThrow('ANTHROPIC_API_KEY');
   });
 });
+
+function fakeToolMessage(): Anthropic.Message {
+  return {
+    content: [
+      { type: 'text', text: 'let me check' },
+      { type: 'tool_use', id: 'tu_1', name: 'get_quote', input: { villa_label: 'B3' } },
+    ],
+    stop_reason: 'tool_use',
+    usage: {
+      input_tokens: 20,
+      output_tokens: 8,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+    },
+  } as unknown as Anthropic.Message;
+}
+
+describe('createConverse — tool use (CH-05)', () => {
+  const tools = [{ name: 'get_quote', description: 'd', input_schema: { type: 'object' } }];
+
+  it('forwards tools + tool_choice and parses tool_use into toolUses/stopReason/assistantContent', async () => {
+    let seen: Anthropic.MessageCreateParamsNonStreaming | undefined;
+    const converse = createConverse({
+      apiKey: undefined,
+      modelId: 'm',
+      log,
+      createMessage: async (params) => {
+        seen = params;
+        return fakeToolMessage();
+      },
+    });
+
+    const result = await converse({ ...INPUT, tools, toolChoice: { type: 'none' } });
+
+    expect(seen?.tools).toEqual(tools);
+    expect(seen?.tool_choice).toEqual({ type: 'none' });
+    expect(result.stopReason).toBe('tool_use');
+    expect(result.toolUses).toEqual([{ id: 'tu_1', name: 'get_quote', input: { villa_label: 'B3' } }]);
+    // The assistant turn is rebuilt verbatim (text + tool_use) for the next round.
+    expect(result.assistantContent).toEqual([
+      { type: 'text', text: 'let me check' },
+      { type: 'tool_use', id: 'tu_1', name: 'get_quote', input: { villa_label: 'B3' } },
+    ]);
+  });
+
+  it('omits tools/tool_choice when none are given (CH-04 request shape intact)', async () => {
+    let seen: Anthropic.MessageCreateParamsNonStreaming | undefined;
+    const converse = createConverse({
+      apiKey: undefined,
+      modelId: 'm',
+      log,
+      createMessage: async (params) => {
+        seen = params;
+        return fakeMessage('hi');
+      },
+    });
+    const result = await converse(INPUT);
+    expect(seen?.tools).toBeUndefined();
+    expect(seen?.tool_choice).toBeUndefined();
+    expect(result.toolUses).toEqual([]);
+  });
+
+  it('a per-call deadlineMs caps the request timeout', async () => {
+    let timeout = 0;
+    const converse = createConverse({
+      apiKey: undefined,
+      modelId: 'm',
+      log,
+      createMessage: async (_params, options) => {
+        timeout = options.timeout;
+        return fakeMessage('ok');
+      },
+    });
+    await converse({ ...INPUT, deadlineMs: 4000 });
+    expect(timeout).toBeLessThanOrEqual(4000);
+  });
+});

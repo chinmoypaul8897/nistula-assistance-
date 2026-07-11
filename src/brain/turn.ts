@@ -1,0 +1,261 @@
+/**
+ * The Claude turn (plan.md §6.4 tool loop + §6.5 guardrails, CH-05). Extracted
+ * from worker.ts so the worker stays focused on the debounce/claim/dispatch
+ * skeleton and both files stay under ~300 lines. `runClaudeTurn` is ALL fallible
+ * think-work and is called BEFORE the claim (CH-03 D2): any throw here is
+ * retry-safe (pg-boss retry / sweeper), leaving no reply and no claim (§6.6).
+ *
+ * The loop: build system + transcript + tool specs → converse → if the model
+ * asked for tools, run them and feed the results back (≤5 rounds) → else take
+ * the prose. Every ₹ in the final draft is then re-validated by the guardrails;
+ * an unbacked price is regenerated once, then deferred — never sent.
+ */
+import type Anthropic from '@anthropic-ai/sdk';
+import type { Db } from '../db/client.js';
+import { getRecentMessages, insertCostEvents, type Conversation, type Message, type NewCostEvent } from '../db/repos.js';
+import { summarizeError } from '../lib/logger.js';
+import { istCalendarDay, isNightIST } from '../lib/time.js';
+import { alertOps, type AlertLogger } from '../ops/alerts.js';
+import type { ConverseFn } from './claude.js';
+import { costEventsFor, type ConverseUsage } from './cost.js';
+import { runGuardrails } from './guardrails.js';
+import { PHRASEBOOK, buildSituation, buildSystemPrompt, type SystemBlock } from './prompt.js';
+import type { DegradedTracker } from './tools/degraded.js';
+import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
+import type { WebsiteClient } from './tools/websiteApi.js';
+
+// §6.4 max 5 rounds = at most 5 converse calls per turn. The whole loop has a
+// wall-clock budget well under the pg-boss expire (raised to 180s in CH-05);
+// per-call deadline is the smaller of a 30s ceiling and the remaining budget.
+const MAX_TOOL_ROUNDS = 5;
+const PER_CALL_CEILING_MS = 30_000;
+const LOOP_TOTAL_DEADLINE_MS = 100_000;
+const MIN_CALL_FLOOR_MS = 3_000;
+
+export interface TurnLogger extends AlertLogger {
+  info: (obj: Record<string, unknown>, msg?: string) => void;
+  warn: (obj: Record<string, unknown>, msg?: string) => void;
+}
+
+/** Everything the Claude turn needs — a subset of WorkerDeps (worker extends this). */
+export interface TurnDeps {
+  db: Db;
+  log: TurnLogger;
+  converse: ConverseFn;
+  toolRegistry: ToolRegistry;
+  website: WebsiteClient;
+  websiteBaseUrl: string;
+  degraded: DegradedTracker;
+  nightStart: string;
+  nightEnd: string;
+}
+
+export interface TurnResult {
+  text: string;
+  toolRuns: ToolRun[];
+  /** True when guardrails deferred a price — the worker escalates to ops. */
+  escalate: boolean;
+}
+
+type TurnMessage = { role: 'user' | 'assistant'; content: string | Anthropic.ContentBlockParam[] };
+
+/**
+ * Builds the prompt + transcript and runs the tool loop, then the guardrail
+ * pipeline. Returns the final reply text + the tool-run audit + whether the
+ * turn must escalate (price could not be validated).
+ */
+export async function runClaudeTurn(
+  deps: TurnDeps,
+  conversation: Conversation,
+  dbNow: Date,
+  conversationId: string,
+): Promise<TurnResult> {
+  const baseMessages = mapTranscript(await getRecentMessages(deps.db, conversationId));
+  const situation = buildSituation({
+    now: dbNow,
+    isNight: isNightIST(dbNow, deps.nightStart, deps.nightEnd),
+    serviceWindowOpen: isServiceWindowOpen(conversation.serviceWindowExpiresAt, dbNow),
+    degraded: deps.degraded.isDegraded(),
+  });
+  const system = buildSystemPrompt(situation);
+  const tools = deps.toolRegistry.specs();
+  const toolCtx: ToolContext = {
+    website: deps.website,
+    websiteBaseUrl: deps.websiteBaseUrl,
+    degraded: deps.degraded,
+    log: deps.log,
+  };
+
+  const first = await runToolLoop(deps, { system, tools, messages: baseMessages, toolCtx, dbNow, conversationId });
+
+  const outcome = await runGuardrails(
+    { draft: first.draft, toolRuns: first.toolRuns },
+    {
+      // Regenerate once with a corrective system block appended (§6.5) — a fresh
+      // loop over the SAME transcript so the model can call tools again.
+      regenerate: async (nudge) => {
+        const nudged: SystemBlock[] = [...system, { type: 'text', text: `[CORRECTION]\n${nudge}` }];
+        const again = await runToolLoop(deps, {
+          system: nudged,
+          tools,
+          messages: baseMessages,
+          toolCtx,
+          dbNow,
+          conversationId,
+        });
+        return { draft: again.draft, toolRuns: again.toolRuns };
+      },
+      log: deps.log,
+      // CH-06 passes the compiled kb price figures; empty until then (§6.5).
+      whitelist: [],
+    },
+  );
+
+  return {
+    text: outcome.text,
+    toolRuns: outcome.toolRuns,
+    escalate: outcome.action === 'defer',
+  };
+}
+
+interface LoopArgs {
+  system: SystemBlock[];
+  tools: ReturnType<ToolRegistry['specs']>;
+  messages: TurnMessage[];
+  toolCtx: ToolContext;
+  dbNow: Date;
+  conversationId: string;
+}
+
+/**
+ * One bounded tool loop (≤5 rounds). A converse throw is alerted then rethrown
+ * (pre-claim — the sweeper recovers, §6.6). The terminal round forces
+ * tool_choice:'none' so the model answers in prose from the results it has,
+ * rather than looping forever or returning an empty tool_use turn.
+ */
+async function runToolLoop(
+  deps: TurnDeps,
+  args: LoopArgs,
+): Promise<{ draft: string; toolRuns: ToolRun[] }> {
+  const messages = [...args.messages];
+  const toolRuns: ToolRun[] = [];
+  const loopDeadline = Date.now() + LOOP_TOTAL_DEADLINE_MS;
+  let finalText = '';
+
+  for (let round = 1; round <= MAX_TOOL_ROUNDS; round++) {
+    const remaining = loopDeadline - Date.now();
+    const forceProse = round === MAX_TOOL_ROUNDS || remaining <= MIN_CALL_FLOOR_MS;
+
+    let result;
+    try {
+      result = await deps.converse({
+        system: args.system,
+        messages,
+        tools: args.tools,
+        toolChoice: forceProse ? { type: 'none' } : undefined,
+        deadlineMs: Math.min(PER_CALL_CEILING_MS, Math.max(remaining, MIN_CALL_FLOOR_MS)),
+      });
+    } catch (error) {
+      await alertOps(deps.log, {
+        kind: 'model_failed',
+        summary: 'Anthropic call failed after retries — no reply sent',
+        detail: { conversationId: args.conversationId, err: summarizeError(error) },
+      });
+      throw error; // pre-claim (D2/§6.6): pg-boss retry then the sweeper recover
+    }
+
+    await logCost(deps, args.dbNow, result.usage);
+    // Token counts only (§3.3). cacheRead > 0 from round ≥2 proves the static
+    // head caches even with the tool specs now in the prefix (§5.5).
+    deps.log.info(
+      {
+        conversationId: args.conversationId,
+        round,
+        tools: result.toolUses.length,
+        tokens: {
+          in: result.usage.inputTokens,
+          out: result.usage.outputTokens,
+          cacheRead: result.usage.cacheReadTokens,
+          cacheWrite: result.usage.cacheWriteTokens,
+        },
+      },
+      'claude turn',
+    );
+
+    finalText = result.text;
+    if (forceProse || result.toolUses.length === 0) {
+      if (forceProse && result.toolUses.length > 0) {
+        // Cap hit with the model still wanting tools — worth an ops signal.
+        await alertOps(deps.log, {
+          kind: 'tool_loop_exhausted',
+          summary: 'tool loop hit its round/time cap — answered from results in hand',
+          detail: { conversationId: args.conversationId, rounds: round },
+        });
+      }
+      return { draft: nonEmptyOrDeferral(finalText), toolRuns };
+    }
+
+    // Append the model's assistant turn verbatim, then answer EVERY tool_use in
+    // one user turn (parallel tool_use stays a single round). Every tool_use_id
+    // MUST be answered or the next request 400s.
+    messages.push({ role: 'assistant', content: result.assistantContent });
+    const toolResults: Anthropic.ContentBlockParam[] = [];
+    for (const use of result.toolUses) {
+      const res = await deps.toolRegistry.run(use.name, use.input, args.toolCtx);
+      toolRuns.push({ name: use.name, input: use.input, result: res });
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: use.id,
+        is_error: !res.ok,
+        // Structured DATA, never raw upstream text (injection posture, §3.3).
+        content: JSON.stringify(res),
+      });
+    }
+    messages.push({ role: 'user', content: toolResults });
+  }
+  // The final round always forces prose and returns above; this satisfies the
+  // type checker and is a safe fallback.
+  return { draft: nonEmptyOrDeferral(finalText), toolRuns };
+}
+
+/** An empty final draft (max_tokens cutoff, refusal) must never be dispatched. */
+function nonEmptyOrDeferral(text: string): string {
+  return text.trim() === '' ? PHRASEBOOK.outsideKnowledge : text;
+}
+
+/**
+ * Maps stored messages to the Claude message array (CH-04). guest→user,
+ * ai→assistant, human→assistant with "(Front desk)"; system rows skipped; null
+ * bodies → [type]; leading non-user turns dropped (Anthropic opens on user).
+ */
+export function mapTranscript(msgs: Message[]): TurnMessage[] {
+  const mapped: TurnMessage[] = [];
+  for (const message of msgs) {
+    if (message.sender === 'system') continue;
+    const content = message.body ?? `[${message.type}]`;
+    if (message.sender === 'guest') {
+      mapped.push({ role: 'user', content });
+    } else if (message.sender === 'human') {
+      mapped.push({ role: 'assistant', content: `(Front desk) ${content}` });
+    } else {
+      mapped.push({ role: 'assistant', content });
+    }
+  }
+  while (mapped.length > 0 && mapped[0]?.role !== 'user') mapped.shift();
+  return mapped;
+}
+
+function isServiceWindowOpen(expiresAt: Date | null, now: Date): boolean {
+  return expiresAt !== null && now.getTime() < expiresAt.getTime();
+}
+
+/** One cost_events row per non-zero token bucket, per round, stamped IST-day. */
+async function logCost(deps: Pick<TurnDeps, 'db' | 'log'>, now: Date, usage: ConverseUsage): Promise<void> {
+  try {
+    const day = istCalendarDay(now);
+    const rows: NewCostEvent[] = costEventsFor(usage).map((row) => ({ day, ...row }));
+    await insertCostEvents(deps.db, rows);
+  } catch (error) {
+    deps.log.warn({ err: summarizeError(error) }, 'cost_events insert failed (telemetry only)');
+  }
+}

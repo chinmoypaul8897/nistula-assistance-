@@ -1,49 +1,33 @@
 /**
- * Conversation worker v1 (plan.md CH-04 step 3): the debounced CLAUDE turn —
- * builds the system prompt + transcript, calls converse(), and sends the
- * reply in Nistula's voice (no tools yet — factual questions are deferred).
- * The claim/dispatch skeleton is unchanged from CH-03. Binding invariant
- * (CH-03 D2): the model call is fallible think-work and stays BEFORE the claim
- * — a pre-claim throw is retry-safe (pg-boss retry / sweeper), leaving no
- * reply and no claim (§6.6).
+ * Conversation worker (plan.md CH-03 skeleton + CH-04 voice + CH-05 tools).
+ * This file owns the debounce/claim/dispatch machinery; the Claude turn itself
+ * (tool loop + guardrails) lives in turn.ts. Binding invariant (CH-03 D2): the
+ * whole turn is fallible think-work and stays BEFORE the claim — a pre-claim
+ * throw is retry-safe (pg-boss retry / sweeper), leaving no reply and no claim
+ * (§6.6). CH-05 adds: the reply row carries its tool-run audit (raw.toolRuns),
+ * and a guardrail-deferred price escalates to ops on the winning-claim path.
  */
-import type { Db } from '../db/client.js';
 import {
   claimConversationTurn,
   findStaleConversations,
   getConversationTurnContext,
-  getRecentMessages,
   getUnprocessedGuestMessages,
-  insertCostEvents,
   resolveMessageCursor,
-  type Conversation,
-  type Message,
-  type NewCostEvent,
 } from '../db/repos.js';
-import { summarizeError } from '../lib/logger.js';
-import { istCalendarDay, isNightIST } from '../lib/time.js';
-import { alertOps, type AlertLogger } from '../ops/alerts.js';
+import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
-import type { ConverseFn } from './claude.js';
-import { costEventsFor, type ConverseUsage } from './cost.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
-import { buildSituation, buildSystemPrompt } from './prompt.js';
+import { runClaudeTurn, type TurnDeps, type TurnLogger } from './turn.js';
 
-export interface WorkerLogger extends AlertLogger {
-  info: (obj: Record<string, unknown>, msg?: string) => void;
-  warn: (obj: Record<string, unknown>, msg?: string) => void;
-}
+export type WorkerLogger = TurnLogger;
 
-export interface WorkerDeps {
-  db: Db;
-  wa: Pick<WaClient, 'createSendIntent' | 'dispatchText'>;
-  log: WorkerLogger;
+export interface WorkerDeps extends TurnDeps {
+  // wa gains sendText for the CH-05 interim ops escalation (real escalate_to_human
+  // lands CH-14; until then a deferred price messages OPS_NUMBERS directly).
+  wa: Pick<WaClient, 'createSendIntent' | 'dispatchText' | 'sendText'>;
   windows: DebounceWindows;
-  /** The Claude client (§5.5) — injected so tests mock the model, no live call. */
-  converse: ConverseFn;
-  /** Night-window bounds for the SITUATION block (config NIGHT_START/NIGHT_END). */
-  nightStart: string;
-  nightEnd: string;
+  /** OPS_NUMBERS (E.164) — interim price-escalation recipients (§5.3 chokepoint). */
+  opsNumbers: string[];
   /** Bound by jobs/index.ts — enqueuer and worker share ONE windows source (no drift). */
   enqueue: (conversationId: string, startAfter?: Date) => Promise<void>;
 }
@@ -91,13 +75,13 @@ export async function processConversation(
     return;
   }
 
-  // The Claude turn (CH-04) — ALL fallible think-work, BEFORE the claim (D2).
-  const reply = await runClaudeTurn(deps, ctx.conversation, ctx.dbNow, conversationId);
-  // ONE transaction (CH-03 decision D2): claim + send intent commit
-  // atomically so every failure state stays observable — no claim → the
-  // sweeper retries the whole turn; claim committed → the 'queued' intent
-  // row exists for the CH-17 stale-queued sweep. Claim FIRST inside the tx:
-  // a losing claim writes nothing, so the empty commit is a no-op.
+  // The Claude turn (CH-04 voice + CH-05 tools/guardrails) — ALL fallible
+  // think-work, BEFORE the claim (D2).
+  const turn = await runClaudeTurn(deps, ctx.conversation, ctx.dbNow, conversationId);
+  // ONE transaction (CH-03 decision D2): claim + send intent commit atomically
+  // so every failure state stays observable. Claim FIRST inside the tx: a
+  // losing claim writes nothing, so the empty commit is a no-op. The reply row
+  // carries the tool-run audit (CH-05 step 4).
   let intentId: string | null = null;
   await deps.db.transaction(async (tx) => {
     const claimed = await claimConversationTurn(tx, {
@@ -107,7 +91,12 @@ export async function processConversation(
       lastGuestMsgAt: newest.createdAt,
     });
     if (!claimed) return;
-    const intent = await deps.wa.createSendIntent(tx, reply, { conversationId, sender: 'ai' });
+    const intent = await deps.wa.createSendIntent(
+      tx,
+      turn.text,
+      { conversationId, sender: 'ai' },
+      turn.toolRuns.length > 0 ? { raw: { toolRuns: turn.toolRuns } } : undefined,
+    );
     intentId = intent.id;
   });
 
@@ -120,15 +109,36 @@ export async function processConversation(
     await deps.wa.dispatchText({
       messageId: intentId,
       toE164: ctx.guestPhone,
-      body: reply,
+      body: turn.text,
       conversationId,
     });
+    // Interim price escalation fires ONLY on the winning-claim path so a losing
+    // concurrent run never double-escalates.
+    if (turn.escalate) await escalateToOps(deps, conversationId);
   }
 
   // End-of-run re-check (CH-03 step 1): messages that landed mid-run are
   // newer than the claimed pointer — re-enqueue and let debounce group them.
   // Runs on the losing-claim path too (cheaper than waiting for the sweeper).
   await recheck(deps, conversationId);
+}
+
+/**
+ * Interim escalation (CH-05 step 5) — a price the guardrail could not validate.
+ * Messages each OPS number directly (conversationId null / sender system) and
+ * raises an ops alert; in dev OPS_NUMBERS is unset, so the alert log is the
+ * only channel. Real escalate_to_human lands CH-14.
+ */
+async function escalateToOps(deps: WorkerDeps, conversationId: string): Promise<void> {
+  const summary = 'Price help needed on a guest thread — the AI could not confirm a rate safely.';
+  for (const ops of deps.opsNumbers) {
+    await deps.wa.sendText(ops, summary, { conversationId: null, sender: 'system' });
+  }
+  await alertOps(deps.log, {
+    kind: 'price_guardrail_escalation',
+    summary: 'AI deferred a price and escalated to ops',
+    detail: { conversationId },
+  });
 }
 
 async function recheck(deps: WorkerDeps, conversationId: string): Promise<void> {
@@ -142,101 +152,11 @@ async function recheck(deps: WorkerDeps, conversationId: string): Promise<void> 
   if (pending.length > 0) await deps.enqueue(conversationId);
 }
 
-type TurnMessage = { role: 'user' | 'assistant'; content: string };
-
-/**
- * Builds the system prompt + transcript and calls Claude (CH-04). A converse
- * throw is alerted then rethrown — pre-claim, so pg-boss/sweeper recover with
- * no reply and no claim (§6.6). Cost is logged best-effort after a success:
- * telemetry never blocks a reply, and the API call cost is real regardless of
- * whether this run later wins the claim.
- */
-async function runClaudeTurn(
-  deps: WorkerDeps,
-  conversation: Conversation,
-  dbNow: Date,
-  conversationId: string,
-): Promise<string> {
-  const transcript = mapTranscript(await getRecentMessages(deps.db, conversationId));
-  const situation = buildSituation({
-    now: dbNow,
-    isNight: isNightIST(dbNow, deps.nightStart, deps.nightEnd),
-    serviceWindowOpen: isServiceWindowOpen(conversation.serviceWindowExpiresAt, dbNow),
-  });
-
-  let result;
-  try {
-    result = await deps.converse({ system: buildSystemPrompt(situation), messages: transcript });
-  } catch (error) {
-    await alertOps(deps.log, {
-      kind: 'model_failed',
-      summary: 'Anthropic call failed after retries — no reply sent',
-      detail: { conversationId, err: summarizeError(error) },
-    });
-    throw error; // pre-claim (D2/§6.6): pg-boss retry then the sweeper recover
-  }
-  await logCost(deps, dbNow, result.usage);
-  // Token counts only (no bodies, no secrets — §3.3). cacheRead > 0 from the
-  // second message in a window is the proof the static head is caching (§5.5).
-  deps.log.info(
-    {
-      conversationId,
-      tokens: {
-        in: result.usage.inputTokens,
-        out: result.usage.outputTokens,
-        cacheRead: result.usage.cacheReadTokens,
-        cacheWrite: result.usage.cacheWriteTokens,
-      },
-    },
-    'claude turn',
-  );
-  return result.text;
-}
-
-/**
- * Maps stored messages to the Claude message array (CH-04). guest→user,
- * ai→assistant, human→assistant with a "(Front desk)" prefix so the model
- * knows a person spoke; sender:'system' rows (internal context) are skipped.
- * Null bodies (media/unsupported) render as [type] placeholders. Leading
- * non-user turns are dropped — Anthropic requires the array to open on user.
- */
-function mapTranscript(msgs: Message[]): TurnMessage[] {
-  const mapped: TurnMessage[] = [];
-  for (const message of msgs) {
-    if (message.sender === 'system') continue;
-    const content = message.body ?? `[${message.type}]`;
-    if (message.sender === 'guest') {
-      mapped.push({ role: 'user', content });
-    } else if (message.sender === 'human') {
-      mapped.push({ role: 'assistant', content: `(Front desk) ${content}` });
-    } else {
-      mapped.push({ role: 'assistant', content });
-    }
-  }
-  while (mapped.length > 0 && mapped[0]?.role !== 'user') mapped.shift();
-  return mapped;
-}
-
-function isServiceWindowOpen(expiresAt: Date | null, now: Date): boolean {
-  return expiresAt !== null && now.getTime() < expiresAt.getTime();
-}
-
-/** One cost_events row per non-zero token bucket, stamped with the IST day. */
-async function logCost(deps: WorkerDeps, now: Date, usage: ConverseUsage): Promise<void> {
-  try {
-    const day = istCalendarDay(now);
-    const rows: NewCostEvent[] = costEventsFor(usage).map((row) => ({ day, ...row }));
-    await insertCostEvents(deps.db, rows);
-  } catch (error) {
-    deps.log.warn({ err: summarizeError(error) }, 'cost_events insert failed (telemetry only)');
-  }
-}
-
 /**
  * Recovery net (CH-03 step 1, §6.6): re-enqueues any conversation whose
  * oldest unprocessed guest message predates the sweep window — crashed
- * enqueues, lost jobs, model failures (from CH-04) all funnel through here.
- * Idempotent: a pending job absorbs the send (stately created-dedupe).
+ * enqueues, lost jobs, model failures all funnel through here. Idempotent:
+ * a pending job absorbs the send (stately created-dedupe).
  */
 export async function sweepStrandedConversations(
   deps: Pick<WorkerDeps, 'db' | 'log' | 'enqueue' | 'windows'>,

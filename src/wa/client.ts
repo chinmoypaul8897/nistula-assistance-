@@ -74,7 +74,15 @@ export function createWaClient(deps: WaClientDeps) {
    * pass deps.db and the awaited autocommit IS the pre-call commit.
    * Throws on failure so an enclosing transaction rolls back.
    */
-  async function createSendIntent(dbLike: DbLike, body: string, opts: SendOptions): Promise<Message> {
+  async function createSendIntent(
+    dbLike: DbLike,
+    body: string,
+    opts: SendOptions,
+    // CH-05: an AI reply carries its tool-run audit (raw.toolRuns) for the
+    // guardrail record + weekly review. Optional + additive — no other caller
+    // changes; the single chokepoint stays intact (D2).
+    extra?: { raw?: unknown },
+  ): Promise<Message> {
     // WHY 'queued': it is the §4 enum's spelling of §3.4's 'sending' — no
     // other use assigns messages.status='queued' anywhere in the plan
     // (CH-02 decision D1; CH-12/13/16/17 inherit this, do not reopen it).
@@ -85,6 +93,7 @@ export function createWaClient(deps: WaClientDeps) {
       type: 'text',
       body,
       status: 'queued',
+      raw: extra?.raw,
     });
     if (message === null) {
       // Unreachable without a wa_message_id conflict; guarded for honesty.
