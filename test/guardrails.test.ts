@@ -57,6 +57,18 @@ describe('guardrail 1 — price integrity', () => {
     expect(checkPriceIntegrity('The deposit is ₹10,000.', [quoteRun]).ok).toBe(false);
     expect(checkPriceIntegrity('The deposit is ₹10,000.', [quoteRun], [10000]).ok).toBe(true);
   });
+
+  it('a fractional tool figure matches whether the model floors OR rounds it', () => {
+    // averagePerNight = 50000 / 3 = 16666.67 — a real derived average.
+    const fractional: ToolRun = {
+      name: 'get_quote',
+      input: {},
+      result: { ok: true, data: { total: 50000, averagePerNight: 50000 / 3, nights: 3 } },
+    };
+    expect(checkPriceIntegrity('About ₹16,667 a night.', [fractional]).ok).toBe(true); // rounded
+    expect(checkPriceIntegrity('About ₹16,666 a night.', [fractional]).ok).toBe(true); // floored
+    expect(checkPriceIntegrity('₹50,000 total.', [fractional]).ok).toBe(true);
+  });
 });
 
 describe('guardrail 3 — negotiation lock', () => {
@@ -71,6 +83,21 @@ describe('guardrail 3 — negotiation lock', () => {
     const r = applyNegotiationLock('C3 wraps around its own pool. Here is the link.');
     expect(r.changed).toBe(false);
     expect(r.text).toBe('C3 wraps around its own pool. Here is the link.');
+  });
+
+  it('does NOT nuke descriptive "offer(s)" — permitted hospitality copy', () => {
+    for (const clean of [
+      'Villa C3 offers three bedrooms and a private pool.',
+      'We offer breakfast with the CP plan.',
+      'May I offer you the booking link.',
+    ]) {
+      expect(applyNegotiationLock(clean).changed).toBe(false);
+    }
+  });
+
+  it('still catches a bargain-noun "special/festive offer"', () => {
+    expect(applyNegotiationLock('A special offer just for you.').changed).toBe(true);
+    expect(applyNegotiationLock('Our festive offer this season.').changed).toBe(true);
   });
 });
 
