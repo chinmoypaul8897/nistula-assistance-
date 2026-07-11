@@ -20,6 +20,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PgBoss } from 'pg-boss';
+import type { ConverseFn } from '../src/brain/claude.js';
 import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import { CONVERSATION_PROCESS_QUEUE, makeEnqueue, registerJobs } from '../src/jobs/index.js';
@@ -32,6 +33,15 @@ const PHONE_ID = '000000000000000';
 
 // Short injected windows — same shape, same code paths, CI-friendly time.
 const WINDOWS = { quietMs: 1_000, maxWaitMs: 3_000, sweepAfterMs: 4_000, sweepIntervalCron: '*/2 * * * *' };
+
+// CH-04: the worker now calls Claude — a fixed mock stands in for the model
+// (no live call, §3.5). Zero usage → no cost_events rows (cost logging is
+// exercised deterministically in brain-worker.test.ts).
+const MOCK_REPLY = 'Good evening — how can I help with your stay?';
+const mockConverse: ConverseFn = async () => ({
+  text: MOCK_REPLY,
+  usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+});
 
 let client: ReturnType<typeof postgres>;
 let db: Db;
@@ -121,7 +131,15 @@ describe('golden path — burst in, exactly one reply out', () => {
 
       // NOW the real worker goes live: real work() at the 0.5s polling floor.
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-      await registerJobs({ boss, db, wa, log, windows: WINDOWS, pollingIntervalSeconds: 0.5 });
+      await registerJobs({
+        boss,
+        db,
+        wa,
+        log,
+        converse: mockConverse,
+        windows: WINDOWS,
+        pollingIntervalSeconds: 0.5,
+      });
 
       const outbound = () =>
         db
@@ -150,11 +168,8 @@ describe('golden path — burst in, exactly one reply out', () => {
         waMessageId: 'wamid.GOLDEN-OUT-0001',
         conversationId: conversation?.id,
       });
-      // CH-04 rewrites these two body assertions (echo → Claude reply).
-      expect(out[0]?.body?.startsWith('echo:')).toBe(true);
-      for (const guestLine of ['Lorem ipsum dolor sit amet.', 'villa free?', '20 dec']) {
-        expect(out[0]?.body).toContain(guestLine);
-      }
+      // CH-04: the reply is the mocked Claude turn (echo variant retired).
+      expect(out[0]?.body).toBe(MOCK_REPLY);
 
       expect(graphCalls).toHaveLength(1);
       expect(graphCalls[0]?.to).toBe('+917700900001');

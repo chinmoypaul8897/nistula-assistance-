@@ -6,6 +6,7 @@
  * throttle (first send runs immediately → a burst would echo twice).
  */
 import { PgBoss } from 'pg-boss';
+import type { ConverseFn } from '../brain/claude.js';
 import { DEBOUNCE_WINDOWS, type DebounceWindows } from '../brain/debounce.js';
 import {
   processConversation,
@@ -65,9 +66,10 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryLimit: 3, // retries are harmless under the claim guard (D2)
     retryDelay: 10, // default is 0 = instant; give transient DB errors room
     retryBackoff: true,
-    // TODO(CH-04): raise above the worst-case Claude tool-loop runtime incl.
-    // lib/http retries AND give the handler an internal deadline below it —
-    // expiration re-inserts the job while the old handler still runs.
+    // CH-04 gives converse() a ~55s total deadline (< this 120s), so a single
+    // model turn can never outlive expire. TODO(CH-05): the 5-round tool loop
+    // can exceed 120s — raise expire via updateQueue (createQueue is a no-op
+    // on an existing queue) and size a new internal deadline below it.
     expireInSeconds: 120,
   });
   await boss.createQueue(CONVERSATION_SWEEP_QUEUE, {
@@ -106,6 +108,11 @@ export interface JobsDeps {
   db: Db;
   wa: Pick<WaClient, 'createSendIntent' | 'dispatchText'>;
   log: WorkerLogger;
+  /** The Claude client (§5.5) — server builds the real one; tests inject a fake. */
+  converse: ConverseFn;
+  /** Config NIGHT_START/NIGHT_END for the SITUATION block; default 20:00/10:00. */
+  nightStart?: string;
+  nightEnd?: string;
   /** Tests inject short windows; production uses the spec literals. */
   windows?: DebounceWindows;
   /** Tests lower this to the 0.5s floor; default 2s. */
@@ -126,7 +133,16 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   await ensureQueues(deps.boss);
   const windows = deps.windows ?? DEBOUNCE_WINDOWS;
   const enqueue = makeEnqueue(deps.boss, windows);
-  const workerDeps: WorkerDeps = { db: deps.db, wa: deps.wa, log: deps.log, windows, enqueue };
+  const workerDeps: WorkerDeps = {
+    db: deps.db,
+    wa: deps.wa,
+    log: deps.log,
+    windows,
+    converse: deps.converse,
+    nightStart: deps.nightStart ?? '20:00',
+    nightEnd: deps.nightEnd ?? '10:00',
+    enqueue,
+  };
 
   // batchSize/localConcurrency stay 1 (D1-BINDING): one stately fetch
   // conflict aborts the ENTIRE fetch statement on 12.25.1 — a bigger batch

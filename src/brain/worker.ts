@@ -1,22 +1,33 @@
 /**
- * Conversation worker v0 (plan.md CH-03 step 3): the debounced ECHO turn —
- * proves webhook → queue → worker → send end to end. CH-04 swaps
- * buildEchoReply for the Claude turn; the claim/dispatch skeleton stays.
- * Forward note (CH-03 D2): the claim must remain AFTER all fallible
- * think-work — pre-claim throws are retry-safe, post-claim is send-only.
+ * Conversation worker v1 (plan.md CH-04 step 3): the debounced CLAUDE turn —
+ * builds the system prompt + transcript, calls converse(), and sends the
+ * reply in Nistula's voice (no tools yet — factual questions are deferred).
+ * The claim/dispatch skeleton is unchanged from CH-03. Binding invariant
+ * (CH-03 D2): the model call is fallible think-work and stays BEFORE the claim
+ * — a pre-claim throw is retry-safe (pg-boss retry / sweeper), leaving no
+ * reply and no claim (§6.6).
  */
 import type { Db } from '../db/client.js';
 import {
   claimConversationTurn,
   findStaleConversations,
   getConversationTurnContext,
+  getRecentMessages,
   getUnprocessedGuestMessages,
+  insertCostEvents,
   resolveMessageCursor,
+  type Conversation,
   type Message,
+  type NewCostEvent,
 } from '../db/repos.js';
+import { summarizeError } from '../lib/logger.js';
+import { istCalendarDay, isNightIST } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
+import type { ConverseFn } from './claude.js';
+import { costEventsFor, type ConverseUsage } from './cost.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
+import { buildSituation, buildSystemPrompt } from './prompt.js';
 
 export interface WorkerLogger extends AlertLogger {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -28,6 +39,11 @@ export interface WorkerDeps {
   wa: Pick<WaClient, 'createSendIntent' | 'dispatchText'>;
   log: WorkerLogger;
   windows: DebounceWindows;
+  /** The Claude client (§5.5) — injected so tests mock the model, no live call. */
+  converse: ConverseFn;
+  /** Night-window bounds for the SITUATION block (config NIGHT_START/NIGHT_END). */
+  nightStart: string;
+  nightEnd: string;
   /** Bound by jobs/index.ts — enqueuer and worker share ONE windows source (no drift). */
   enqueue: (conversationId: string, startAfter?: Date) => Promise<void>;
 }
@@ -75,7 +91,8 @@ export async function processConversation(
     return;
   }
 
-  const reply = buildEchoReply(msgs);
+  // The Claude turn (CH-04) — ALL fallible think-work, BEFORE the claim (D2).
+  const reply = await runClaudeTurn(deps, ctx.conversation, ctx.dbNow, conversationId);
   // ONE transaction (CH-03 decision D2): claim + send intent commit
   // atomically so every failure state stays observable — no claim → the
   // sweeper retries the whole turn; claim committed → the 'queued' intent
@@ -125,12 +142,94 @@ async function recheck(deps: WorkerDeps, conversationId: string): Promise<void> 
   if (pending.length > 0) await deps.enqueue(conversationId);
 }
 
-/** v0 reply body — CH-04 replaces this with the Claude turn. */
-function buildEchoReply(msgs: Message[]): string {
-  // Null bodies (media/unsupported) become type placeholders: the guest sees
-  // the pipeline handled every message, and the pointer still advances.
-  const parts = msgs.map((message) => message.body ?? `[${message.type}]`);
-  return `echo: ${parts.join('\n')}`;
+type TurnMessage = { role: 'user' | 'assistant'; content: string };
+
+/**
+ * Builds the system prompt + transcript and calls Claude (CH-04). A converse
+ * throw is alerted then rethrown — pre-claim, so pg-boss/sweeper recover with
+ * no reply and no claim (§6.6). Cost is logged best-effort after a success:
+ * telemetry never blocks a reply, and the API call cost is real regardless of
+ * whether this run later wins the claim.
+ */
+async function runClaudeTurn(
+  deps: WorkerDeps,
+  conversation: Conversation,
+  dbNow: Date,
+  conversationId: string,
+): Promise<string> {
+  const transcript = mapTranscript(await getRecentMessages(deps.db, conversationId));
+  const situation = buildSituation({
+    now: dbNow,
+    isNight: isNightIST(dbNow, deps.nightStart, deps.nightEnd),
+    serviceWindowOpen: isServiceWindowOpen(conversation.serviceWindowExpiresAt, dbNow),
+  });
+
+  let result;
+  try {
+    result = await deps.converse({ system: buildSystemPrompt(situation), messages: transcript });
+  } catch (error) {
+    await alertOps(deps.log, {
+      kind: 'model_failed',
+      summary: 'Anthropic call failed after retries — no reply sent',
+      detail: { conversationId, err: summarizeError(error) },
+    });
+    throw error; // pre-claim (D2/§6.6): pg-boss retry then the sweeper recover
+  }
+  await logCost(deps, dbNow, result.usage);
+  // Token counts only (no bodies, no secrets — §3.3). cacheRead > 0 from the
+  // second message in a window is the proof the static head is caching (§5.5).
+  deps.log.info(
+    {
+      conversationId,
+      tokens: {
+        in: result.usage.inputTokens,
+        out: result.usage.outputTokens,
+        cacheRead: result.usage.cacheReadTokens,
+        cacheWrite: result.usage.cacheWriteTokens,
+      },
+    },
+    'claude turn',
+  );
+  return result.text;
+}
+
+/**
+ * Maps stored messages to the Claude message array (CH-04). guest→user,
+ * ai→assistant, human→assistant with a "(Front desk)" prefix so the model
+ * knows a person spoke; sender:'system' rows (internal context) are skipped.
+ * Null bodies (media/unsupported) render as [type] placeholders. Leading
+ * non-user turns are dropped — Anthropic requires the array to open on user.
+ */
+function mapTranscript(msgs: Message[]): TurnMessage[] {
+  const mapped: TurnMessage[] = [];
+  for (const message of msgs) {
+    if (message.sender === 'system') continue;
+    const content = message.body ?? `[${message.type}]`;
+    if (message.sender === 'guest') {
+      mapped.push({ role: 'user', content });
+    } else if (message.sender === 'human') {
+      mapped.push({ role: 'assistant', content: `(Front desk) ${content}` });
+    } else {
+      mapped.push({ role: 'assistant', content });
+    }
+  }
+  while (mapped.length > 0 && mapped[0]?.role !== 'user') mapped.shift();
+  return mapped;
+}
+
+function isServiceWindowOpen(expiresAt: Date | null, now: Date): boolean {
+  return expiresAt !== null && now.getTime() < expiresAt.getTime();
+}
+
+/** One cost_events row per non-zero token bucket, stamped with the IST day. */
+async function logCost(deps: WorkerDeps, now: Date, usage: ConverseUsage): Promise<void> {
+  try {
+    const day = istCalendarDay(now);
+    const rows: NewCostEvent[] = costEventsFor(usage).map((row) => ({ day, ...row }));
+    await insertCostEvents(deps.db, rows);
+  } catch (error) {
+    deps.log.warn({ err: summarizeError(error) }, 'cost_events insert failed (telemetry only)');
+  }
 }
 
 /**
