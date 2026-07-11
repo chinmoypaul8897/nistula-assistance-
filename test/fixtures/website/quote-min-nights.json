@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "quote": {
+    "villaId": "5220300000000000011",
+    "checkIn": "2026-12-20",
+    "checkOut": "2026-12-21",
+    "nights": 1,
+    "adults": 4,
+    "children": 0,
+    "total": 18000,
+    "averagePerNight": 18000,
+    "perNight": [{ "date": "2026-12-20", "amount": 18000 }],
+    "minNights": { "average": 3, "meetsRequirement": false },
+    "available": true
+  }
+}
