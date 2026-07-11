@@ -15,6 +15,13 @@
       "when": 1783693022761,
       "tag": "0001_conversation-cursor",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783739273230,
+      "tag": "0002_cost-events",
+      "breakpoints": true
     }
   ]
 }
