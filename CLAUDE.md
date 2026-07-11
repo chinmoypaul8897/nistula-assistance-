@@ -34,7 +34,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - One branch per chunk: `chunk/CH-NN-short-name`; merge to `main` only when the chunk's Definition of done passes; tag `vCH-NN`. `main` is always green (`pnpm check`).
 - Conventional Commits 1.0.0, small commits, body explains WHY, footer `Refs: CH-NN`. Scopes: `wa`, `brain`, `ezee`, `lifecycle`, `staff`, `db`, `ops`.
 - Code comments explain WHY, never WHAT. Deferred work is `// TODO(CH-NN):`, never a bare TODO.
-- **Standing authorization (Paul, 11 Jul 2026):** `git commit`, `git push`, and PR merge-to-main (`gh pr merge`) are pre-approved for this project — don't re-ask each time (rules in `.claude/settings.json`; the machine-specific `gh` path is in the gitignored `.claude/settings.local.json`). Still require Paul to explicitly name the target: production deploys (`railway up`), production DB access, and destructive git (`reset --hard`, `push --force`).
 
 ## Commands (exist only after CH-00 lands)
 
