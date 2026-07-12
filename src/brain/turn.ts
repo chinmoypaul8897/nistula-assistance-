@@ -81,8 +81,11 @@ export interface TurnArgs {
   conversationId: string;
   /** The guest's E.164 — telemetry scrub key + leak-scan self-exemption. */
   guestPhone: string;
-  /** Block [5]-lite (CH-08): guest-typed name; prompt.ts sanitises. */
+  /** Block [5]: guest-typed name; profileBlock.ts sanitises. */
   guestName?: string | null;
+  /** Block [5] tone inputs (CH-09) — the guest row's stored prefs. */
+  registerPref?: 'warm_first_name' | 'formal_sir_maam' | 'unknown';
+  langPref?: 'en' | 'hinglish' | 'unknown';
   /** §6.7 complaint flow: rendered into block [6] (worker sets it). */
   mustEscalate?: boolean;
   /** The batch carried media the model cannot view (mixed-batch note). */
@@ -120,6 +123,8 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       dbNow,
       conversationId,
       guestName: args.guestName ?? null,
+      registerPref: args.registerPref,
+      langPref: args.langPref,
       evidenceSinceIso: args.evidenceSinceIso ?? null,
       newestGuestMsgAt: args.newestGuestMsgAt,
       mustEscalate: args.mustEscalate ?? false,

@@ -119,6 +119,8 @@ export async function processConversation(
         conversationId,
         guestPhone: ctx.guestPhone,
         guestName: ctx.guestName,
+        registerPref: ctx.registerPref,
+        langPref: ctx.langPref,
         mustEscalate: plan.mustEscalate,
         unviewableMedia: directive.flags.hasMedia,
         botQuestion: directive.flags.botQuestion,
