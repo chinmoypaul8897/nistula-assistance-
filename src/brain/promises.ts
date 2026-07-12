@@ -14,10 +14,15 @@
  *    true (escalate), never to regenerate the model away from escalating.
  *    An escalation already planned this turn licenses C3 — and ONLY C3: an
  *    ops ping does not put housekeeping in motion.
+ *  - C4 memory promises ("I'll remember that", "I've made a note" — CH-09,
+ *    Paul-approved) need a successful remember_fact run this turn. A
+ *    duplicate skip licenses too (ok:true — the fact IS on file); a REFUSED
+ *    screen (ok:false) never does. Memory is the product's moat: promising
+ *    it falsely is exactly the class this guardrail exists for.
  */
 import type { ToolRun } from './tools/registry.js';
 
-export type ClaimClass = 'C1' | 'C2' | 'C3';
+export type ClaimClass = 'C1' | 'C2' | 'C3' | 'C4';
 
 // Phrases that are never claims: availability statements and the like.
 const EXEMPT = /\bfully\s+booked\b|\bbooked\s+out\b|\bsold\s+out\b/gi;
@@ -44,13 +49,26 @@ const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
   { cls: 'C3', re: /\bloop(?:ing)?\s+(?:them|the\s+team)?\s?in\b/i },
   { cls: 'C3', re: /\bsomeone\s+will\s+(?:reply|be)\s+(?:right\s+)?here\s+(?:shortly|soon)\b/i },
   { cls: 'C3', re: /\b(?:i|we)(?:'ll|\s+will)\s+(?:pass|send|flag|raise)\s+(?:it|this|that)\s+(?:on|to|along)\b/i },
+  // C4 — memory promises (CH-09). Narrow on purpose: recall statements
+  // ("I remember you liked…") are backed by block [5] itself, and a bare
+  // "Noted —" is ordinary speech; only PROMISES of remembering match.
+  { cls: 'C4', re: /\b(?:i|we)(?:'ll|\s+will|\s+shall)\s+remember\b/i },
+  { cls: 'C4', re: /\b(?:i|we)\b[^.!?]{0,12}\b(?:made|make)\s+a\s+note\b/i },
+  { cls: 'C4', re: /\b(?:i|we)(?:'ve|\s+have)\s+noted\b/i },
+  { cls: 'C4', re: /\b(?:i|we)(?:'ll|\s+will)\s+keep\s+(?:that|this|it)\s+in\s+mind\b/i },
+  { cls: 'C4', re: /\b(?:saved|added)\s+(?:that|this|it)\s+to\s+your\s+(?:profile|preferences|notes|file)\b/i },
+  { cls: 'C4', re: /\bnoted\s+for\s+(?:next\s+time|your\s+next\s+(?:stay|visit|trip))\b/i },
 ];
 
-/** Tool name → claim classes a SUCCESSFUL run licenses. Deliberately empty in
- * CH-07: none of the price tools back any promise phrase.
+/** Tool name → claim classes a SUCCESSFUL run licenses. First registration
+ * (CH-09): remember_fact → C4 and ONLY C4 — a memory save must never
+ * cross-license "the team has been informed". The price tools still back no
+ * promise phrase.
  * TODO(CH-13): register create_staff_task → C1+C2 (scenario 3 blesses "on
  * their way" after a real task). TODO(CH-14): escalate_to_human → C3. */
-export const TOOL_CLAIMS: ReadonlyMap<string, ReadonlySet<ClaimClass>> = new Map();
+export const TOOL_CLAIMS: ReadonlyMap<string, ReadonlySet<ClaimClass>> = new Map([
+  ['remember_fact', new Set<ClaimClass>(['C4'])],
+]);
 
 /** sender:'system' context-row kinds → the classes they license (§6.5 #2's
  * second evidence channel). TODO(CH-13): task_done + sla_nudge → C1. */
