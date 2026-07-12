@@ -201,9 +201,11 @@ export function buildSituation(input: SituationInput): string {
 }
 
 /** §6.3: guest-originated text entering the prompt is control-char-stripped
- * and length-capped BEFORE it renders (names ~40 chars). Local on purpose —
- * prompt.ts stays an import-free leaf (guardrails/leakGuards sit on it). */
-function sanitiseName(name: string): string {
+ * and length-capped BEFORE it renders (names ~40 chars, fact content ~200).
+ * EXPORTED from CH-09 (was local sanitiseName) so fact screening and the
+ * profile block share ONE hygiene rule; prompt.ts stays an import-free leaf
+ * (guardrails/leakGuards sit on it), so sharers import from HERE. */
+export function sanitiseInline(text: string, maxCodePoints: number): string {
   // C0+DEL+C1 controls, zero-width and bidi-override characters all strip
   // (audit: RLO/ZWSP matter once a name reaches a human-read surface — the
   // CH-14 staff cards should reuse this). The cap counts CODE POINTS, not
@@ -211,8 +213,14 @@ function sanitiseName(name: string): string {
   // surrogate into the API request body (audit fix, probe-confirmed on
   // real pushname shapes).
   // eslint-disable-next-line no-control-regex
-  const collapsed = name.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return Array.from(collapsed).slice(0, 40).join('');
+  const collapsed = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return Array.from(collapsed).slice(0, maxCodePoints).join('');
+}
+
+const NAME_MAX_CODE_POINTS = 40;
+
+function sanitiseName(name: string): string {
+  return sanitiseInline(name, NAME_MAX_CODE_POINTS);
 }
 
 /**
