@@ -7,9 +7,10 @@
  * and boundary rows are resolved SERVER-side (an id-join), never through a JS
  * Date round-trip.
  */
-import { sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import type { MessageCursor } from './repos.js';
+import type { Message, MessageCursor } from './repos.js';
+import { conversations, messages } from './schema.js';
 
 /**
  * Guardrail-2 evidence (§6.5 #2's second channel), decoupled from the
@@ -68,4 +69,101 @@ export async function countUncoveredMessages(
       AND ${coveredGuard}
   `);
   return [...rows][0]?.n ?? 0;
+}
+
+/**
+ * The summariser's input range: every message (ANY sender — the cursor must
+ * advance over system rows too, or a system-only stretch would re-qualify
+ * forever) strictly after the summary cursor and strictly BEFORE the window
+ * boundary row, oldest-first, capped for backfill safety (first run and the
+ * CH-18b history import may face months of thread in one go — the next wake
+ * continues from the advanced cursor). Boundary rows resolve server-side.
+ */
+export async function getSummarisableMessages(
+  db: Db,
+  args: {
+    conversationId: string;
+    afterCursor: MessageCursor | null;
+    /** The id of the oldest message the live window WILL show — everything
+     * summarised stays strictly older (coverage without overlap, §6.3). */
+    beforeId: string;
+    limit: number;
+  },
+): Promise<Message[]> {
+  const afterGuard =
+    args.afterCursor === null
+      ? undefined
+      : sql`(${messages.createdAt}, ${messages.id}) > (${args.afterCursor.createdAtIso}::timestamptz, ${args.afterCursor.id}::uuid)`;
+  return db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, args.conversationId),
+        sql`(${messages.createdAt}, ${messages.id}) < (SELECT w.created_at, w.id FROM messages w WHERE w.id = ${args.beforeId}::uuid)`,
+        afterGuard,
+      ),
+    )
+    .orderBy(messages.createdAt, messages.id)
+    .limit(args.limit);
+}
+
+/**
+ * Nightly candidates (plan.md CH-08 step 2): idle > the threshold (newest
+ * message of ANY sender vs the DB clock) with more than `minUnsummarised`
+ * non-system messages past the summary cursor. The LEFT JOIN makes a dangling
+ * cursor degrade to "nothing covered" — a candidate, never invisible (the
+ * findStaleConversations convention).
+ */
+export async function findSummariserCandidates(
+  db: Db,
+  args: { idleSeconds: number; minUnsummarised: number },
+): Promise<string[]> {
+  const rows = await db.execute<{ id: string }>(sql`
+    SELECT c.id
+    FROM conversations c
+    LEFT JOIN messages p ON p.id = c.summary_upto_message_id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM messages newer
+      WHERE newer.conversation_id = c.id
+        AND newer.created_at > now() - make_interval(secs => ${args.idleSeconds})
+    )
+    AND (
+      SELECT count(*) FROM messages m
+      WHERE m.conversation_id = c.id
+        AND m.sender <> 'system'
+        AND (p.id IS NULL OR (m.created_at, m.id) > (p.created_at, p.id))
+    ) > ${args.minUnsummarised}
+  `);
+  return [...rows].map((row) => row.id);
+}
+
+/**
+ * The summary write — a CAS like claimConversationTurn: expectedPointer is the
+ * STORED summary_upto_message_id read at the start of the run (the raw value,
+ * even when dangling), so two concurrent runs can advance the cursor exactly
+ * once; the loser's model output is discarded, never double-compacted.
+ */
+export async function applyConversationSummary(
+  db: Db,
+  args: {
+    conversationId: string;
+    expectedPointer: string | null;
+    newPointer: string;
+    summary: string;
+  },
+): Promise<boolean> {
+  const rows = await db
+    .update(conversations)
+    .set({ summary: args.summary, summaryUptoMessageId: args.newPointer })
+    .where(
+      and(
+        eq(conversations.id, args.conversationId),
+        args.expectedPointer === null
+          ? isNull(conversations.summaryUptoMessageId)
+          : eq(conversations.summaryUptoMessageId, args.expectedPointer),
+      ),
+    )
+    .returning({ id: conversations.id });
+  return rows.length > 0;
 }
