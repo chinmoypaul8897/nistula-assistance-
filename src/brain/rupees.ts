@@ -38,3 +38,62 @@ export function extractRupeeAmounts(text: string): number[] {
   }
   return [...found];
 }
+
+/**
+ * Fee ITEM vocabulary. Deliberately excludes units ("per night", "per hour"): a
+ * fabricated stay price says "per night" too, so a unit can NEVER be the thing
+ * that licenses an exemption — only the fee's own subject can.
+ */
+const FEE_TERMS = [
+  'early check-in',
+  'early checkin',
+  'late check-out',
+  'late checkout',
+  'extra adult',
+  'additional adult',
+  'extra guest',
+  'additional guest',
+  'extra child',
+  'additional child',
+  'per child',
+  'security deposit',
+  'booking deposit',
+  'deposit',
+  'pet',
+] as const;
+
+/** A ₹ figure published in kb/policies.md, tagged with the fee terms of the
+ * sentence it appears in. `cues` is what makes the exemption context-bound. */
+export interface KbFee {
+  amount: number;
+  cues: string[];
+}
+
+/**
+ * The kb fee whitelist (§6.5 guardrail 1's EXEMPTION). Splits kb/policies.md into
+ * sentences and tags each ₹ figure with the fee terms of ITS OWN sentence, so the
+ * guardrail can allow "an extra adult is ₹1,500" while still blocking "Villa B3 is
+ * ₹1,500 per night" — §6.5's second clause: "stay prices and per-night figures
+ * must still come from tool JSON."
+ *
+ * WHY sentence-scoped and not a flat number[]: a bare list of integers is
+ * context-free, so ANY draft could state a whitelisted figure as a nightly rate.
+ * That is only harmless while the published fees happen not to look like Goa room
+ * rates — an accident, not a design. The moment a deposit figure lands (OQ-04),
+ * a flat list would make a plausible fake rate sendable with no get_quote.
+ *
+ * A figure whose sentence names no fee term gets NO cues, and is therefore never
+ * exempt — fail-closed.
+ */
+export function extractKbFees(policies: string): KbFee[] {
+  const fees: KbFee[] = [];
+  // Sentence-ish: split on terminators and newlines. Semicolons matter — the
+  // extra-adult and extra-child fees share one sentence separated by ';'.
+  for (const sentence of policies.split(/(?<=[.;:!?])\s+|\n+/)) {
+    const lower = sentence.toLowerCase();
+    const cues = FEE_TERMS.filter((term) => lower.includes(term));
+    if (cues.length === 0) continue;
+    for (const amount of extractRupeeAmounts(sentence)) fees.push({ amount, cues: [...cues] });
+  }
+  return fees;
+}

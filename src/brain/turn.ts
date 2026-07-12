@@ -126,8 +126,9 @@ export async function runClaudeTurn(
         return { draft: again.draft, toolRuns: again.toolRuns };
       },
       log: deps.log,
-      // §6.5 guardrail-1 whitelist: the ₹ fee figures verbatim in kb/policies.md
-      // (early check-in / extra-guest); stay prices still come only from tools.
+      // §6.5 guardrail-1 exemption: the ₹ fees published in kb/policies.md, each
+      // bound to its own fee context — so "an extra adult is ₹1,500" may be sent
+      // without a tool call, while "Villa B3 is ₹1,500 per night" still cannot.
       whitelist: kbPriceWhitelist(),
     },
   );

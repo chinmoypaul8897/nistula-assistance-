@@ -13,7 +13,7 @@
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { extractRupeeAmounts } from './rupees.js';
+import { extractKbFees, type KbFee } from './rupees.js';
 
 /** §6.2: compiled block [3] must stay ≤ ~6k tokens (it is re-sent as a cache
  * read every turn; a bloated head is a standing cost). Heuristic below. */
@@ -31,10 +31,21 @@ export function kbVersion(knowledge: string): string {
   return createHash('sha256').update(knowledge).digest('hex').slice(0, 8);
 }
 
-/** Drop HTML comments (generated-file headers, hand-maintained review notes and
- * PLACEHOLDER markers in quirks.md) — they are for humans, never the model. */
+/**
+ * Normalise a kb file to exactly what the model should see: HTML comments dropped
+ * (generated-file headers, review notes, PLACEHOLDER markers — all for humans),
+ * CRLF folded to LF, and the blank runs the removed comments left behind collapsed.
+ *
+ * WHY the CRLF fold: git checks these files out as CRLF on Windows, so without it
+ * the block [3] bytes — and therefore kbVersion and the token count — would differ
+ * per platform. (.gitattributes pins LF too; this makes it true by construction.)
+ */
 function stripComments(md: string): string {
-  return md.replace(/<!--[\s\S]*?-->/g, '').trim();
+  return md
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /** True only when, after comments, there is a line that is neither blank nor a
@@ -61,7 +72,11 @@ export interface KnowledgeParts {
 export function concatKnowledge(parts: KnowledgeParts): string {
   const sections = [stripComments(parts.villas), stripComments(parts.policies), stripComments(parts.faq)];
   if (hasNotes(parts.quirks)) {
-    sections.push(`## Villa quirks (practical, villa-specific notes)\n\n${stripComments(parts.quirks)}`);
+    // The section heading is owned by CODE, not by whatever the villa team types —
+    // block [4]'s quirks rule refers to it. Drop the file's own leading H1 so the
+    // block doesn't carry two competing "Villa quirks" headings.
+    const body = stripComments(parts.quirks).replace(/^#\s+.*\n+/, '');
+    sections.push(`## Villa quirks (practical, villa-specific notes)\n\n${body}`);
   }
   return sections.join('\n\n');
 }
@@ -72,8 +87,10 @@ export interface LoadedKnowledge {
   tokens: number;
   version: string;
   quirksPresent: boolean;
-  /** Guardrail-1 whitelist: the ₹ fee figures verbatim in kb/policies.md (§6.5). */
-  whitelist: number[];
+  /** Guardrail-1 exemption: the ₹ fee figures verbatim in kb/policies.md, each
+   * tagged with the fee terms of its own sentence so it can never license a
+   * fabricated stay price (§6.5). */
+  whitelist: KbFee[];
 }
 
 const KB_DIR = new URL('../../kb/', import.meta.url);
@@ -102,15 +119,16 @@ export function loadKnowledge(dir: URL = KB_DIR): LoadedKnowledge {
     tokens,
     version: kbVersion(knowledge),
     quirksPresent: hasNotes(quirks),
-    // §6.5 whitelist = figures verbatim in kb/policies.md (deposit rule / extra-
-    // guest / early check-in); stay prices still come only from tool JSON.
-    whitelist: extractRupeeAmounts(stripComments(policies)),
+    // §6.5 exemption = figures verbatim in kb/policies.md (early check-in /
+    // extra-guest / any fee a content pass adds), each bound to its own fee
+    // context; stay and per-night prices still come only from tool JSON.
+    whitelist: extractKbFees(stripComments(policies)),
   };
   if (dir.href === KB_DIR.href) cached = loaded;
   return loaded;
 }
 
-/** The guardrail-1 kb price whitelist (memoised via loadKnowledge). */
-export function kbPriceWhitelist(): number[] {
+/** The guardrail-1 kb fee exemption set (memoised via loadKnowledge). */
+export function kbPriceWhitelist(): KbFee[] {
   return loadKnowledge().whitelist;
 }

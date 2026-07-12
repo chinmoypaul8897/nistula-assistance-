@@ -11,7 +11,7 @@
  * never send the hallucinated figure.
  */
 import { PHRASEBOOK } from './prompt.js';
-import { extractRupeeAmounts } from './rupees.js';
+import { extractRupeeAmounts, type KbFee } from './rupees.js';
 import type { ToolRun } from './tools/registry.js';
 
 // The ₹-amount extractor moved to rupees.ts in CH-06 so knowledge.ts can share
@@ -43,14 +43,27 @@ function collectNumbers(value: unknown, into: Set<number>): void {
   }
 }
 
-/** The set of figures the draft is ALLOWED to state: every number returned by a
- * successful tool this turn, plus the kb whitelist (empty until CH-06). */
-export function backedAmounts(toolRuns: ToolRun[], whitelist: number[] = []): Set<number> {
-  const allowed = new Set<number>(whitelist);
+/** Every number returned by a successful tool this turn — the only figures a
+ * draft may state freely. The kb fee whitelist is handled separately, because it
+ * is context-BOUND (see feeExempt) rather than a flat set. */
+export function backedAmounts(toolRuns: ToolRun[]): Set<number> {
+  const allowed = new Set<number>();
   for (const run of toolRuns) {
     if (run.result.ok) collectNumbers(run.result.data, allowed);
   }
   return allowed;
+}
+
+/**
+ * The kb EXEMPTION (§6.5 guardrail 1), context-bound: a published fee figure may
+ * be stated without a tool result ONLY in its own fee context — the draft must
+ * name the thing the fee is for ("an extra adult is ₹1,500"). It can therefore
+ * never launder a fabricated stay price ("Villa B3 is ₹1,500 per night"), which
+ * is §6.5's second clause: stay and per-night figures still come from tool JSON.
+ */
+function feeExempt(amount: number, draft: string, fees: KbFee[]): boolean {
+  const lower = draft.toLowerCase();
+  return fees.some((fee) => fee.amount === amount && fee.cues.some((cue) => lower.includes(cue)));
 }
 
 export interface PriceIntegrityResult {
@@ -61,16 +74,18 @@ export interface PriceIntegrityResult {
 
 /**
  * Guardrail 1: every ₹ amount in the draft must appear (as an integer, ignoring
- * ₹/comma/space formatting) in this turn's tool results or the whitelist. A
- * draft with no ₹ passes trivially.
+ * ₹/comma/space formatting) in this turn's tool results — or be a published kb
+ * fee stated in its own fee context. A draft with no ₹ passes trivially.
  */
 export function checkPriceIntegrity(
   draft: string,
   toolRuns: ToolRun[],
-  whitelist: number[] = [],
+  whitelist: KbFee[] = [],
 ): PriceIntegrityResult {
-  const allowed = backedAmounts(toolRuns, whitelist);
-  const unbacked = extractRupeeAmounts(draft).filter((n) => !allowed.has(n));
+  const allowed = backedAmounts(toolRuns);
+  const unbacked = extractRupeeAmounts(draft).filter(
+    (n) => !allowed.has(n) && !feeExempt(n, draft, whitelist),
+  );
   return { ok: unbacked.length === 0, unbacked };
 }
 
@@ -123,8 +138,8 @@ export interface GuardrailDeps {
   /** Re-run the model ONCE with a corrective nudge (worker supplies this). */
   regenerate: (nudge: string) => Promise<GuardrailTurn>;
   log: { info: (obj: Record<string, unknown>, msg?: string) => void };
-  /** kb price whitelist (empty in CH-05; CH-06 passes the compiled figures). */
-  whitelist?: number[];
+  /** The context-bound kb fee whitelist (CH-06: kbPriceWhitelist()). */
+  whitelist?: KbFee[];
 }
 
 export type GuardrailOutcome =
@@ -168,7 +183,7 @@ export async function runGuardrails(
 /** One pass: negotiation rewrite → price check. Returns the cleaned text + verdict. */
 function evaluate(
   turn: GuardrailTurn,
-  whitelist: number[],
+  whitelist: KbFee[],
   log: GuardrailDeps['log'],
 ): { ok: true; text: string } | { ok: false; text: string; unbacked: number[] } {
   const nego = applyNegotiationLock(turn.draft);
