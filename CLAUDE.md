@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Nistula Assistance** — a WhatsApp AI host (Claude as the brain) for Nistula, a boutique villa company in Goa (8 villas, eZee PMS, ~60% of bookings direct on one WhatsApp number). It will run the full guest conversation: pre-sales with live website-identical prices, in-stay requests routed to staff as tasks, automatic lifecycle messages, per-guest persistent memory, and graceful human takeover via Meta coexistence.
 
-**Current state: planning stage — no code exists yet.** No `package.json`, no git repo. The build begins at chunk CH-00 (repo bootstrap). Everything currently in the repo is spec and reference material.
+**Current state: CH-00 → CH-06 are DONE, merged, tagged (`vCH-00`…`vCH-06`) and LIVE on Railway.** The service takes real WhatsApp messages on the Meta test number, replies in Nistula's voice through Claude, quotes live website-identical prices via tools, and now answers villa/policy/FAQ questions from the compiled knowledge base (prompt block [3]). **Next chunk: CH-07 (Policy engine + full guardrails).** `progress.md` is authoritative for exactly what exists and what each chunk learned — read it, not this paragraph, for detail.
 
 ## Session protocol (mandatory — from plan.md §0)
 
@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Secrets:** `credentials-local/` and `.env*` are gitignored and must NEVER be committed, copied into `docs/`, or quoted in code, tests, fixtures, or commit messages. If a secret ever lands in a commit, it is leaked: rotate it and purge history. `.env.example` carries names only.
 - **Never invent API fields** — all external contracts are verbatim in plan.md §5 (website quote API, eZee, Meta Cloud API, Anthropic).
-- **Money:** ₹ figures are never computed by us or the model — they pass through verbatim from tool results. The AI never negotiates; the website rate is final.
+- **Money:** ₹ figures are never computed by us or the model — every stay/per-night price passes through verbatim from a tool result. The AI never negotiates; the website rate is final. **The ONE exemption (§6.5, CH-06):** fees published in `kb/policies.md` (early check-in, extra guest) may be stated without a tool call — but the exemption is **context-BOUND**, so `"an extra adult is ₹1,500"` passes while `"Villa B3 is ₹1,500 per night"` is blocked. **Never flatten that back into a plain list of allowed numbers** — a pre-push review caught exactly that bug, where a fabricated nightly rate sailed through. Fees live only in `policies.md`, written **with the ₹ symbol**, in a sentence that names the fee.
 - **Never promise what didn't happen:** "the team has been informed" only after `create_staff_task` succeeded (guardrail 2).
 - Never weaken a security rule to make a test pass · never log secrets or guest message bodies at info level · keep files under ~300 lines · boring, readable code over clever code.
 - No test calls a live external API — fixtures only, scrubbed via `scripts/fixture-scrub.ts` (CI greps for stray `+91`).
@@ -35,13 +35,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Conventional Commits 1.0.0, small commits, body explains WHY, footer `Refs: CH-NN`. Scopes: `wa`, `brain`, `ezee`, `lifecycle`, `staff`, `db`, `ops`.
 - Code comments explain WHY, never WHAT. Deferred work is `// TODO(CH-NN):`, never a bare TODO.
 
-## Commands (exist only after CH-00 lands)
+## Commands
 
 Stack: TypeScript 5 strict / Node 22+ ESM / Fastify 5 / Postgres 16 + Drizzle / pg-boss (no Redis) / vitest / pnpm.
 
 - `pnpm dev` — tsx watch · `pnpm test` — vitest · `pnpm check` — typecheck + lint + tests (the CI gate)
-- Local Postgres via `docker-compose.yml` (postgres:16); dev webhooks via `cloudflared tunnel`; hosting on Railway.
-- Machine note: pnpm is not installed yet — start CH-00 with `corepack enable`. Machine runs Node 24 (plan pins 22 LTS — open question; recommendation is engines `>=22`).
+- `pnpm kb:build` — compiles `kb/*.md` (prompt block [3]). **Run after ANY edit under `kb/`, including `kb/quirks.md`:** it re-checks the ≤6k token budget, regenerates the files and prints the new `kbVersion`. The committed output is byte-compared in CI, so a KB edit without a rebuild fails the build.
+- Local Postgres via `docker-compose.yml` (postgres:16) — the DB test suites need it (`docker compose up -d postgres`); without it 7 test files fail on `ECONNREFUSED :5432`. Meta's webhook points permanently at the Railway domain — **no tunnels** (CH-02 decision D8); iterate with fixtures + signed local POSTs.
+- Deploy: merging to `main` auto-deploys behind the `/health` gate. Pre-merge live demo = `railway up` from the chunk branch.
 
 ## Architecture (what gets built — plan.md §2)
 
