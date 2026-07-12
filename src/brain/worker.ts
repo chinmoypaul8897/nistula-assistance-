@@ -1,33 +1,51 @@
 /**
- * Conversation worker (plan.md CH-03 skeleton + CH-04 voice + CH-05 tools).
- * This file owns the debounce/claim/dispatch machinery; the Claude turn itself
- * (tool loop + guardrails) lives in turn.ts. Binding invariant (CH-03 D2): the
- * whole turn is fallible think-work and stays BEFORE the claim — a pre-claim
- * throw is retry-safe (pg-boss retry / sweeper), leaving no reply and no claim
- * (§6.6). CH-05 adds: the reply row carries its tool-run audit (raw.toolRuns),
- * and a guardrail-deferred price escalates to ops on the winning-claim path.
+ * Conversation worker (CH-03 skeleton + CH-04 voice + CH-05 tools + CH-07
+ * policy). This file owns the debounce/policy/claim/dispatch machinery; the
+ * Claude turn (tool loop + guardrails) lives in turn.ts and the §6.7 policy
+ * decisions in policy.ts. Binding invariant (CH-03 D2): all fallible
+ * think-work stays BEFORE the claim — a pre-claim throw is retry-safe
+ * (pg-boss retry / sweeper), leaving no reply and no claim (§6.6).
+ *
+ * CH-07: a deterministic policy pre-pass routes special cases before the
+ * model; the claim optionally carries a guarded status transition (cool-off
+ * enter/restore); escalations fire BEFORE the guest dispatch so "bringing the
+ * team in" is true at guest-receipt time, and each writes a claimable
+ * sender:'system' evidence row (§6.5 #2's second channel — the convention
+ * CH-13's task events reuse).
  */
 import {
   claimConversationTurn,
   findStaleConversations,
   getConversationTurnContext,
   getUnprocessedGuestMessages,
+  insertMessage,
   resolveMessageCursor,
 } from '../db/repos.js';
+import { summarizeError } from '../lib/logger.js';
 import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
+import {
+  decidePolicy,
+  settlePlanFor,
+  type EscalationReason,
+  type RateWindow,
+} from './policy.js';
+import { PHRASEBOOK } from './prompt.js';
+import { createHitRecorder } from './telemetry.js';
 import { runClaudeTurn, type TurnDeps, type TurnLogger } from './turn.js';
 
 export type WorkerLogger = TurnLogger;
 
 export interface WorkerDeps extends TurnDeps {
-  // wa gains sendText for the CH-05 interim ops escalation (real escalate_to_human
-  // lands CH-14; until then a deferred price messages OPS_NUMBERS directly).
+  // wa gains sendText for the interim ops escalation (real escalate_to_human
+  // lands CH-14; until then escalations message OPS_NUMBERS directly).
   wa: Pick<WaClient, 'createSendIntent' | 'dispatchText' | 'sendText'>;
   windows: DebounceWindows;
-  /** OPS_NUMBERS (E.164) — interim price-escalation recipients (§5.3 chokepoint). */
+  /** OPS_NUMBERS (E.164) — interim escalation recipients (§5.3 chokepoint). */
   opsNumbers: string[];
+  /** The §3.3 rate window — injected singleton (policy.ts createRateWindow). */
+  rateWindow: RateWindow;
   /** Bound by jobs/index.ts — enqueuer and worker share ONE windows source (no drift). */
   enqueue: (conversationId: string, startAfter?: Date) => Promise<void>;
 }
@@ -75,51 +93,84 @@ export async function processConversation(
     return;
   }
 
-  // The Claude turn (CH-04 voice + CH-05 tools/guardrails) — ALL fallible
-  // think-work, BEFORE the claim (D2).
-  const turn = await runClaudeTurn(deps, {
+  // §6.7 pre-model pass (CH-07): feed the id-keyed rate window (retries and
+  // sweeper wakes re-feed the same ids — a no-op), then decide + settle.
+  deps.rateWindow.feed(
+    ctx.guestPhone,
+    msgs.map((m) => ({ id: m.id, createdAt: m.createdAt })),
+    ctx.dbNow,
+  );
+  const directive = decidePolicy({
+    messages: msgs,
     conversation: ctx.conversation,
-    dbNow: ctx.dbNow,
-    conversationId,
-    guestPhone: ctx.guestPhone,
+    now: ctx.dbNow,
+    overLimit: deps.rateWindow.isOverLimit(ctx.guestPhone, ctx.dbNow),
   });
-  // ONE transaction (CH-03 decision D2): claim + send intent commit atomically
-  // so every failure state stays observable. Claim FIRST inside the tx: a
-  // losing claim writes nothing, so the empty commit is a no-op. The reply row
-  // carries the tool-run audit (CH-05 step 4).
+  const plan = settlePlanFor(directive, ctx.conversation.status);
+
+  // The Claude turn — ALL fallible think-work, BEFORE the claim (D2). Policy
+  // paths that skip the model resolve to a fixed phrasebook line instead.
+  const turn = plan.modelRuns
+    ? await runClaudeTurn(deps, {
+        conversation: ctx.conversation,
+        dbNow: ctx.dbNow,
+        conversationId,
+        guestPhone: ctx.guestPhone,
+        mustEscalate: plan.mustEscalate,
+        unviewableMedia: directive.flags.hasMedia,
+      })
+    : null;
+  const body = turn !== null ? turn.text : plan.send !== null ? PHRASEBOOK[plan.send] : null;
+
+  // ONE transaction (CH-03 decision D2): claim (+ guarded status CASE) + send
+  // intent commit atomically so every failure state stays observable. Claim
+  // FIRST inside the tx: a losing claim writes nothing. `claimed` is tracked
+  // separately from `intentId` — store-only paths claim without an intent.
+  let claimed = false;
+  let announced = false;
   let intentId: string | null = null;
   await deps.db.transaction(async (tx) => {
-    const claimed = await claimConversationTurn(tx, {
+    const res = await claimConversationTurn(tx, {
       conversationId,
       expectedPointer: pointer,
       newPointer: newest.id,
       lastGuestMsgAt: newest.createdAt,
+      statusTransition: plan.statusTransition ?? undefined,
     });
-    if (!claimed) return;
-    const intent = await deps.wa.createSendIntent(
-      tx,
-      turn.text,
-      { conversationId, sender: 'ai' },
-      turn.toolRuns.length > 0 ? { raw: { toolRuns: turn.toolRuns } } : undefined,
-    );
-    intentId = intent.id;
+    if (!res.claimed) return;
+    claimed = true;
+    // The once-only cool-off line: announce only when the claim REPORTS the
+    // requested edge (a CH-14 human takeover racing in suppresses it safely).
+    announced = !plan.announceOnTransition || res.status === plan.statusTransition?.to;
+    if (body !== null && announced) {
+      const intent = await deps.wa.createSendIntent(
+        tx,
+        body,
+        { conversationId, sender: 'ai' },
+        turn !== null && turn.toolRuns.length > 0 ? { raw: { toolRuns: turn.toolRuns } } : undefined,
+      );
+      intentId = intent.id;
+    }
   });
 
-  if (intentId === null) {
+  if (!claimed) {
     deps.log.info({ conversationId }, 'turn already claimed by a concurrent run — skipped');
   } else {
     // Crash forensics: a 'turn claimed' line with no matching dispatch
     // outcome marks the (milliseconds-wide) claim→dispatch crash window.
-    deps.log.info({ conversationId, upto: newest.id, intentId }, 'turn claimed');
-    await deps.wa.dispatchText({
-      messageId: intentId,
-      toE164: ctx.guestPhone,
-      body: turn.text,
-      conversationId,
-    });
-    // Interim price escalation fires ONLY on the winning-claim path so a losing
-    // concurrent run never double-escalates.
-    if (turn.escalate) await escalateToOps(deps, conversationId);
+    deps.log.info(
+      { conversationId, upto: newest.id, intentId, directive: directive.kind },
+      'turn claimed',
+    );
+    // Escalation BEFORE the guest dispatch: a reply saying "bringing the team
+    // in" must be true at guest-receipt time. Winning-claim path only, so a
+    // losing concurrent run never double-escalates (CH-05 precedent).
+    const reason = plan.escalate ?? (turn?.escalate === true ? 'price' : null);
+    if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail);
+    if (intentId !== null && body !== null) {
+      await deps.wa.dispatchText({ messageId: intentId, toE164: ctx.guestPhone, body, conversationId });
+    }
+    await recordPolicyOutcome(deps, conversationId, ctx.guestPhone, directive, plan, announced);
   }
 
   // End-of-run re-check (CH-03 step 1): messages that landed mid-run are
@@ -128,22 +179,87 @@ export async function processConversation(
   await recheck(deps, conversationId);
 }
 
+const ESCALATION_SUMMARIES: Record<EscalationReason, string> = {
+  price: 'Price help needed on a guest thread — the AI could not confirm a rate safely.',
+  human_request: 'A guest asked for a human — the AI stepped back and promised the front desk.',
+  complaint: 'A guest appears unhappy — the AI acknowledged it and flagged the thread.',
+  media: 'A guest sent media the AI cannot view — the AI asked them to type it.',
+  leak: 'A reply was blocked by the leak scan — please review the thread.',
+  promise: 'A reply was blocked by promise integrity — please review the thread.',
+};
+
 /**
- * Interim escalation (CH-05 step 5) — a price the guardrail could not validate.
- * Messages each OPS number directly (conversationId null / sender system) and
- * raises an ops alert; in dev OPS_NUMBERS is unset, so the alert log is the
- * only channel. Real escalate_to_human lands CH-14.
+ * Interim escalation (real escalate_to_human lands CH-14): messages each OPS
+ * number (conversationId null / sender system, per CH-02 D5), writes the
+ * claimable evidence row on the guest conversation, and raises an ops alert —
+ * in dev OPS_NUMBERS is unset, so the alert log IS the ops channel (D4).
  */
-async function escalateToOps(deps: WorkerDeps, conversationId: string): Promise<void> {
-  const summary = 'Price help needed on a guest thread — the AI could not confirm a rate safely.';
+async function escalateToOps(
+  deps: WorkerDeps,
+  conversationId: string,
+  reason: EscalationReason,
+  guestTextTail: string,
+): Promise<void> {
+  const summary = ESCALATION_SUMMARIES[reason];
+  // The card carries the guest's ask (sanitised + capped by policy.ts) — the
+  // humanRequest line's "they have the full picture" must be honest. PII to
+  // an ops WhatsApp is the CH-14 card pattern; logs still carry ids only.
+  const card = guestTextTail === '' ? summary : `${summary}\nGuest: "${guestTextTail}"`;
   for (const ops of deps.opsNumbers) {
-    await deps.wa.sendText(ops, summary, { conversationId: null, sender: 'system' });
+    await deps.wa.sendText(ops, card, { conversationId: null, sender: 'system' });
+  }
+  try {
+    // Claimable evidence (§6.5 #2, CH-02 D5 opt-in tagging): transcript-
+    // invisible (mapTranscript skips system rows) but guardrail-2 readable.
+    await insertMessage(deps.db, {
+      conversationId,
+      direction: 'out',
+      sender: 'system',
+      type: 'text',
+      body: `ops escalated: ${reason}`,
+      status: 'sent',
+      raw: { contextKind: 'ops_escalation', reason },
+    });
+  } catch (error) {
+    deps.log.warn({ err: summarizeError(error) }, 'escalation evidence row failed (telemetry only)');
   }
   await alertOps(deps.log, {
-    kind: 'price_guardrail_escalation',
-    summary: 'AI deferred a price and escalated to ops',
-    detail: { conversationId },
+    kind: 'guest_thread_escalation',
+    summary,
+    detail: { conversationId, reason },
   });
+}
+
+/** Policy telemetry + the §3.3 cool-off ops alert — winning-claim path only. */
+async function recordPolicyOutcome(
+  deps: WorkerDeps,
+  conversationId: string,
+  guestPhone: string,
+  directive: ReturnType<typeof decidePolicy>,
+  plan: ReturnType<typeof settlePlanFor>,
+  announced: boolean,
+): Promise<void> {
+  if (plan.telemetry === null) return;
+  // cool_off records once per ai_active→cooloff edge, not per stored message.
+  if (plan.telemetry === 'cool_off' && !announced) return;
+  const record = createHitRecorder(deps.db, deps.log, { conversationId, guestPhone });
+  await record({
+    kind: 'policy',
+    rule: plan.telemetry,
+    action: 'routed',
+    details: { directive: directive.kind, ...directive.flags },
+  });
+  if (plan.telemetry === 'cool_off') {
+    await alertOps(deps.log, {
+      kind: 'rate_limit_cooloff',
+      summary: 'guest rate-limited — one polite line sent, store-only until the window clears',
+      detail: {
+        conversationId,
+        containsHumanRequest: directive.flags.containsHumanRequest,
+        containsComplaint: directive.flags.containsComplaint,
+      },
+    });
+  }
 }
 
 async function recheck(deps: WorkerDeps, conversationId: string): Promise<void> {

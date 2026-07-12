@@ -26,13 +26,15 @@ export async function seedConversation(
 
 let seedSeq = 0;
 
-/** Inserts a guest message aged `ageSeconds` into the past (0 = now). */
+/** Inserts a guest message aged `ageSeconds` into the past (0 = now). `raw`
+ * mimics the webhook's stored inbound object (captions/locations, CH-07). */
 export async function seedGuestMessage(
   db: Db,
   conversationId: string,
   body: string | null,
   ageSeconds: number,
   type: NewMessage['type'] = 'text',
+  raw?: NewMessage['raw'],
 ): Promise<Message> {
   seedSeq += 1;
   const { message } = await insertMessage(db, {
@@ -44,6 +46,7 @@ export async function seedGuestMessage(
     body,
     status: 'received',
     createdAt: new Date(Date.now() - ageSeconds * 1000),
+    raw,
   });
   if (message === null) throw new Error('seed message conflicted — should be unreachable');
   return message;

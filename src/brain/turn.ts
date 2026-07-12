@@ -19,6 +19,7 @@ import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
 import { costEventsFor, type ConverseUsage } from './cost.js';
 import { runGuardrails } from './guardrails.js';
+import { captionOf, locationTextOf } from './inbound.js';
 import { kbPriceWhitelist, loadKnowledge } from './knowledge.js';
 import { PHRASEBOOK, buildSituation, buildSystemPrompt, type SystemBlock } from './prompt.js';
 import { createHitRecorder } from './telemetry.js';
@@ -73,6 +74,10 @@ export interface TurnArgs {
   conversationId: string;
   /** The guest's E.164 — telemetry scrub key + leak-scan self-exemption. */
   guestPhone: string;
+  /** §6.7 complaint flow: rendered into block [6] (worker sets it). */
+  mustEscalate?: boolean;
+  /** The batch carried media the model cannot view (mixed-batch note). */
+  unviewableMedia?: boolean;
 }
 
 /**
@@ -88,6 +93,8 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
     isNight: isNightIST(dbNow, deps.nightStart, deps.nightEnd),
     serviceWindowOpen: isServiceWindowOpen(conversation.serviceWindowExpiresAt, dbNow),
     degraded: deps.degraded.isDegraded(),
+    mustEscalate: args.mustEscalate ?? false,
+    unviewableMedia: args.unviewableMedia ?? false,
   });
   // Block [3] KNOWLEDGE (CH-06) — compiled kb, memoised; rides the cached head.
   const system = buildSystemPrompt(situation, loadKnowledge().knowledge);
@@ -261,25 +268,36 @@ function nonEmptyOrDeferral(text: string): string {
 }
 
 /**
- * Maps stored messages to the Claude message array (CH-04). guest→user,
- * ai→assistant, human→assistant with "(Front desk)"; system rows skipped; null
- * bodies → [type]; leading non-user turns dropped (Anthropic opens on user).
+ * Maps stored messages to the Claude message array (CH-04, media-aware since
+ * CH-07). guest→user, ai→assistant, human→assistant with "(Front desk)";
+ * system rows skipped; a guest media message renders its CAPTION ("[image]
+ * <caption>" — the caption is guest-typed text, §6.7 review finding) or a
+ * location its place/coordinates; captionless media stays a [type]
+ * placeholder; leading non-user turns dropped (Anthropic opens on user).
  */
 export function mapTranscript(msgs: Message[]): TurnMessage[] {
   const mapped: TurnMessage[] = [];
   for (const message of msgs) {
     if (message.sender === 'system') continue;
-    const content = message.body ?? `[${message.type}]`;
     if (message.sender === 'guest') {
-      mapped.push({ role: 'user', content });
+      mapped.push({ role: 'user', content: renderGuestContent(message) });
     } else if (message.sender === 'human') {
-      mapped.push({ role: 'assistant', content: `(Front desk) ${content}` });
+      mapped.push({ role: 'assistant', content: `(Front desk) ${message.body ?? `[${message.type}]`}` });
     } else {
-      mapped.push({ role: 'assistant', content });
+      mapped.push({ role: 'assistant', content: message.body ?? `[${message.type}]` });
     }
   }
   while (mapped.length > 0 && mapped[0]?.role !== 'user') mapped.shift();
   return mapped;
+}
+
+function renderGuestContent(message: Message): string {
+  if (message.body !== null) return message.body;
+  const location = locationTextOf(message);
+  if (location !== null) return `[location] ${location}`;
+  const caption = captionOf(message);
+  if (caption !== null) return `[${message.type}] ${caption}`;
+  return `[${message.type}]`;
 }
 
 function isServiceWindowOpen(expiresAt: Date | null, now: Date): boolean {
