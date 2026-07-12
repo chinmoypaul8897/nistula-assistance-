@@ -1026,3 +1026,38 @@ describe('claim + cursor repositories (the D2 primitives)', () => {
     });
   });
 });
+
+describe('CH-09 — register/language detection through the worker', () => {
+  it('a formal Hinglish batch flips the stored prefs on the winning claim', async () => {
+    const { conversation, guest } = await seedConversation(db, '+917700900049');
+    await seedGuestMessage(
+      db,
+      conversation.id,
+      'sir kya villa 20 dec ko milega, batao kitna hoga',
+      20,
+    );
+    const rig = makeRig();
+
+    await processConversation(rig.deps, conversation.id);
+
+    const [row] = await db.select().from(schema.guests).where(eq(schema.guests.id, guest.id));
+    expect(row?.registerPref).toBe('formal_sir_maam');
+    expect(row?.langPref).toBe('hinglish');
+    // Ids only in the log line — never the batch text (§3.3).
+    const prefLog = rig.log.info.mock.calls.find(([, msg]) => msg === 'guest prefs updated');
+    expect(prefLog).toBeDefined();
+    expect(JSON.stringify(prefLog?.[0])).not.toContain('milega');
+  });
+
+  it('a neutral batch writes nothing — prefs stay unknown', async () => {
+    const { conversation, guest } = await seedConversation(db, '+917700900050');
+    await seedGuestMessage(db, conversation.id, 'hello, one quick question', 20);
+    const rig = makeRig();
+
+    await processConversation(rig.deps, conversation.id);
+
+    const [row] = await db.select().from(schema.guests).where(eq(schema.guests.id, guest.id));
+    expect(row?.registerPref).toBe('unknown');
+    expect(row?.langPref).toBe('unknown');
+  });
+});
