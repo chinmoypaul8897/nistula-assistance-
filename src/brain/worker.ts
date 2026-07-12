@@ -19,6 +19,7 @@ import {
   findStaleConversations,
   getConversationTurnContext,
   getUnprocessedGuestMessages,
+  insertMessage,
   resolveMessageCursor,
 } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
@@ -234,6 +235,32 @@ export async function processConversation(
         } catch (error) {
           deps.log.warn({ conversationId, err: summarizeError(error) }, 'summarise enqueue failed');
         }
+      }
+    }
+    // CH-09 (audit): an ok:true remember_fact run (saved OR duplicate — the
+    // fact is on file either way) writes a claimable evidence row so the
+    // NEXT turn's truthful "yes, I've noted it" stays licensed (guardrail-2
+    // C4 via CONTEXT_KIND_CLAIMS) instead of deferring + pinging ops. Same
+    // convention as the escalation row; winning-claim path, best-effort.
+    const factOnFile =
+      turn !== null &&
+      turn.toolRuns.some((run) => run.name === 'remember_fact' && run.result.ok);
+    if (factOnFile) {
+      try {
+        await insertMessage(deps.db, {
+          conversationId,
+          direction: 'out',
+          sender: 'system',
+          type: 'text',
+          body: 'fact saved',
+          status: 'sent',
+          raw: { contextKind: 'fact_saved' },
+        });
+      } catch (error) {
+        deps.log.warn(
+          { conversationId, err: summarizeError(error) },
+          'fact-saved evidence row failed (telemetry only)',
+        );
       }
     }
     // CH-09 step 4: register/language heuristics on the batch text — write

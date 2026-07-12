@@ -169,6 +169,16 @@ describe('C4 — memory promises need a real remember_fact save (CH-09)', () => 
     "I'll keep that in mind for December.",
     'Saved that to your profile.',
     'Noted for your next stay.',
+    // Pre-push audit battery: all nine shipped unbacked before the widening.
+    'I shall note that down.',
+    "I'll note that down for your next stay.",
+    "We've put that on file.",
+    "It's in your file now.",
+    "I won't forget the anniversary.",
+    "That's gone into your notes.",
+    'Your preference is saved with us.',
+    'We have that on record now.',
+    "I'll be sure to remember.",
   ])('flags %j with no successful save', (draft) => {
     expect(scanPromises(draft, NO_EVIDENCE).violations.length).toBeGreaterThan(0);
   });
@@ -219,5 +229,20 @@ describe('C4 — memory promises need a real remember_fact save (CH-09)', () => 
       escalationPlanned: true,
     });
     expect(scan.violations.length).toBeGreaterThan(0);
+  });
+
+  it('a fact_saved evidence row licenses the NEXT turn’s truthful confirmation (audit)', () => {
+    expect(classesFromContextKinds(['fact_saved'])).toEqual(new Set(['C4']));
+    const scan = scanPromises("Yes — I've noted your love of early check-ins.", {
+      ...NO_EVIDENCE,
+      systemEvidence: classesFromContextKinds(['fact_saved']),
+    });
+    expect(scan.violations).toEqual([]);
+    // ...and it licenses ONLY C4 — never a completed-action claim.
+    const c1 = scanPromises('The team has been informed.', {
+      ...NO_EVIDENCE,
+      systemEvidence: classesFromContextKinds(['fact_saved']),
+    });
+    expect(c1.violations.length).toBeGreaterThan(0);
   });
 });

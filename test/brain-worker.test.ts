@@ -1111,6 +1111,12 @@ describe('CH-09 — fact poisoning end to end (worst-case model)', () => {
     expect(facts[0]?.sourceMessageId).toBe(newest.id); // provenance = newest batch message
     const sent = await outbound(conversation.id, 'ai');
     expect(sent[0]?.body).toContain('made a note'); // C4 licensed by the real save
+    // Audit: the save writes a claimable evidence row so the NEXT turn's
+    // truthful "yes, I've noted it" stays licensed (fact_saved → C4).
+    const evidence = await outbound(conversation.id, 'system');
+    expect(evidence.some((m) => (m.raw as { contextKind?: string })?.contextKind === 'fact_saved')).toBe(
+      true,
+    );
 
     // The DoD moment: a LATER turn meets the guest knowing them — block [5]
     // carries the fact through the real worker path. Age 20s: past the 15s

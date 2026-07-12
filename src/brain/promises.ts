@@ -52,11 +52,19 @@ const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
   // C4 — memory promises (CH-09). Narrow on purpose: recall statements
   // ("I remember you liked…") are backed by block [5] itself, and a bare
   // "Noted —" is ordinary speech; only PROMISES of remembering match.
-  { cls: 'C4', re: /\b(?:i|we)(?:'ll|\s+will|\s+shall)\s+remember\b/i },
+  // Widened by the pre-push audit: nine natural dodges ("I won't forget",
+  // "put that on file", "on record now", "saved with us") shipped unbacked.
+  { cls: 'C4', re: /\b(?:i|we)(?:'ll|\s+will|\s+shall)(?:\s+be\s+sure\s+to)?\s+remember\b/i },
+  { cls: 'C4', re: /\b(?:i|we)\s+(?:won'?t|will\s+not|shall\s+not)\s+forget\b/i },
   { cls: 'C4', re: /\b(?:i|we)\b[^.!?]{0,12}\b(?:made|make)\s+a\s+note\b/i },
+  { cls: 'C4', re: /\b(?:i|we)(?:'ll|\s+will|\s+shall)\s+note\s+(?:that|this|it)\s+down\b/i },
   { cls: 'C4', re: /\b(?:i|we)(?:'ve|\s+have)\s+noted\b/i },
   { cls: 'C4', re: /\b(?:i|we)(?:'ll|\s+will)\s+keep\s+(?:that|this|it)\s+in\s+mind\b/i },
   { cls: 'C4', re: /\b(?:saved|added)\s+(?:that|this|it)\s+to\s+your\s+(?:profile|preferences|notes|file)\b/i },
+  { cls: 'C4', re: /\bput\s+(?:that|this|it)\s+on\s+(?:your\s+|the\s+)?file\b/i },
+  { cls: 'C4', re: /\b(?:that'?s|it'?s|this\s+is|is\s+now|now)\s+(?:gone\s+into|in|on)\s+(?:your|our|the)\s+(?:file|notes?|records?)\b/i },
+  { cls: 'C4', re: /\b(?:saved|stored|recorded|logged)\s+with\s+us\b/i },
+  { cls: 'C4', re: /\b(?:have|has)\s+(?:that|this|it)\s+on\s+record\b|\bon\s+record\s+now\b/i },
   { cls: 'C4', re: /\bnoted\s+for\s+(?:next\s+time|your\s+next\s+(?:stay|visit|trip))\b/i },
 ];
 
@@ -71,9 +79,14 @@ export const TOOL_CLAIMS: ReadonlyMap<string, ReadonlySet<ClaimClass>> = new Map
 ]);
 
 /** sender:'system' context-row kinds → the classes they license (§6.5 #2's
- * second evidence channel). TODO(CH-13): task_done + sla_nudge → C1. */
+ * second evidence channel). TODO(CH-13): task_done + sla_nudge → C1.
+ * fact_saved (CH-09 audit): the worker writes it on a winning-claim save so
+ * the NEXT turn's truthful "yes, I've noted it" confirmation stays licensed —
+ * the evidence window (since the guest's previous message) gives it exactly
+ * one turn of life, which is the honest decay. */
 export const CONTEXT_KIND_CLAIMS: Readonly<Record<string, readonly ClaimClass[]>> = {
   ops_escalation: ['C3'],
+  fact_saved: ['C4'],
 };
 
 /** Collapses claimable context-row kinds into the licensed class set. */
