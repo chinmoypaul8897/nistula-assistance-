@@ -124,6 +124,21 @@ describe('guardrail 1 — the kb fee exemption is context-bound', () => {
     expect(checkPriceIntegrity('Villa C3 is ₹10,000 per night.', [], withDeposit).ok).toBe(false);
   });
 
+  it('the exemption is SENTENCE-scoped on the draft: a co-occurring fee sentence licenses nothing elsewhere (post-build audit)', () => {
+    const withDeposit = extractKbFees('A refundable security deposit of ₹10,000 is collected at check-in.');
+    // The two-sentence launder: sentence 1 legitimately names the fee, sentence 2
+    // claims the SAME figure as a nightly rate. A draft-wide cue match passed
+    // this; the sentence-scoped exemption must not.
+    const laundering =
+      'The security deposit is ₹10,000, fully refundable. Villa C3 itself is ₹10,000 per night.';
+    expect(checkPriceIntegrity(laundering, [], withDeposit).ok).toBe(false);
+    // Same shape with the real shipped fees.
+    const shipped = kbPriceWhitelist();
+    const launderingFee =
+      'The extra adult charge is ₹1,500 per night. And Villa B3 itself is just ₹1,500 per night.';
+    expect(checkPriceIntegrity(launderingFee, [], shipped).ok).toBe(false);
+  });
+
   it('never exempts a figure whose sentence names no fee (fail-closed)', () => {
     // A ₹ figure with no fee subject gets no cues, so nothing can license it.
     expect(extractKbFees('The villa costs ₹18,000.')).toEqual([]);

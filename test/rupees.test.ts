@@ -48,6 +48,15 @@ describe('bare integers (the CH-05 fail-open, closed)', () => {
     expect(extractRupeeAmounts('That would be 30000 per night.')).toEqual([30000]);
   });
 
+  it('a colon does not sever the cue from the figure (post-build audit)', () => {
+    expect(extractRupeeAmounts('Total: 45000')).toEqual([45000]);
+    expect(extractRupeeAmounts('Rate for the week: 90000, all in.')).toEqual([90000]);
+  });
+
+  it('INR works as a postfix too', () => {
+    expect(extractRupeeAmounts('It comes to 2500 INR extra.')).toEqual([2500]);
+  });
+
   it('ignores the same integer with no price cue (counts, references, pin codes)', () => {
     expect(extractRupeeAmounts('Our pin code in Assagao is 403507.')).toEqual([]);
     expect(extractRupeeAmounts('The reference is 45000.')).toEqual([]); // "reference" is not a cue

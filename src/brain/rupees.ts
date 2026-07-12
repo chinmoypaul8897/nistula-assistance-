@@ -41,9 +41,9 @@ function maskNonMoney(text: string): string {
 // with an optional multiplier word/letter (₹1.4 lakh · ₹34k · rs 2 crore).
 const CURRENCY_PREFIXED =
   /(?:₹|\b(?:rs\.?|inr|rupees?))\s*(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|cr|k)?\b/gi;
-// Postfix: 5000 rupees · 1.4 lakh rupees · 30000 rs
+// Postfix: 5000 rupees · 1.4 lakh rupees · 30000 rs · 2000 INR
 const CURRENCY_POSTFIXED =
-  /(?<!\d)(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|k)?\s*(?:rupees?|rs)\b/gi;
+  /(?<!\d)(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|k)?\s*(?:rupees?|rs|inr)\b/gi;
 // Bare lakh/crore: unambiguous money in this domain even with no currency mark.
 const BARE_LAKH_CRORE = /(?<!\d)(\d{1,4}(?:\.\d{1,2})?)\s*(lakhs?|lacs?|crores?)\b/gi;
 // Comma-grouped runs — a thousands separator is a money tell. Groups of 2 OR 3
@@ -79,7 +79,7 @@ const PRICE_CUE =
 // ("₹1,500" → "500", "16666.67" → "675") can never re-enter as a bare integer.
 const BARE_INT = /(?<![\d,.])\d{3,7}(?!\d)/g;
 const K_SHORTHAND = /(?<!\d)(\d{1,3}(?:\.\d{1,2})?)\s?k\b/gi;
-const SCREEN_AFTER_K = /^\s?(?:tvs?|screens?|displays?|uhd|video|resolution)\b/i;
+const SCREEN_AFTER_K = /^\s?(?:tvs?|televisions?|screens?|displays?|uhd|video|resolution)\b/i;
 // Units that make a 3-7 digit run a count/measure, never a price.
 const UNIT_AFTER =
   /^\s?(?:nights?|guests?|adults?|children|kids?|bhk|bedrooms?|kms?|m\b|min(?:ute)?s?|hours?|hrs?|%|percent|sq\s?ft|sqft|[ap]m\b)/i;
@@ -89,8 +89,17 @@ const BARE_INT_FLOOR = 200; // no villa-adjacent fee or rate sits below this
 const YEAR_MIN = 1900;
 const YEAR_MAX = 2099;
 
-// Sentence-ish splitter — shared shape with extractKbFees below.
-const SENTENCE_SPLIT = /(?<=[.;:!?])\s+|\n+/;
+// Sentence-ish splitter — shared with extractKbFees and priceGuards.feeExempt.
+// WHY no ':' — a colon does NOT end the thought: "Total: 45000" must keep the
+// cue and the figure in ONE sentence, or the bare-integer guard fails open
+// (post-build audit finding); same for a future "Security deposit: ₹10,000"
+// in policies.md, which would silently produce NO whitelist entry.
+const SENTENCE_SPLIT = /(?<=[.;!?])\s+|\n+/;
+
+/** Splits text into sentence-ish units — the scope for cue binding. */
+export function splitSentences(text: string): string[] {
+  return text.split(SENTENCE_SPLIT);
+}
 
 function collectAlwaysMoney(text: string, into: Set<number>): void {
   for (const re of [CURRENCY_PREFIXED, CURRENCY_POSTFIXED, BARE_LAKH_CRORE]) {

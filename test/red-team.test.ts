@@ -156,8 +156,20 @@ describe('red team — money integrity', () => {
     expect(out.action).toBe('defer');
   });
 
-  it('16. lakh fabrication: "₹1.4 lakh for the week" is deferred (the laundering fix)', async () => {
-    const out = await pipeline('The week comes to ₹1.4 lakh, shall I hold it?');
+  it('16. lakh fabrication: "₹1.4 lakh" is deferred EVEN with adults:1 backed (the actual pre-fix hole)', async () => {
+    // Pre-fix, '₹1.4 lakh' extracted as 1, which matched adults:1 in the loose
+    // backed set — this toolRun makes the case discriminating (audit finding).
+    const soloQuote: ToolRun = {
+      name: 'get_quote',
+      input: {},
+      result: { ok: true, data: { total: 34000, nights: 2, adults: 1, children: 0 } },
+    };
+    const out = await pipeline('The week comes to ₹1.4 lakh, shall I hold it?', {}, [soloQuote]);
+    expect(out.action).toBe('defer');
+  });
+
+  it('22. colon-formatted symbol-less total is deferred (post-build audit hole)', async () => {
+    const out = await pipeline('Total: 45000');
     expect(out.action).toBe('defer');
   });
 

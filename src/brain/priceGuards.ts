@@ -6,7 +6,7 @@
  * import path CH-05's tests and callers use is unchanged.
  */
 import { PHRASEBOOK } from './prompt.js';
-import { extractRupeeAmounts, type KbFee } from './rupees.js';
+import { extractRupeeAmounts, splitSentences, type KbFee } from './rupees.js';
 import type { ToolRun } from './tools/registry.js';
 
 /** Every numeric value anywhere inside a successful tool result's data. A
@@ -57,10 +57,24 @@ export function backedAmounts(toolRuns: ToolRun[]): Set<number> {
  * name the thing the fee is for ("an extra adult is ₹1,500"). It can therefore
  * never launder a fabricated stay price ("Villa B3 is ₹1,500 per night"), which
  * is §6.5's second clause: stay and per-night figures still come from tool JSON.
+ *
+ * SENTENCE-scoped on the draft side too (post-build audit finding): EVERY
+ * sentence stating the amount must name the fee, or a two-sentence draft
+ * ("The deposit is ₹10,000. The villa is ₹10,000 per night.") would launder a
+ * fee figure into a rate through a draft-wide cue match. An amount no single
+ * sentence yields (cross-sentence forms) is never exempt — fail-closed. Known
+ * residual, same as the kb side's contract: a SINGLE sentence that names the
+ * fee and co-claims a rate stays exemptible.
  */
 function feeExempt(amount: number, draft: string, fees: KbFee[]): boolean {
-  const lower = draft.toLowerCase();
-  return fees.some((fee) => fee.amount === amount && fee.cues.some((cue) => lower.includes(cue)));
+  const matching = fees.filter((fee) => fee.amount === amount);
+  if (matching.length === 0) return false;
+  const sentences = splitSentences(draft).filter((s) => extractRupeeAmounts(s).includes(amount));
+  if (sentences.length === 0) return false;
+  return sentences.every((sentence) => {
+    const lower = sentence.toLowerCase();
+    return matching.some((fee) => fee.cues.some((cue) => lower.includes(cue)));
+  });
 }
 
 export interface PriceIntegrityResult {
