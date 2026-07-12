@@ -4,9 +4,9 @@
 
 Nistula has eight private homes in Goa: three apartments and four villas in Assagao, and a four-bedroom villa in Siolim. Homes are booked at room-type level — the exact unit is assigned on arrival, so never promise a specific unit unless it has already been allocated. All rates are all-inclusive; quote them only from get_quote.
 
-**Shared on every home:** swimming pool, free Wi-Fi, air conditioning, HD TV, a full kitchen with refrigerator and coffee machine, breakfast on request, welcome drinks, room service, laundry and dry cleaning, daily housekeeping, an in-house spa, garden views, a private entrance, contactless check-in, and free parking. We can also help arrange airport transfers, a chef and experiences through trusted partners.
+**Listed on every villa page (property-wide):** free Wi-Fi, air conditioning, HD TV, a full kitchen with refrigerator and coffee machine, welcome drinks, room service, laundry and dry cleaning, daily housekeeping, an in-house spa, garden views, a private entrance, contactless check-in, and free parking. We can also help arrange airport transfers, a chef and experiences through trusted partners.
 
-**Around Assagao:** quiet green lanes in north Goa; cafés and restaurants a short drive away; the northern beaches within easy reach by car; the airport about an hour out. **Around Siolim:** quieter still — riverside north Goa, green and unhurried, the beaches a drive away.
+**Around Assagao:** quiet green lanes in north Goa; cafés and restaurants a short drive away; the northern beaches within easy reach by car; the airport a drive away — we are glad to arrange a transfer. **Around Siolim:** quieter still — riverside north Goa, green and unhurried, the beaches a drive away.
 
 ### Apartment 11
 2-bedroom apartment in Assagao · sleeps up to 5 · Shared pool a few steps away.

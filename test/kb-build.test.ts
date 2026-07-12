@@ -9,9 +9,12 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { buildKb, type KbSources } from '../scripts/kb-build.js';
 import { KB_TOKEN_BUDGET, concatKnowledge, loadKnowledge } from '../src/brain/knowledge.js';
+import { extractRupeeAmounts } from '../src/brain/rupees.js';
 
 const kbRoot = new URL('../kb/', import.meta.url);
-const read = (rel: string): string => readFileSync(new URL(rel, kbRoot), 'utf8');
+// Newline-agnostic: .gitattributes pins LF, but a stray CRLF checkout must not
+// masquerade as a hand-edit of a generated file in the golden comparison below.
+const read = (rel: string): string => readFileSync(new URL(rel, kbRoot), 'utf8').replace(/\r\n/g, '\n');
 const readJson = <T>(rel: string): T => JSON.parse(read(rel)) as T;
 
 function realSources(): KbSources {
@@ -37,8 +40,32 @@ describe('buildKb', () => {
     // Villa B3: type + Assagao + occupancy (maxAdults 7 from roomtypes) + pool.
     expect(villas).toContain('### Villa B3');
     expect(villas).toContain('3-bedroom villa in Assagao · sleeps up to 7 · Private pool');
-    // Siolim carries no pool line (OQ-09 unconfirmed → nothing definitive).
-    expect(villas).toContain('4-bedroom villa in Siolim · sleeps up to 8.');
+  });
+
+  it('makes NO pool claim for Siolim anywhere in the file (OQ-09 unconfirmed)', () => {
+    // Regression guard for a real defect: a blanket "swimming pool" in the shared-
+    // amenities paragraph silently asserted a pool for Siolim, defeating the whole
+    // point of villas.json's pool:null. A per-villa toContain() could not catch it —
+    // only a negative assertion over the surrounding prose can.
+    const villas = buildKb(realSources()).files['villas.md'];
+    const siolim = villas.slice(villas.indexOf('### Siolim'));
+    expect(siolim).not.toMatch(/pool/i);
+    const shared = villas.slice(0, villas.indexOf('### Apartment 11'));
+    expect(shared).not.toMatch(/pool/i);
+  });
+
+  it('states no ₹ figure anywhere outside policies.md, and FAILS the build if one appears', () => {
+    // Guardrail 1 only exempts fees published in policies.md, so a ₹ figure in
+    // villas/faq/quirks is KB truth the guardrail would always reject. quirks.md is
+    // the one file the villa team edits — fail the build, not the guest turn.
+    // The invariant is no ₹ AMOUNT (a bare "₹" in a maintainer note is harmless —
+    // it is stripped before the model, and carries no figure to whitelist).
+    const built = buildKb(realSources());
+    expect(extractRupeeAmounts(built.files['villas.md'])).toEqual([]);
+    expect(extractRupeeAmounts(built.files['faq.md'])).toEqual([]);
+
+    const poisoned: KbSources = { ...realSources(), quirks: '## Villa B3\n- The barbecue setup is ₹2,000.' };
+    expect(() => buildKb(poisoned)).toThrow(/kb\/quirks\.md contains ₹ figure\(s\) \[2000\]/);
   });
 
   it('keeps compiled block [3] within the token budget, with a stable version', () => {
@@ -70,15 +97,52 @@ describe('concatKnowledge', () => {
 });
 
 describe('loadKnowledge (committed kb/)', () => {
-  it('derives the guardrail-1 whitelist from the fee figures in kb/policies.md', () => {
+  it('derives the guardrail-1 fee exemption from kb/policies.md, each bound to its cues', () => {
     const kb = loadKnowledge();
-    expect([...kb.whitelist].sort((a, b) => a - b)).toEqual([750, 1000, 1500]);
+    // The amounts AND their cue binding. The ₹-symbol coupling is the fragile part:
+    // a fee rewritten as "INR 750" would silently vanish from this set, so pin it.
+    expect([...kb.whitelist].map((f) => f.amount).sort((a, b) => a - b)).toEqual([750, 750, 1000, 1500]);
+    expect(kb.whitelist).toEqual(
+      expect.arrayContaining([
+        { amount: 1000, cues: expect.arrayContaining(['early check-in']) },
+        { amount: 1500, cues: expect.arrayContaining(['extra adult']) },
+      ]),
+    );
   });
 
-  it('ships the placeholder quirk and stays within budget', () => {
+  it('ships the placeholder quirk under one code-owned heading, within budget', () => {
     const kb = loadKnowledge();
     expect(kb.quirksPresent).toBe(true);
     expect(kb.knowledge).toContain('Villa quirks (practical');
+    // The heading is owned by concatKnowledge, not the file — exactly one of it.
+    expect(kb.knowledge.match(/Villa quirks/g)).toHaveLength(1);
     expect(kb.tokens).toBeLessThanOrEqual(KB_TOKEN_BUDGET);
+  });
+
+  it('leaks NO internal engineering prose into the cached system head', () => {
+    // block [3] ships inside the system prompt. Maintainer notes, generated-file
+    // headers, PLACEHOLDER markers and repo paths are for humans — every one of
+    // these strings was present in the model's knowledge until review caught it.
+    const { knowledge } = loadKnowledge();
+    for (const leak of [
+      '<!--',
+      'GENERATED',
+      'PLACEHOLDER',
+      'MAINTAINER',
+      'nistula-kb-export',
+      'guardrail',
+      'kb-build',
+      'Last reviewed',
+    ]) {
+      expect(knowledge).not.toContain(leak);
+    }
+  });
+
+  it('is byte-identical regardless of CRLF checkout (kbVersion is stable)', () => {
+    // core.autocrlf=true on Windows materialises kb/*.md as CRLF; without folding
+    // it, block [3] bytes — and therefore kbVersion — would differ per platform.
+    const parts = { villas: 'A\r\n', policies: 'B\r\n', faq: 'C\r\n', quirks: '' };
+    expect(concatKnowledge(parts)).toBe(concatKnowledge({ villas: 'A\n', policies: 'B\n', faq: 'C\n', quirks: '' }));
+    expect(concatKnowledge(parts)).not.toContain('\r');
   });
 });

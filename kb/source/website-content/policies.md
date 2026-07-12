@@ -1,9 +1,20 @@
 # Policies
 
-Guest-facing policy summary, distilled from the website's source-of-truth
-(`nistula-policies.md`) and on-site FAQ via `nistula-kb-export/policies.md`. Fee
-figures are written with the ₹ symbol so the guardrail-1 price whitelist can
-read them. No stay/room rates live here — those come only from `get_quote`.
+<!--
+MAINTAINER NOTES (stripped before the model sees this — keep engineering prose in here).
+Distilled from the website's source-of-truth (`nistula-policies.md`) and the on-site
+FAQ, via `nistula-kb-export/policies.md`.
+TWO RULES when editing:
+1. Write every fee with the ₹ symbol (₹1,000 — never "INR 1,000" or a bare 1000).
+   knowledge.ts derives the guardrail-1 fee exemption by reading these figures, and
+   a symbol-less figure is silently NOT matched (the known bare-integer gap).
+2. Keep each fee in a sentence that NAMES what it is for ("early check-in", "extra
+   adult", "security deposit"). The exemption is bound to those words, so a fee in an
+   unnamed sentence can never be stated by the AI.
+Fees only — NO stay/room rates ever live here: those come only from get_quote.
+-->
+
+No stay or room rates appear below. Room rates come only from a live quote.
 
 **Check-in & check-out.** Check-in is from 3 pm; check-out is by 12 pm. Early check-in, subject to availability, is ₹1,000 per hour. Late check-out, subject to availability, is charged additionally and isn't guaranteed unless confirmed in writing.
 
@@ -14,6 +25,8 @@ read them. No stay/room rates live here — those come only from `get_quote`.
 **Deposits.** A refundable security deposit may be collected before or at check-in and is released after the check-out inspection, less any deductions — the amount is confirmed per booking. A booking deposit, based on the room rate for the nights booked, is required to confirm every reservation. (No fixed security-deposit figure is published — never state one; the team confirms it per booking.)
 
 **Cancellation (direct bookings).** 15 or more days before arrival — full refund of the advance deposit. 7 to 15 days before — 50% of the advance is deducted. Within 7 days — the full advance is charged. Early departure — 100% of the booked value, no refund. Stays from 22 December to 2 January are non-refundable. Refunds go only to the original payment method; gateway, bank, OTA and tax charges may be non-refundable. Date changes are subject to availability, any tariff difference and approval. For OTA or third-party bookings, that platform's cancellation policy applies.
+
+**Cancellation — when stricter terms apply.** Peak season, long weekends, festival dates, and any non-refundable, promotional, festive, long-stay, last-minute or special-package rate may carry stricter terms — the booking confirmation governs. There is no refund for a late arrival, unused nights, or a no-show unless approved in writing.
 
 **Pets.** Welcome only at properties where a pet stay has been approved in writing in advance; any pet-related cleaning or damage may be chargeable.
 

@@ -15,6 +15,7 @@ import {
   estimateKbTokens,
   kbVersion,
 } from '../src/brain/knowledge.js';
+import { extractRupeeAmounts } from '../src/brain/rupees.js';
 
 interface RoomType {
   roomTypeId: string;
@@ -79,8 +80,16 @@ function renderVillas(src: VillasSource, roomTypes: RoomTypesSource): string {
     GENERATED('kb/source/website-content/villas.json + kb/source/roomtypes.json'),
     '# The villas',
     'Nistula has eight private homes in Goa: three apartments and four villas in Assagao, and a four-bedroom villa in Siolim. Homes are booked at room-type level — the exact unit is assigned on arrival, so never promise a specific unit unless it has already been allocated. All rates are all-inclusive; quote them only from get_quote.',
-    '**Shared on every home:** swimming pool, free Wi-Fi, air conditioning, HD TV, a full kitchen with refrigerator and coffee machine, breakfast on request, welcome drinks, room service, laundry and dry cleaning, daily housekeeping, an in-house spa, garden views, a private entrance, contactless check-in, and free parking. We can also help arrange airport transfers, a chef and experiences through trusted partners.',
-    '**Around Assagao:** quiet green lanes in north Goa; cafés and restaurants a short drive away; the northern beaches within easy reach by car; the airport about an hour out. **Around Siolim:** quieter still — riverside north Goa, green and unhurried, the beaches a drive away.',
+    // WHY "listed on every villa page" and NOT "shared on every home": the site
+    // renders ONE property-wide amenity list on every villa; it is a published
+    // claim, not a verified per-villa fact. A blanket "swimming pool" here would
+    // also assert a pool for Siolim, whose pool is UNCONFIRMED (OQ-09) — the very
+    // claim villas.json's pool:null exists to withhold. Pools are stated ONLY by
+    // each villa's own `pool` field below.
+    '**Listed on every villa page (property-wide):** free Wi-Fi, air conditioning, HD TV, a full kitchen with refrigerator and coffee machine, welcome drinks, room service, laundry and dry cleaning, daily housekeeping, an in-house spa, garden views, a private entrance, contactless check-in, and free parking. We can also help arrange airport transfers, a chef and experiences through trusted partners.',
+    // WHY no drive times: the website deliberately omits distances (generic-honest
+    // copy), so any number here would be invented. Keep the source's own hedges.
+    '**Around Assagao:** quiet green lanes in north Goa; cafés and restaurants a short drive away; the northern beaches within easy reach by car; the airport a drive away — we are glad to arrange a transfer. **Around Siolim:** quieter still — riverside north Goa, green and unhurried, the beaches a drive away.',
     ...blocks,
   ].join('\n\n');
 }
@@ -109,9 +118,30 @@ export function buildKb(sources: KbSources): KbBuild {
   const tokens = estimateKbTokens(knowledge);
   if (tokens > KB_TOKEN_BUDGET) {
     throw new Error(
-      `compiled KNOWLEDGE block is ~${tokens} tokens, over the ${KB_TOKEN_BUDGET}-token budget — trim kb/source/* (plan.md §6.2).`,
+      `compiled KNOWLEDGE block is ~${tokens} tokens, over the ${KB_TOKEN_BUDGET}-token budget — ` +
+        `trim kb/source/* or kb/quirks.md (plan.md §6.2).`,
     );
   }
+
+  // Guardrail-1 only exempts fees published in kb/policies.md (§6.5). A ₹ figure
+  // anywhere ELSE in block [3] is KB "truth" the guardrail is guaranteed to
+  // reject — the model would state it, get blocked, and the guest would get the
+  // rate-unavailable deferral plus a spurious ops escalation. quirks.md is the one
+  // file non-engineers edit, so fail the BUILD rather than ship that trap.
+  for (const [name, body] of [
+    ['kb/villas.md', files['villas.md']],
+    ['kb/faq.md', files['faq.md']],
+    ['kb/quirks.md', sources.quirks],
+  ] as const) {
+    const stray = extractRupeeAmounts(body);
+    if (stray.length > 0) {
+      throw new Error(
+        `${name} contains ₹ figure(s) [${stray.join(', ')}] — fees must live in kb/source/website-content/policies.md ` +
+          `so guardrail 1 can exempt them (plan.md §6.5). Stay prices never belong in the KB at all: they come from get_quote.`,
+      );
+    }
+  }
+
   return { files, knowledge, tokens, version: kbVersion(knowledge) };
 }
 

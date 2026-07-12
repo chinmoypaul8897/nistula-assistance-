@@ -1,8 +1,15 @@
 # FAQ
 
-The on-site guest FAQ, condensed to one-liners from `nistula-kb-export/faq.md`
-(the site's `src/content/faq.ts`). Policy details (cancellation, deposits,
-check-in times, extra-guest fees) live in Policies above — kept brief here.
+<!--
+MAINTAINER NOTES (stripped before the model sees this).
+The on-site guest FAQ, condensed to one-liners from `nistula-kb-export/faq.md`.
+Policy details (cancellation, deposits, check-in times, extra-guest fees) live in
+Policies above — kept brief here. Do NOT put a ₹ figure in this file: guardrail 1
+only exempts fees published in policies.md, so a fee here would be blocked on the
+way out (kb-build fails the build if you try).
+-->
+
+Common guest questions, answered briefly.
 
 **How do I book?** Booking happens on the website — pick your dates on the villa page and it re-quotes live before any hold. A reservation is confirmed once the advance deposit is received and a written confirmation is sent.
 

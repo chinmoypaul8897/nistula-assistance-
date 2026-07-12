@@ -1,0 +1,9 @@
+# WHY: the kb/ files are byte-compared by the kb-build golden test and hashed
+# into the prompt-cache version (kbVersion). Git's core.autocrlf=true on Windows
+# would materialise them as CRLF on checkout while kb-build always emits LF —
+# so a fresh clone would fail the golden test and print a different kbVersion
+# than the one recorded in progress.md. Pin the text formats to LF so the bytes
+# are the same on every platform. (Narrow on purpose: a repo-wide `* text=auto`
+# renormalisation is a separate chore.)
+*.md text eol=lf
+*.json text eol=lf
