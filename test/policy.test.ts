@@ -215,7 +215,7 @@ describe('inbound helpers', () => {
   });
 
   it('sanitiseTail strips control chars and keeps the newest 200 chars', () => {
-    expect(sanitiseTail('hello world')).toBe('hello world');
+    expect(sanitiseTail('hello\u0000\u001fworld')).toBe('hello world');
     const long = `${'x'.repeat(300)} the actual ask`;
     const tail = sanitiseTail(long);
     expect(tail.length).toBeLessThanOrEqual(201); // ellipsis + 200
