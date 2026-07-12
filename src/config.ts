@@ -137,6 +137,18 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new ConfigError('FAKE_NOW_IST must not be set in production (plan.md §3.7)');
   }
 
+  // §3.3: admin routes need BOTH halves — the flag AND a real token. An
+  // enabled-but-tokenless (or trivially short) configuration must never boot
+  // rather than mount an unguardable route (CH-09).
+  if (
+    raw.ADMIN_ROUTES_ENABLED === '1' &&
+    (raw.ADMIN_BEARER_TOKEN === undefined || raw.ADMIN_BEARER_TOKEN.length < 16)
+  ) {
+    throw new ConfigError(
+      'ADMIN_ROUTES_ENABLED=1 requires ADMIN_BEARER_TOKEN of at least 16 characters (§3.3)',
+    );
+  }
+
   return {
     nodeEnv: raw.NODE_ENV,
     port: raw.PORT,

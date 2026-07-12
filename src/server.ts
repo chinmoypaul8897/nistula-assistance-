@@ -17,6 +17,7 @@ import { runMigrations } from './db/migrate.js';
 import { closeDb, getDb } from './db/client.js';
 import { getBoss, registerJobs, stopBoss } from './jobs/index.js';
 import { createLogger } from './lib/logger.js';
+import { adminRoutes } from './ops/admin.js';
 import { createWaClient } from './wa/client.js';
 import { waWebhookRoutes } from './wa/webhook.js';
 
@@ -159,6 +160,13 @@ async function main(): Promise<void> {
     verifyToken: waVerifyToken,
     enqueue: jobs.enqueueConversationProcess,
   });
+  // CH-09: admin routes mount ONLY when enabled — unmounted means Fastify's
+  // default 404, indistinguishable from a route that never existed (§3.3 "no
+  // public surface"). loadConfig guarantees a ≥16-char token when enabled.
+  if (config.adminRoutesEnabled && config.adminBearerToken !== undefined) {
+    await app.register(adminRoutes, { db, bearerToken: config.adminBearerToken });
+    app.log.info('admin routes enabled');
+  }
   app.log.info(`config: ${configSummary(config)}`);
   // Log the kb version so a kb change is visible against the cache/cost logs.
   app.log.info(
