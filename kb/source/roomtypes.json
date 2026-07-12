@@ -1,0 +1,30 @@
+{
+  "_note": "eZee CFG-05 RoomTypeList snapshot — occupancy caps per room TYPE (3 types → 8 villas). The guest-facing 'sleeps up to N' uses maxAdults. REFRESH (run when eZee occupancy changes): GET {EZEE_BASE_URL}/booking/reservation_api/listing.php?request_type=RoomTypeList&HotelCode={EZEE_HOTEL_CODE}&APIKey={EZEE_AUTH_CODE}&language=en&publishtoweb=1 (docs/ezee/02_configuration.md, CFG-05), then map base_adult_occupancy/base_child_occupancy/max_adult_occupancy/max_child_occupancy. Transcribed from nistula-kb-export/occupancy.md (observed 2026-06-08/09).",
+  "capturedAt": "2026-06-09",
+  "roomTypes": [
+    {
+      "roomTypeId": "5220300000000000001",
+      "typeName": "Nistula Apartment",
+      "baseAdults": 4,
+      "baseChildren": 2,
+      "maxAdults": 5,
+      "maxChildren": 2
+    },
+    {
+      "roomTypeId": "5220300000000000003",
+      "typeName": "Nistula Villa",
+      "baseAdults": 6,
+      "baseChildren": 3,
+      "maxAdults": 7,
+      "maxChildren": 4
+    },
+    {
+      "roomTypeId": "5220300000000000009",
+      "typeName": "Nistula 4BHK Siolim",
+      "baseAdults": 2,
+      "baseChildren": 2,
+      "maxAdults": 8,
+      "maxChildren": 6
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "_note": "Per-villa website content distilled from nistula-kb-export/villas.md, keyed by villaId (= eZee RoomID; kb-build joins to src/lib/villas.ts VILLAS). Descriptions are the site's editorial copy, condensed — currently placeholder:true on the site (plausible/generic, OQ-11). Bedroom counts flagged placeholder where the site guesses (OQ-08). NO stay prices here — rates come only from get_quote. Occupancy ('sleeps up to N') comes from kb/source/roomtypes.json, not this file. pool:null means unconfirmed (render nothing definitive).",
+  "villas": {
+    "5220300000000000001": {
+      "locality": "Assagao",
+      "bedrooms": 2,
+      "bedroomsPlaceholder": true,
+      "pool": "Shared pool a few steps away",
+      "description": "A light-filled apartment in Assagao — a balcony over the garden, a full kitchen for long breakfasts, and the pool a few steps away. Suits a couple or a small family."
+    },
+    "5220300000000000008": {
+      "locality": "Assagao",
+      "bedrooms": 2,
+      "bedroomsPlaceholder": true,
+      "pool": "Shared pool",
+      "description": "A calm Assagao apartment beside a pool and an arched garden wall — afternoon shade, a soft lived-in living room, and quiet bedrooms."
+    },
+    "5220300000000000010": {
+      "locality": "Assagao",
+      "bedrooms": 2,
+      "bedroomsPlaceholder": true,
+      "pool": "Shared pool",
+      "description": "A treetop Assagao apartment with a hanging chair on the balcony and gentle morning light — bright, open living and restful green bedrooms."
+    },
+    "5220300000000000002": {
+      "locality": "Assagao",
+      "bedrooms": 3,
+      "bedroomsPlaceholder": true,
+      "pool": "Private pool",
+      "description": "A spacious Assagao villa with generous living space, a private garden and a private pool — room for a group to spread out over long lunches and slow evenings."
+    },
+    "5220300000000000011": {
+      "locality": "Assagao",
+      "bedrooms": 3,
+      "bedroomsPlaceholder": true,
+      "pool": "Private pool",
+      "description": "A private Assagao villa tucked into the lanes, quiet enough to hear the garden — a living space made for gathering, restful bedrooms and a private pool."
+    },
+    "5220300000000000012": {
+      "locality": "Assagao",
+      "bedrooms": 3,
+      "bedroomsPlaceholder": true,
+      "pool": "Private pool",
+      "description": "A relaxed Assagao villa with easy, spread-out living, a private garden and a private pool — cool, calm bedrooms through the afternoon."
+    },
+    "5220300000000000013": {
+      "locality": "Assagao",
+      "bedrooms": 3,
+      "bedroomsPlaceholder": true,
+      "pool": "Private pool with a water feature",
+      "description": "A private Assagao villa wrapped around its own pool with a water feature — an outdoor dining corner, a garden-facing living space and warm, considered interiors."
+    },
+    "5220300000000000015": {
+      "locality": "Siolim",
+      "bedrooms": 4,
+      "bedroomsPlaceholder": false,
+      "pool": null,
+      "description": "A four-bedroom villa in the quieter green of Siolim — a big living area and a private garden, built for a larger group on a longer, slower trip."
+    }
+  }
+}
