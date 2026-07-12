@@ -278,7 +278,13 @@ async function runToolLoop(
       'claude turn',
     );
 
-    finalText = result.text;
+    // Keep the last NON-EMPTY prose: Sonnet often writes its reply in the
+    // SAME round as a tool_use (observed live with remember_fact — the save
+    // is a side effect, so the follow-up round can come back empty). An
+    // unconditional overwrite clobbered that prose and shipped the deferral
+    // + a spurious ops referral instead (CH-09 demo finding). Whatever text
+    // survives here still passes the full guardrail pipeline.
+    finalText = result.text === '' ? finalText : result.text;
     if (forceProse || result.toolUses.length === 0) {
       if (forceProse && result.toolUses.length > 0) {
         // Cap hit with the model still wanting tools — worth an ops signal.

@@ -179,3 +179,45 @@ describe('degraded mode through a full turn (CH-05 deferred)', () => {
     expect((await aiOutbound(conversation.id))[0]?.body).toContain('confirm the exact rate');
   });
 });
+
+describe('prose beside a tool_use survives an empty follow-up round (CH-09 demo finding)', () => {
+  it('ships the round-1 reply, not the deferral, when the model goes quiet after its save', async () => {
+    const { conversation } = await seedConversation(db, '+917700900084');
+    await seedGuestMessage(db, conversation.id, 'we loved the early check-in last time', 20);
+    const rig = makeRig();
+    const prose = 'That is lovely to hear — we will do our best to arrange it again next time.';
+    let rounds = 0;
+    // The live pattern: Sonnet writes its reply IN the tool_use round (the
+    // save is a side effect), then returns empty text once the result lands.
+    rig.deps.converse = (async (input: ConverseInput) => {
+      rounds += 1;
+      rig.converseCalls.push(input);
+      if (rounds === 1) {
+        const use = {
+          id: 'tu_side',
+          name: 'remember_fact',
+          input: { kind: 'preference', content: 'Loved the early check-in last time' },
+        };
+        return {
+          text: prose,
+          toolUses: [use],
+          stopReason: 'tool_use',
+          assistantContent: [
+            { type: 'text', text: prose },
+            { type: 'tool_use', id: use.id, name: use.name, input: use.input },
+          ],
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        };
+      }
+      return textResult('');
+    }) as ConverseFn;
+
+    await processConversation(rig.deps, conversation.id);
+
+    const out = await aiOutbound(conversation.id);
+    expect(out).toHaveLength(1);
+    // Before the fix this shipped PHRASEBOOK.outsideKnowledge + a spurious
+    // ops referral; the model HAD replied — the empty round clobbered it.
+    expect(out[0]?.body).toBe(prose);
+  });
+});
