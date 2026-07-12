@@ -48,6 +48,14 @@ describe('bare integers (the CH-05 fail-open, closed)', () => {
     expect(extractRupeeAmounts('That would be 30000 per night.')).toEqual([30000]);
   });
 
+  it("'nightly' is a rate word, never a unit exclusion (CH-09 audit)", () => {
+    // Before the \b anchor, UNIT_AFTER's `nights?` matched the prefix of
+    // "nightly" and the figure was skipped as a count.
+    expect(extractRupeeAmounts('Your rate is 3500 nightly, as agreed.')).toEqual([3500]);
+    // A genuine night COUNT stays excluded.
+    expect(extractRupeeAmounts('The rate covers your 3 nights fully.')).toEqual([]);
+  });
+
   it('a colon does not sever the cue from the figure (post-build audit)', () => {
     expect(extractRupeeAmounts('Total: 45000')).toEqual([45000]);
     expect(extractRupeeAmounts('Rate for the week: 90000, all in.')).toEqual([90000]);

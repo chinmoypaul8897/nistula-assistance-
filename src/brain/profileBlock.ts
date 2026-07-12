@@ -48,8 +48,16 @@ function monthYearIST(date: Date): string {
  * both prefs unknown) — a first-contact stranger keeps today's no-block
  * behaviour rather than paying uncached tokens for an empty scaffold.
  */
+// Guest-derived text renders inside double-quote framing, so a literal `"`
+// would let one stored fact forge extra `(kind) "…"` structure on its own
+// bullet (audit) — neutralised to a plain apostrophe, content preserved.
+function quoteSafe(text: string): string {
+  return text.replace(/"/g, "'");
+}
+
 export function buildGuestBlock(profile: GuestProfileInput): string | null {
-  const name = profile.name === null ? '' : sanitiseInline(profile.name, NAME_MAX);
+  const name =
+    profile.name === null ? '' : quoteSafe(sanitiseInline(profile.name, NAME_MAX));
   const hasPrefs = profile.registerPref !== 'unknown' || profile.langPref !== 'unknown';
   if (name === '' && profile.facts.length === 0 && !hasPrefs) return null;
 
@@ -70,7 +78,7 @@ export function buildGuestBlock(profile: GuestProfileInput): string | null {
   if (facts.length > 0) {
     lines.push('Known facts (saved from earlier conversations):');
     for (const fact of facts) {
-      const content = sanitiseInline(fact.content, FACT_RENDER_MAX);
+      const content = quoteSafe(sanitiseInline(fact.content, FACT_RENDER_MAX));
       if (content === '') continue;
       lines.push(`- (${KIND_LABEL[fact.kind]}) "${content}" (${monthYearIST(fact.createdAt)})`);
     }

@@ -284,7 +284,7 @@ async function runToolLoop(
     // unconditional overwrite clobbered that prose and shipped the deferral
     // + a spurious ops referral instead (CH-09 demo finding). Whatever text
     // survives here still passes the full guardrail pipeline.
-    finalText = result.text === '' ? finalText : result.text;
+    finalText = result.text.trim() === '' ? finalText : result.text;
     if (forceProse || result.toolUses.length === 0) {
       if (forceProse && result.toolUses.length > 0) {
         // Cap hit with the model still wanting tools — worth an ops signal.

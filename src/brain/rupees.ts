@@ -80,9 +80,11 @@ const PRICE_CUE =
 const BARE_INT = /(?<![\d,.])\d{3,7}(?!\d)/g;
 const K_SHORTHAND = /(?<!\d)(\d{1,3}(?:\.\d{1,2})?)\s?k\b/gi;
 const SCREEN_AFTER_K = /^\s?(?:tvs?|televisions?|screens?|displays?|uhd|video|resolution)\b/i;
-// Units that make a 3-7 digit run a count/measure, never a price.
+// Units that make a 3-7 digit run a count/measure, never a price. nights?
+// carries \b (CH-09 audit): without it the prefix of "nightly" matched, so
+// "3500 nightly" was skipped as a count — a rate word must never unit-exclude.
 const UNIT_AFTER =
-  /^\s?(?:nights?|guests?|adults?|children|kids?|bhk|bedrooms?|kms?|m\b|min(?:ute)?s?|hours?|hrs?|%|percent|sq\s?ft|sqft|[ap]m\b)/i;
+  /^\s?(?:nights?\b|guests?|adults?|children|kids?|bhk|bedrooms?|kms?|m\b|min(?:ute)?s?|hours?|hrs?|%|percent|sq\s?ft|sqft|[ap]m\b)/i;
 const MONTH_NEAR =
   /(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)/i;
 const BARE_INT_FLOOR = 200; // no villa-adjacent fee or rate sits below this

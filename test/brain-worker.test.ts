@@ -1155,7 +1155,9 @@ describe('CH-09 — register/language detection through the worker', () => {
   });
 
   it('a neutral batch writes nothing — prefs stay unknown', async () => {
-    const { conversation, guest } = await seedConversation(db, '+917700900050');
+    // 343 from CH-09's 34x sub-band — 050 was telemetry.test.ts's scrub-key
+    // constant (audit: cross-file phone ownership, the CH-08 lesson).
+    const { conversation, guest } = await seedConversation(db, '+917700900343');
     await seedGuestMessage(db, conversation.id, 'hello, one quick question', 20);
     const rig = makeRig();
 
