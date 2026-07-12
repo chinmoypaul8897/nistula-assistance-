@@ -14,15 +14,16 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { extractKbFees, type KbFee } from './rupees.js';
+import { estimateTokens } from './tokens.js';
 
 /** §6.2: compiled block [3] must stay ≤ ~6k tokens (it is re-sent as a cache
  * read every turn; a bloated head is a standing cost). Heuristic below. */
 export const KB_TOKEN_BUDGET = 6000;
 
-/** chars/3.6 ≈ tokens — the repo's standing heuristic (brain-prompt.test.ts,
- * CH-08 will hoist a shared estimator). Good enough for a budget gate. */
+/** The shared chars/3.6 heuristic (tokens.ts, hoisted CH-08) under the name
+ * kb-build.ts already imports — one estimator, two callers. */
 export function estimateKbTokens(text: string): number {
-  return Math.ceil(text.length / 3.6);
+  return estimateTokens(text);
 }
 
 /** Short, stable content hash so a kb change is visible in the cost/cache logs
