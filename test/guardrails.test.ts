@@ -210,4 +210,42 @@ describe('runGuardrails — pipeline', () => {
     if (out.action === 'send') expect(out.text).toBe(PHRASEBOOK.discountAsk);
     expect(regenerate).not.toHaveBeenCalled();
   });
+
+  it('records every hit for the weekly review — and nothing on a clean pass (CH-07)', async () => {
+    const record = vi.fn<(hit: { rule: string; action: string }) => Promise<void>>(
+      async () => {},
+    );
+    // Clean pass: zero telemetry rows.
+    await runGuardrails(
+      { draft: '₹34,000 for the two nights.', toolRuns: [quoteRun] },
+      { regenerate: vi.fn(), log, record },
+    );
+    expect(record).not.toHaveBeenCalled();
+
+    // Negotiation substitution records the ORIGINAL draft.
+    await runGuardrails(
+      { draft: 'A special offer for you.', toolRuns: [] },
+      { regenerate: vi.fn(), log, record },
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rule: 'negotiation_lock',
+        action: 'substituted',
+        draft: 'A special offer for you.',
+      }),
+    );
+
+    // Two-strike price failure records regenerated then deferred.
+    record.mockClear();
+    await runGuardrails(
+      { draft: 'A rate of ₹99,000.', toolRuns: [quoteRun] },
+      {
+        regenerate: vi.fn(async () => ({ draft: 'Still ₹99,000.', toolRuns: [quoteRun] })),
+        log,
+        record,
+      },
+    );
+    const actions = record.mock.calls.map(([hit]) => hit.action);
+    expect(actions).toEqual(['regenerated', 'deferred']);
+  });
 });

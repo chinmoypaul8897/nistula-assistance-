@@ -77,7 +77,12 @@ export async function processConversation(
 
   // The Claude turn (CH-04 voice + CH-05 tools/guardrails) — ALL fallible
   // think-work, BEFORE the claim (D2).
-  const turn = await runClaudeTurn(deps, ctx.conversation, ctx.dbNow, conversationId);
+  const turn = await runClaudeTurn(deps, {
+    conversation: ctx.conversation,
+    dbNow: ctx.dbNow,
+    conversationId,
+    guestPhone: ctx.guestPhone,
+  });
   // ONE transaction (CH-03 decision D2): claim + send intent commit atomically
   // so every failure state stays observable. Claim FIRST inside the tx: a
   // losing claim writes nothing, so the empty commit is a no-op. The reply row

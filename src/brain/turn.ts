@@ -21,6 +21,7 @@ import { costEventsFor, type ConverseUsage } from './cost.js';
 import { runGuardrails } from './guardrails.js';
 import { kbPriceWhitelist, loadKnowledge } from './knowledge.js';
 import { PHRASEBOOK, buildSituation, buildSystemPrompt, type SystemBlock } from './prompt.js';
+import { createHitRecorder } from './telemetry.js';
 import type { DegradedTracker } from './tools/degraded.js';
 import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
 import type { WebsiteClient } from './tools/websiteApi.js';
@@ -65,17 +66,22 @@ export interface TurnResult {
 
 type TurnMessage = { role: 'user' | 'assistant'; content: string | Anthropic.ContentBlockParam[] };
 
+/** Per-turn identity/context — grows with CH-07's policy + guardrail inputs. */
+export interface TurnArgs {
+  conversation: Conversation;
+  dbNow: Date;
+  conversationId: string;
+  /** The guest's E.164 — telemetry scrub key + leak-scan self-exemption. */
+  guestPhone: string;
+}
+
 /**
  * Builds the prompt + transcript and runs the tool loop, then the guardrail
  * pipeline. Returns the final reply text + the tool-run audit + whether the
  * turn must escalate (price could not be validated).
  */
-export async function runClaudeTurn(
-  deps: TurnDeps,
-  conversation: Conversation,
-  dbNow: Date,
-  conversationId: string,
-): Promise<TurnResult> {
+export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<TurnResult> {
+  const { conversation, dbNow, conversationId } = args;
   const baseMessages = mapTranscript(await getRecentMessages(deps.db, conversationId));
   const situation = buildSituation({
     now: dbNow,
@@ -130,6 +136,11 @@ export async function runClaudeTurn(
       // bound to its own fee context — so "an extra adult is ₹1,500" may be sent
       // without a tool call, while "Villa B3 is ₹1,500 per night" still cannot.
       whitelist: kbPriceWhitelist(),
+      // CH-07 step 4: every hit persists to raw_events for the weekly review.
+      record: createHitRecorder(deps.db, deps.log, {
+        conversationId,
+        guestPhone: args.guestPhone,
+      }),
     },
   );
 

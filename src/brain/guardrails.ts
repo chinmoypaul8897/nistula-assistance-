@@ -12,6 +12,7 @@
  */
 import { PHRASEBOOK } from './prompt.js';
 import { extractRupeeAmounts, type KbFee } from './rupees.js';
+import type { RecordHit } from './telemetry.js';
 import type { ToolRun } from './tools/registry.js';
 
 // The ₹-amount extractor moved to rupees.ts in CH-06 so knowledge.ts can share
@@ -140,6 +141,9 @@ export interface GuardrailDeps {
   log: { info: (obj: Record<string, unknown>, msg?: string) => void };
   /** The context-bound kb fee whitelist (CH-06: kbPriceWhitelist()). */
   whitelist?: KbFee[];
+  /** Best-effort raw_events persistence (CH-07 step 4) — optional so the pure
+   * check suites stay DB-free; turn.ts always supplies it. */
+  record?: RecordHit;
 }
 
 export type GuardrailOutcome =
@@ -159,19 +163,41 @@ export async function runGuardrails(
   deps: GuardrailDeps,
 ): Promise<GuardrailOutcome> {
   const whitelist = deps.whitelist ?? [];
-  const first = evaluate(turn, whitelist, deps.log);
+  const first = await evaluate(turn, whitelist, deps);
   if (first.ok) return { action: 'send', text: first.text, toolRuns: turn.toolRuns };
 
   deps.log.info({ guardrail: 'price_integrity', unbacked: first.unbacked }, 'regenerating once');
+  await deps.record?.({
+    kind: 'guardrail',
+    rule: 'price_integrity',
+    action: 'regenerated',
+    draft: first.text,
+    details: { unbacked: first.unbacked },
+  });
   const regenerated = await deps.regenerate(PRICE_NUDGE);
-  const second = evaluate(regenerated, whitelist, deps.log);
-  if (second.ok) return { action: 'send', text: second.text, toolRuns: regenerated.toolRuns };
+  const second = await evaluate(regenerated, whitelist, deps);
+  if (second.ok) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'price_integrity',
+      action: 'sent_after_regen',
+      draft: second.text,
+    });
+    return { action: 'send', text: second.text, toolRuns: regenerated.toolRuns };
+  }
 
   // Two strikes on price integrity — never send an unbacked ₹ figure (§6.5).
   deps.log.info(
     { guardrail: 'price_integrity', unbacked: second.unbacked },
     'price integrity failed twice — deferring + escalating',
   );
+  await deps.record?.({
+    kind: 'guardrail',
+    rule: 'price_integrity',
+    action: 'deferred',
+    draft: second.text,
+    details: { unbacked: second.unbacked },
+  });
   return {
     action: 'defer',
     text: PHRASEBOOK.quoteApiDown,
@@ -181,13 +207,24 @@ export async function runGuardrails(
 }
 
 /** One pass: negotiation rewrite → price check. Returns the cleaned text + verdict. */
-function evaluate(
+async function evaluate(
   turn: GuardrailTurn,
   whitelist: KbFee[],
-  log: GuardrailDeps['log'],
-): { ok: true; text: string } | { ok: false; text: string; unbacked: number[] } {
+  deps: Pick<GuardrailDeps, 'log' | 'record'>,
+): Promise<{ ok: true; text: string } | { ok: false; text: string; unbacked: number[] }> {
   const nego = applyNegotiationLock(turn.draft);
-  if (nego.changed) log.info({ guardrail: 'negotiation_lock', hits: nego.hits }, 'draft substituted');
+  if (nego.changed) {
+    deps.log.info({ guardrail: 'negotiation_lock', hits: nego.hits }, 'draft substituted');
+    // The recorded draft is the ORIGINAL (what was blocked) — that is what the
+    // weekly review needs to see, not the substituted phrasebook line.
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'negotiation_lock',
+      action: 'substituted',
+      draft: turn.draft,
+      details: { hits: nego.hits },
+    });
+  }
   const price = checkPriceIntegrity(nego.text, turn.toolRuns, whitelist);
   return price.ok ? { ok: true, text: nego.text } : { ok: false, text: nego.text, unbacked: price.unbacked };
 }
