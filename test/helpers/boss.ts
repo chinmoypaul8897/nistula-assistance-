@@ -6,7 +6,13 @@
  * would win forever, since queue rows outlive the app-table TRUNCATEs.
  */
 import { PgBoss } from 'pg-boss';
-import { ensureQueues, CONVERSATION_PROCESS_QUEUE, CONVERSATION_SWEEP_QUEUE } from '../../src/jobs/index.js';
+import {
+  ensureQueues,
+  CONVERSATION_PROCESS_QUEUE,
+  CONVERSATION_SUMMARISE_QUEUE,
+  CONVERSATION_SWEEP_QUEUE,
+  SUMMARISER_NIGHTLY_QUEUE,
+} from '../../src/jobs/index.js';
 
 export const TEST_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://nistula:nistula@localhost:5432/nistula_test';
@@ -23,7 +29,15 @@ export async function createTestBoss(): Promise<PgBoss> {
   // Teardown noise (a poll racing stop) must not crash the vitest process.
   boss.on('error', () => {});
   await boss.start();
-  for (const queue of [CONVERSATION_PROCESS_QUEUE, CONVERSATION_SWEEP_QUEUE]) {
+  // EVERY production queue joins the reset — a stale queue row (they outlive
+  // the app-table TRUNCATEs) with a leftover singleton job would silently
+  // swallow sends across test files (CH-08 review finding).
+  for (const queue of [
+    CONVERSATION_PROCESS_QUEUE,
+    CONVERSATION_SWEEP_QUEUE,
+    CONVERSATION_SUMMARISE_QUEUE,
+    SUMMARISER_NIGHTLY_QUEUE,
+  ]) {
     await boss.deleteQueue(queue).catch(() => {}); // absent on first run
   }
   await ensureQueues(boss);

@@ -49,6 +49,12 @@ export interface WorkerDeps extends TurnDeps {
   rateWindow: RateWindow;
   /** Bound by jobs/index.ts — enqueuer and worker share ONE windows source (no drift). */
   enqueue: (conversationId: string, startAfter?: Date) => Promise<void>;
+  /** CH-08 on-demand compaction: fired (fire-and-forget) when the transcript
+   * window overflowed — token-trimmed, or an uncovered gap ≥ gapMin (the
+   * hysteresis that keeps a long thread from buying a model call per turn).
+   * Optional: skip-model policy paths and older tests never detect overflow
+   * (the nightly pass covers those threads). */
+  summarise?: { enqueue: (conversationId: string) => Promise<void>; gapMin: number };
 }
 
 /**
@@ -198,6 +204,21 @@ export async function processConversation(
       });
     }
     await recordPolicyOutcome(deps, conversationId, ctx.guestPhone, directive, plan, announced);
+    // CH-08 on-demand compaction, winning-claim path only (a losing racer's
+    // context is the same — one signal is enough; stately dedupes anyway).
+    // Fire-and-forget: memory upkeep must never fail a guest turn.
+    const summarise = deps.summarise;
+    if (
+      summarise !== undefined &&
+      turn !== null &&
+      (turn.overflow.trimmedByTokens || turn.overflow.uncoveredCount >= summarise.gapMin)
+    ) {
+      try {
+        await summarise.enqueue(conversationId);
+      } catch (error) {
+        deps.log.warn({ conversationId, err: summarizeError(error) }, 'summarise enqueue failed');
+      }
+    }
   }
 
   // End-of-run re-check (CH-03 step 1): messages that landed mid-run are

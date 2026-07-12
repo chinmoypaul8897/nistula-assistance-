@@ -123,6 +123,12 @@ async function main(): Promise<void> {
     modelId: config.modelId,
     log: app.log,
   });
+  // The summariser's client (CH-08, §6.1): MODEL_ID_LIGHT when set, else the
+  // main model — createConverse binds ONE model id at construction.
+  const converseLight =
+    config.modelIdLight === undefined
+      ? converse
+      : createConverse({ apiKey: config.anthropicApiKey, modelId: config.modelIdLight, log: app.log });
   // CH-05 price tools: one website client (the origin allowlist), one shared
   // degraded tracker (process-global health), the tool registry.
   const website = createWebsiteClient({ baseUrl: config.websiteBaseUrl, log: app.log });
@@ -137,6 +143,7 @@ async function main(): Promise<void> {
     wa,
     log: app.log,
     converse,
+    converseLight,
     toolRegistry,
     website,
     websiteBaseUrl: config.websiteBaseUrl,

@@ -815,4 +815,75 @@ describe('claim + cursor repositories (the D2 primitives)', () => {
     const { cursor } = await resolveMessageCursor(db, message?.id ?? null);
     expect(await getUnprocessedGuestMessages(db, conversation.id, cursor)).toHaveLength(0);
   });
+
+  describe('CH-08 on-demand summarise hysteresis', () => {
+    function withSummarise(rig: ReturnType<typeof makeRig>, gapMin: number) {
+      const summarised: string[] = [];
+      rig.deps.summarise = {
+        gapMin,
+        enqueue: async (id) => {
+          summarised.push(id);
+        },
+      };
+      return summarised;
+    }
+
+    it('a short thread never enqueues; an uncovered gap past the threshold does — once', async () => {
+      const short = await seedConversation(db, '+917700900048');
+      await seedGuestMessage(db, short.conversation.id, 'hello there', 20);
+      const rigA = makeRig();
+      const summarisedA = withSummarise(rigA, 20);
+      await processConversation(rigA.deps, short.conversation.id);
+      expect(summarisedA).toHaveLength(0);
+
+      // 65 messages, no summary: window 30, fetch 40 → uncovered = 35 ≥ 20.
+      const long = await seedConversation(db, '+917700900049');
+      for (let i = 0; i < 64; i++) {
+        await seedGuestMessage(db, long.conversation.id, `old ${i}`, 4000 - i * 10);
+      }
+      await seedGuestMessage(db, long.conversation.id, 'and the newest ask', 20);
+      const rigB = makeRig();
+      const summarisedB = withSummarise(rigB, 20);
+      await processConversation(rigB.deps, long.conversation.id);
+      expect(summarisedB).toEqual([long.conversation.id]);
+    });
+
+    it('a gap below the threshold stays quiet (no model-call-per-turn loop)', async () => {
+      const { conversation } = await seedConversation(db, '+917700900050');
+      // 40 messages: fetch 40, window 30 → uncovered = 10 < 20.
+      for (let i = 0; i < 39; i++) {
+        await seedGuestMessage(db, conversation.id, `mid ${i}`, 4000 - i * 10);
+      }
+      await seedGuestMessage(db, conversation.id, 'latest', 20);
+      const rig = makeRig();
+      const summarised = withSummarise(rig, 20);
+      await processConversation(rig.deps, conversation.id);
+      expect(summarised).toHaveLength(0);
+    });
+
+    it('a summary covering the overflow suppresses the enqueue (coverage, not length, decides)', async () => {
+      const { conversation } = await seedConversation(db, '+917700900051');
+      const rows = [];
+      for (let i = 0; i < 64; i++) {
+        rows.push(await seedGuestMessage(db, conversation.id, `covered ${i}`, 4000 - i * 10));
+      }
+      await seedGuestMessage(db, conversation.id, 'fresh ask', 20);
+      // Notes cover everything up to row 34 — the 30-window shows the rest.
+      await db
+        .update(schema.conversations)
+        .set({
+          summary: '- Early thread compacted.',
+          summaryUptoMessageId: rows[34]?.id,
+        })
+        .where(eq(schema.conversations.id, conversation.id));
+      const rig = makeRig();
+      const summarised = withSummarise(rig, 20);
+      await processConversation(rig.deps, conversation.id);
+      expect(summarised).toHaveLength(0);
+      // …and the covering summary itself reached the model as [EARLIER CONTEXT].
+      const system = rig.converseCalls[0]?.system ?? [];
+      const earlier = system.find((b) => b.text.startsWith('[EARLIER CONTEXT]'));
+      expect(earlier?.text).toContain('Early thread compacted');
+    });
+  });
 });
