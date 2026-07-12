@@ -11,38 +11,14 @@
  * never send the hallucinated figure.
  */
 import { PHRASEBOOK } from './prompt.js';
+import { extractRupeeAmounts, type KbFee } from './rupees.js';
 import type { ToolRun } from './tools/registry.js';
 
-// ₹-prefixed amounts ("₹34,000", "₹ 34000") and bare comma-grouped runs
-// ("34,000") — a thousands separator is a money tell even without the symbol.
-// KNOWN GAP (deferred to CH-07's full guardrail suite): a comma-less, symbol-
-// less bare integer ("30000") matches neither pattern, so a fabricated price in
-// that exact form fails OPEN. The proper fix is context-aware extraction
-// (numbers adjacent to Rs/per-night/total cues) rather than a bare-integer
-// threshold, which would false-positive on years/pincodes/refs and wrongly
-// defer valid replies. Mitigated meanwhile by the system prompt hard-steering
-// ₹-formatting and this being defence-in-depth. Also deferred: the "34k"
-// shorthand. Review-confirmed; tracked in progress.md for CH-07.
-const RUPEE_AMOUNT = /₹\s?\d[\d,]*(?:\.\d+)?/g;
-const GROUPED_AMOUNT = /\b\d{1,3}(?:,\d{3})+\b/g;
-
-/** Normalises a matched money string to an integer rupee value. */
-function toInt(match: string): number {
-  const digits = match.replace(/[₹,\s]/g, '').split('.')[0] ?? '';
-  return Number.parseInt(digits, 10);
-}
-
-/** Every ₹-looking amount in the draft, as integers (deduped). */
-export function extractRupeeAmounts(draft: string): number[] {
-  const found = new Set<number>();
-  for (const re of [RUPEE_AMOUNT, GROUPED_AMOUNT]) {
-    for (const m of draft.matchAll(re)) {
-      const n = toInt(m[0]);
-      if (Number.isFinite(n)) found.add(n);
-    }
-  }
-  return [...found];
-}
+// The ₹-amount extractor moved to rupees.ts in CH-06 so knowledge.ts can share
+// it without an import cycle (§ rupees.ts header). Re-exported here to keep the
+// public import path (`extractRupeeAmounts` from guardrails.js) that CH-05 tests
+// and callers already use.
+export { extractRupeeAmounts };
 
 /** Every numeric value anywhere inside a successful tool result's data. A
  * fractional tool figure (e.g. averagePerNight = total/nights) is stored as
@@ -67,14 +43,27 @@ function collectNumbers(value: unknown, into: Set<number>): void {
   }
 }
 
-/** The set of figures the draft is ALLOWED to state: every number returned by a
- * successful tool this turn, plus the kb whitelist (empty until CH-06). */
-export function backedAmounts(toolRuns: ToolRun[], whitelist: number[] = []): Set<number> {
-  const allowed = new Set<number>(whitelist);
+/** Every number returned by a successful tool this turn — the only figures a
+ * draft may state freely. The kb fee whitelist is handled separately, because it
+ * is context-BOUND (see feeExempt) rather than a flat set. */
+export function backedAmounts(toolRuns: ToolRun[]): Set<number> {
+  const allowed = new Set<number>();
   for (const run of toolRuns) {
     if (run.result.ok) collectNumbers(run.result.data, allowed);
   }
   return allowed;
+}
+
+/**
+ * The kb EXEMPTION (§6.5 guardrail 1), context-bound: a published fee figure may
+ * be stated without a tool result ONLY in its own fee context — the draft must
+ * name the thing the fee is for ("an extra adult is ₹1,500"). It can therefore
+ * never launder a fabricated stay price ("Villa B3 is ₹1,500 per night"), which
+ * is §6.5's second clause: stay and per-night figures still come from tool JSON.
+ */
+function feeExempt(amount: number, draft: string, fees: KbFee[]): boolean {
+  const lower = draft.toLowerCase();
+  return fees.some((fee) => fee.amount === amount && fee.cues.some((cue) => lower.includes(cue)));
 }
 
 export interface PriceIntegrityResult {
@@ -85,16 +74,18 @@ export interface PriceIntegrityResult {
 
 /**
  * Guardrail 1: every ₹ amount in the draft must appear (as an integer, ignoring
- * ₹/comma/space formatting) in this turn's tool results or the whitelist. A
- * draft with no ₹ passes trivially.
+ * ₹/comma/space formatting) in this turn's tool results — or be a published kb
+ * fee stated in its own fee context. A draft with no ₹ passes trivially.
  */
 export function checkPriceIntegrity(
   draft: string,
   toolRuns: ToolRun[],
-  whitelist: number[] = [],
+  whitelist: KbFee[] = [],
 ): PriceIntegrityResult {
-  const allowed = backedAmounts(toolRuns, whitelist);
-  const unbacked = extractRupeeAmounts(draft).filter((n) => !allowed.has(n));
+  const allowed = backedAmounts(toolRuns);
+  const unbacked = extractRupeeAmounts(draft).filter(
+    (n) => !allowed.has(n) && !feeExempt(n, draft, whitelist),
+  );
   return { ok: unbacked.length === 0, unbacked };
 }
 
@@ -147,8 +138,8 @@ export interface GuardrailDeps {
   /** Re-run the model ONCE with a corrective nudge (worker supplies this). */
   regenerate: (nudge: string) => Promise<GuardrailTurn>;
   log: { info: (obj: Record<string, unknown>, msg?: string) => void };
-  /** kb price whitelist (empty in CH-05; CH-06 passes the compiled figures). */
-  whitelist?: number[];
+  /** The context-bound kb fee whitelist (CH-06: kbPriceWhitelist()). */
+  whitelist?: KbFee[];
 }
 
 export type GuardrailOutcome =
@@ -192,7 +183,7 @@ export async function runGuardrails(
 /** One pass: negotiation rewrite → price check. Returns the cleaned text + verdict. */
 function evaluate(
   turn: GuardrailTurn,
-  whitelist: number[],
+  whitelist: KbFee[],
   log: GuardrailDeps['log'],
 ): { ok: true; text: string } | { ok: false; text: string; unbacked: number[] } {
   const nego = applyNegotiationLock(turn.draft);

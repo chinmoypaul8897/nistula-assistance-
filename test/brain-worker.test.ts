@@ -13,6 +13,8 @@ import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import type { ConverseFn, ConverseInput } from '../src/brain/claude.js';
 import { DEBOUNCE_WINDOWS } from '../src/brain/debounce.js';
+import { kbPriceWhitelist } from '../src/brain/knowledge.js';
+import { PHRASEBOOK } from '../src/brain/prompt.js';
 import { processConversation, type WorkerDeps } from '../src/brain/worker.js';
 import {
   claimConversationTurn,
@@ -160,6 +162,18 @@ describe('processConversation — the debounced Claude turn', () => {
       newest.createdAt.getTime() + 24 * 60 * 60 * 1000,
     );
     expect(enqueued).toHaveLength(0); // re-check found nothing newer
+
+    // CH-06 SEAM: block [3] KNOWLEDGE must actually reach the model through the
+    // real worker path. Asserted HERE (not just in the pure prompt test) because
+    // turn.ts is the only place that injects it — without this, setting the
+    // injection to '' passes the whole suite (found by review).
+    const system = converseCalls[0]?.system ?? [];
+    expect(system).toHaveLength(5);
+    expect(system[2]?.text).toMatch(/^\[KNOWLEDGE\]\n/);
+    expect(system[2]?.text).toContain('Check-in is from 3 pm'); // a real compiled kb fact
+    // ...and the cached prefix is still ONE breakpoint, on the last static block.
+    expect(system.filter((b) => b.cache_control !== undefined)).toHaveLength(1);
+    expect(system[3]?.cache_control).toEqual({ type: 'ephemeral' });
 
     // At-least-once safety: a duplicate/retried job finds nothing, no-ops, and
     // never calls the model again.
@@ -374,6 +388,44 @@ describe('processConversation — the debounced Claude turn', () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.body).toBe(MOCK_REPLY);
     expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
+  });
+
+  it('CH-06 SEAM: a published kb fee is SENT with no tool call; the same figure as a stay price is BLOCKED', async () => {
+    // The headline CH-06 behaviour change, end to end through the worker: the kb
+    // fee exemption must be plumbed from loadKnowledge -> turn.ts -> runGuardrails.
+    // Without turn.ts passing kbPriceWhitelist(), the first case would be deferred
+    // (PHRASEBOOK.quoteApiDown) and escalated; without the exemption being CONTEXT-
+    // BOUND, the second case would be sent — a fabricated nightly rate (§6.5).
+    // The figure is derived from the kb, so an OQ-04/05/06 content pass can't break this.
+    const fee = kbPriceWhitelist().find((f) => f.cues.includes('extra adult'));
+    expect(fee).toBeDefined();
+    const amount = fee!.amount.toLocaleString('en-IN');
+
+    const allowed = await seedConversation(db, '+917700900046');
+    await seedGuestMessage(db, allowed.conversation.id, 'what do you charge for an extra adult?', 20);
+    const rigA = makeRig();
+    // unusedWebsite() throws if called — proving the reply needs NO live quote.
+    rigA.deps.converse = async () => textResult(`An extra adult is ₹${amount} per night.`, MOCK_USAGE);
+    await processConversation(rigA.deps, allowed.conversation.id);
+
+    const sent = await outbound(allowed.conversation.id);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ status: 'sent' });
+    expect(sent[0]?.body).toContain(amount);
+    expect(sent[0]?.body).not.toBe(PHRASEBOOK.quoteApiDown); // not deferred
+    expect(rigA.log.error).not.toHaveBeenCalled();
+
+    const blocked = await seedConversation(db, '+917700900047');
+    await seedGuestMessage(db, blocked.conversation.id, 'what is B3 per night?', 20);
+    const rigB = makeRig();
+    // Same amount, but claimed as a room rate with no tool result behind it.
+    rigB.deps.converse = async () => textResult(`Villa B3 is ₹${amount} per night.`, MOCK_USAGE);
+    await processConversation(rigB.deps, blocked.conversation.id);
+
+    const deferred = await outbound(blocked.conversation.id);
+    expect(deferred).toHaveLength(1);
+    expect(deferred[0]?.body).toBe(PHRASEBOOK.quoteApiDown); // regenerated, still bad → deferred
+    expect(deferred[0]?.body).not.toContain(amount); // the fabricated rate never reaches the guest
   });
 
   it('runs the tool loop: get_quote result feeds a second round; the reply row carries raw.toolRuns', async () => {

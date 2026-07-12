@@ -1,11 +1,11 @@
 /**
- * System-prompt assembly (plan.md §6.2 blocks [1],[2],[4],[6]). Blocks [1],[2],
- * [4] are the STATIC head — frozen text that caches (~1.3k tokens, above Sonnet
- * 4.5's 1024-token floor); block [6] SITUATION is dynamic and sits after the
- * cache breakpoint. Block [3] KNOWLEDGE lands in CH-06, block [5] GUEST CONTEXT
- * in CH-09/11. Block [2] is the ~700-token distillation of the locked voice
- * guide v1.1 (kb/source/voice-guide.md) — the guide is the source, this is the
- * runtime copy.
+ * System-prompt assembly (plan.md §6.2 blocks [1],[2],[3],[4],[6]). Blocks [1],
+ * [2],[3],[4] are the STATIC head — frozen text that caches; block [6] SITUATION
+ * is dynamic and sits after the cache breakpoint. Block [3] KNOWLEDGE (CH-06) is
+ * compiled from kb/*.md by knowledge.ts and INJECTED into buildSystemPrompt (the
+ * caller loads it — prompt.ts stays pure and free of an import cycle). Block [5]
+ * GUEST CONTEXT lands in CH-09/11. Block [2] is the ~700-token distillation of
+ * the locked voice guide v1.1 (kb/source/voice-guide.md) — the runtime copy.
  *
  * CH-05: the phrasebook lines are lifted into the exported PHRASEBOOK const so
  * the guardrail layer (guardrails.ts) and the prompt share ONE source of truth
@@ -100,6 +100,7 @@ const SYSTEM_RULES = `[RULES OF ENGAGEMENT]
 - Every ₹ figure you send must appear verbatim in a tool result from this turn. Do not compute, round, add, or adjust prices — the website rate is final and passes through exactly as the tool returned it. Never negotiate; if asked for a discount or deal, use the discount phrasebook line.
 - When a quote comes back unavailable (dates taken): say so warmly and offer the nearest alternative villa of the same type, then ask if they would like it. When the stay is below the minimum nights: explain the minimum warmly rather than refusing. When the rate service is unreachable: use "${PHRASEBOOK.quoteApiDown}" and bring the team in — never guess a number.
 - A villa TYPE ("a villa", "3bhk", "apartment") is quoted DIRECTLY — get_quote returns the type's single price and how many units are free for the dates (all units of a type cost the same and are booked at type level; we assign the unit). Give the price and whether those dates are open in one message; never ask the guest to pick a specific unit and never promise a named one. If no unit is free, say the dates are taken and offer other dates or another villa type. Only ask the guest to name the villa if you don't recognise it at all.
+- The [KNOWLEDGE] block above is your source of truth for villa facts, policies and FAQs — answer those from it directly, in your own warm words, never reciting it. Villa quirks listed there are specific truths you may share. If a guest asks something not covered in your knowledge (and it is not a price or availability, which come from tools), do not invent amenities, comfort claims, figures or unit specifics — say you will check with the team. Never state a deposit amount: none is published, so bring the team in for the exact figure.
 - Only claim actions that actually happened. You have no tool yet to inform staff or arrange anything, so say you will pass it on to the team — never that it is already done or that someone is on their way.
 - Escalate (bring the team in) whenever you are uncertain, the guest is unhappy or complaining, or the guest asks for a human. When in doubt, defer — never guess.
 - At night, when the front desk is off duty, be honest about timing: the team is in after 10 am. Never promise an overnight reply from a person.
@@ -138,15 +139,17 @@ export function buildSituation(input: SituationInput): string {
 }
 
 /**
- * Assembles the system array. The cache breakpoint sits on the LAST static
- * block ([4]) so the frozen head [1]+[2]+[4] caches as one prefix; [6] follows
- * uncached. (§5.5 loosely says "blocks 1-3" — block [3] does not exist until
- * CH-06, so the operative rule is "cache the static head".)
+ * Assembles the system array. `knowledge` is block [3] (kb/*.md compiled by
+ * knowledge.ts, loaded by the caller). The cache breakpoint sits on the LAST
+ * static block ([4] RULES) so the frozen head [1]+[2]+[3]+[4] caches as one
+ * prefix; [6] SITUATION follows uncached. Adding [3] only grows that prefix —
+ * one larger cache write on the first turn after a kb change, then cache reads.
  */
-export function buildSystemPrompt(situation: string): SystemBlock[] {
+export function buildSystemPrompt(situation: string, knowledge: string): SystemBlock[] {
   return [
     { type: 'text', text: SYSTEM_IDENTITY },
     { type: 'text', text: SYSTEM_VOICE },
+    { type: 'text', text: `[KNOWLEDGE]\n${knowledge}` },
     { type: 'text', text: SYSTEM_RULES, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: situation },
   ];

@@ -73,7 +73,11 @@
 
 ### OQ-04 — Security-deposit amount / formula
 **Question:** What is the refundable security-deposit amount (a flat figure, a per-booking formula, or the §5.1 rule)? See also OQ-13.
-**Why / blocks:** The AI must never state a deposit it can't back; this figure also joins the **guardrail-1 whitelist** so the AI may quote it. The site says only "amount per booking".
+**Why / blocks:** The AI must never state a deposit it can't back; this figure also joins the **guardrail-1 fee exemption** so the AI may quote it. The site says only "amount per booking".
+**⚠️ Landing this answer is NOT a content-only edit** (CH-06 review finding). Three things must change together, or the AI silently misbehaves:
+1. `kb/source/website-content/policies.md` — add the figure **with the ₹ symbol**, in a sentence that names it ("a refundable **security deposit** of ₹X…"). The exemption is bound to those words; a figure in an unnamed sentence can never be stated, and a symbol-less one (`INR 10,000`) is not matched at all.
+2. `src/brain/prompt.ts` block [4] — remove the hardcoded "Never state a deposit amount: none is published", or the model will keep refusing and escalating every deposit question while the figure sits unused.
+3. Re-run **`pnpm kb:build`** (re-checks the budget, regenerates the files, prints the new `kbVersion`), and confirm `guardrails.test.ts`'s forward-guard still blocks that same amount when claimed as a nightly rate.
 **Owner:** Paul (+ planning, OQ-13).
 **Status:** ⬜ OPEN
 **Answer:**

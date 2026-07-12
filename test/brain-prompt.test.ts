@@ -12,37 +12,46 @@ const situation = buildSituation({
   serviceWindowOpen: true,
   degraded: false,
 });
-const blocks = buildSystemPrompt(situation);
+// Block [3] KNOWLEDGE is injected (knowledge.ts loads the real thing at runtime);
+// a fixed fixture keeps this suite pure and deterministic.
+const knowledge = 'Check-in is from 3 pm. Villa B3 has a private pool.';
+const blocks = buildSystemPrompt(situation, knowledge);
 
 describe('buildSystemPrompt', () => {
-  it('assembles four text blocks in order: identity, voice, rules, situation', () => {
-    expect(blocks).toHaveLength(4);
+  it('assembles five text blocks in order: identity, voice, knowledge, rules, situation', () => {
+    expect(blocks).toHaveLength(5);
     expect(blocks.every((block) => block.type === 'text')).toBe(true);
     expect(blocks[0]?.text).toContain('[IDENTITY & MISSION]');
     expect(blocks[1]?.text).toContain('[VOICE');
-    expect(blocks[2]?.text).toContain('[RULES OF ENGAGEMENT]');
-    expect(blocks[3]?.text).toContain('[SITUATION]');
+    expect(blocks[2]?.text).toContain('[KNOWLEDGE]');
+    expect(blocks[2]?.text).toContain('Villa B3 has a private pool'); // injected block [3]
+    expect(blocks[3]?.text).toContain('[RULES OF ENGAGEMENT]');
+    expect(blocks[4]?.text).toContain('[SITUATION]');
   });
 
-  it('sets the cache breakpoint on the last STATIC block ([4]) only', () => {
+  it('sets the cache breakpoint on the last STATIC block ([4] RULES) only', () => {
     expect(blocks[0]?.cache_control).toBeUndefined();
     expect(blocks[1]?.cache_control).toBeUndefined();
-    expect(blocks[2]?.cache_control).toEqual({ type: 'ephemeral' });
+    expect(blocks[2]?.cache_control).toBeUndefined(); // [3] KNOWLEDGE caches via the [4] breakpoint
+    expect(blocks[3]?.cache_control).toEqual({ type: 'ephemeral' });
     // [6] SITUATION is dynamic — caching it would break the prefix every turn.
-    expect(blocks[3]?.cache_control).toBeUndefined();
+    expect(blocks[4]?.cache_control).toBeUndefined();
   });
 
-  it('carries the locked voice rules and the CH-05 tool pricing guard', () => {
+  it('carries the locked voice rules, the CH-05 tool guard, and the CH-06 knowledge rule', () => {
     const voice = blocks[1]?.text ?? '';
     expect(voice).toContain('No exclamation marks');
     expect(voice).toContain('British English');
     expect(voice).toContain('Is this a bot?');
     expect(voice).toContain('discount'); // banned-words guidance present
-    const rules = blocks[2]?.text ?? '';
+    const rules = blocks[3]?.text ?? '';
     // CH-05: tools now exist; ₹ figures must come from a tool result this turn.
     expect(rules).toContain('get_quote');
     expect(rules).toContain('only from a tool result in THIS turn');
     expect(rules).toContain('DATA'); // prompt-injection posture (guest + tool result)
+    // CH-06: KNOWLEDGE is the source of truth; never invent, never state a deposit.
+    expect(rules).toContain('[KNOWLEDGE] block above is your source of truth');
+    expect(rules).toContain('Never state a deposit amount');
   });
 
   it('renders the SITUATION with no unresolved placeholders (day and night)', () => {
@@ -86,7 +95,8 @@ describe('buildSystemPrompt', () => {
   });
 
   it("the static head clears Sonnet 4.5's 1024-token cache floor (chars/3.6 heuristic)", () => {
-    const head = (blocks[0]?.text ?? '') + (blocks[1]?.text ?? '') + (blocks[2]?.text ?? '');
+    // The cached prefix is blocks [1]+[2]+[3]+[4] (up to and incl. the breakpoint).
+    const head = (blocks[0]?.text ?? '') + (blocks[1]?.text ?? '') + (blocks[2]?.text ?? '') + (blocks[3]?.text ?? '');
     // Below the floor, cache_control silently no-ops on Sonnet 4.5 (§5.5).
     expect(head.length / 3.6).toBeGreaterThan(1024);
   });

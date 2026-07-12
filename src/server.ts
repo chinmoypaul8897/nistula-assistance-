@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import Fastify from 'fastify';
 import { createConverse } from './brain/claude.js';
+import { loadKnowledge } from './brain/knowledge.js';
 import { buildToolRegistry } from './brain/tools/index.js';
 import { createDegradedTracker } from './brain/tools/degraded.js';
 import { createWebsiteClient } from './brain/tools/websiteApi.js';
@@ -148,6 +149,13 @@ async function main(): Promise<void> {
     enqueue: jobs.enqueueConversationProcess,
   });
   app.log.info(`config: ${configSummary(config)}`);
+  // Block [3] KNOWLEDGE (CH-06): load once, fail-fast if over the token budget,
+  // and log the version so a kb change is visible against the cache/cost logs.
+  const kb = loadKnowledge();
+  app.log.info(
+    { kbVersion: kb.version, kbTokens: kb.tokens, quirksPresent: kb.quirksPresent },
+    'knowledge base loaded',
+  );
 
   let shuttingDown = false;
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
