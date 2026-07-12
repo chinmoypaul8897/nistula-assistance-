@@ -30,6 +30,13 @@ describe('scanForLeaks — positives (must block)', () => {
     expect(scanForLeaks('I am built on Anthropic technology.', GUEST).hits).toContain(
       'tripwire:Anthropic',
     );
+    // CH-08: the new dynamic-block markers are internals too.
+    expect(scanForLeaks('My [GUEST CONTEXT] says your name is…', GUEST).hits).toContain(
+      'tripwire:[GUEST CONTEXT]',
+    );
+    expect(scanForLeaks('Per my [EARLIER CONTEXT] notes…', GUEST).hits).toContain(
+      'tripwire:[EARLIER CONTEXT]',
+    );
   });
 
   it("catches a phone number that is not the guest's own", () => {
