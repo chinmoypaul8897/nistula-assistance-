@@ -21,6 +21,8 @@ import { costEventsFor, type ConverseUsage } from './cost.js';
 import { runGuardrails } from './guardrails.js';
 import { captionOf, locationTextOf } from './inbound.js';
 import { kbPriceWhitelist, loadKnowledge } from './knowledge.js';
+import type { EscalationReason } from './policy.js';
+import { classesFromContextKinds } from './promises.js';
 import { PHRASEBOOK, buildSituation, buildSystemPrompt, type SystemBlock } from './prompt.js';
 import { createHitRecorder } from './telemetry.js';
 import type { DegradedTracker } from './tools/degraded.js';
@@ -61,8 +63,9 @@ export interface TurnDeps {
 export interface TurnResult {
   text: string;
   toolRuns: ToolRun[];
-  /** True when guardrails deferred a price — the worker escalates to ops. */
-  escalate: boolean;
+  /** Non-null when the guardrails require an escalation this turn: a deferred
+   * price/promise, or a team-referral that must be MADE true (CH-07). */
+  escalate: EscalationReason | null;
 }
 
 type TurnMessage = { role: 'user' | 'assistant'; content: string | Anthropic.ContentBlockParam[] };
@@ -78,6 +81,10 @@ export interface TurnArgs {
   mustEscalate?: boolean;
   /** The batch carried media the model cannot view (mixed-batch note). */
   unviewableMedia?: boolean;
+  /** Guardrail-2 evidence window (§6.5 #2 "since the guest's previous
+   * message") — the worker passes the cursor row's time; null/absent means no
+   * previous message, so every claimable system row counts. */
+  evidenceSince?: Date | null;
 }
 
 /**
@@ -87,7 +94,22 @@ export interface TurnArgs {
  */
 export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<TurnResult> {
   const { conversation, dbNow, conversationId } = args;
-  const baseMessages = mapTranscript(await getRecentMessages(deps.db, conversationId));
+  const recent = await getRecentMessages(deps.db, conversationId);
+  const baseMessages = mapTranscript(recent);
+  // Guardrail-2 evidence (§6.5 #2's second channel): claimable system rows
+  // since the guest's previous message, from the SAME fetch as the transcript
+  // (mapTranscript skips system rows, so they are already in hand).
+  const since = args.evidenceSince ?? null;
+  const systemEvidence = classesFromContextKinds(
+    recent
+      .filter(
+        (m) =>
+          m.sender === 'system' &&
+          (since === null || m.createdAt.getTime() >= since.getTime()),
+      )
+      .map((m) => (m.raw as { contextKind?: string } | null)?.contextKind)
+      .filter((kind): kind is string => typeof kind === 'string'),
+  );
   const situation = buildSituation({
     now: dbNow,
     isNight: isNightIST(dbNow, deps.nightStart, deps.nightEnd),
@@ -148,13 +170,16 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
         conversationId,
         guestPhone: args.guestPhone,
       }),
+      // Guardrail 2 (CH-07): evidence + the §6.7 must-escalate assertion.
+      systemEvidence,
+      mustEscalate: args.mustEscalate ?? false,
     },
   );
 
   return {
     text: outcome.text,
     toolRuns: outcome.toolRuns,
-    escalate: outcome.action === 'defer',
+    escalate: outcome.escalate,
   };
 }
 

@@ -193,7 +193,7 @@ describe('runGuardrails — pipeline', () => {
     );
     expect(out.action).toBe('defer');
     if (out.action === 'defer') {
-      expect(out.escalate).toBe(true);
+      expect(out.escalate).toBe('price');
       expect(out.text).toBe(PHRASEBOOK.quoteApiDown);
       expect(out.text).not.toContain('99,000');
     }
@@ -247,5 +247,97 @@ describe('runGuardrails — pipeline', () => {
     );
     const actions = record.mock.calls.map(([hit]) => hit.action);
     expect(actions).toEqual(['regenerated', 'deferred']);
+  });
+});
+
+describe('runGuardrails — promise integrity in the pooled pipeline (CH-07)', () => {
+  const log = { info: vi.fn() };
+
+  it('an unbacked completed-action claim regenerates once with the corrective nudge', async () => {
+    const regenerate = vi.fn(async (nudge: string) => {
+      expect(nudge).toContain('claimed an action');
+      return { draft: 'I will pass this on to the team right away.', toolRuns: [] };
+    });
+    const out = await runGuardrails(
+      { draft: 'The team has been informed about the towels.', toolRuns: [] },
+      { regenerate, log },
+    );
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(out.action).toBe('send');
+    // The clean retry is a C3 referral — it escalates so the promise is true.
+    expect(out.escalate).toBe('referral');
+  });
+
+  it('a promise that fails twice defers with the team line and escalates as promise', async () => {
+    const regenerate = vi.fn(async () => ({
+      draft: 'Housekeeping is on their way to you now.',
+      toolRuns: [],
+    }));
+    const out = await runGuardrails(
+      { draft: 'Two towels on their way to Villa B3.', toolRuns: [] },
+      { regenerate, log },
+    );
+    expect(out.action).toBe('defer');
+    expect(out.text).toBe(PHRASEBOOK.outsideKnowledge);
+    expect(out.escalate).toBe('promise');
+  });
+
+  it('price + promise violations pool into ONE shared regenerate', async () => {
+    const regenerate = vi.fn(async (nudge: string) => {
+      expect(nudge).toContain('price');
+      expect(nudge).toContain('claimed an action');
+      return { draft: 'Let me confirm with the team.', toolRuns: [] };
+    });
+    const out = await runGuardrails(
+      { draft: 'It is ₹99,000 and the team has been informed.', toolRuns: [quoteRun] },
+      { regenerate, log },
+    );
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(out.action).toBe('send');
+  });
+
+  it('a price failure still wins the deferral line when both fail twice', async () => {
+    const regenerate = vi.fn(async () => ({
+      draft: 'Still ₹99,000 and the team knows.',
+      toolRuns: [quoteRun],
+    }));
+    const out = await runGuardrails(
+      { draft: 'A rate of ₹99,000 — the team has been informed.', toolRuns: [quoteRun] },
+      { regenerate, log },
+    );
+    expect(out.action).toBe('defer');
+    if (out.action === 'defer') {
+      expect(out.text).toBe(PHRASEBOOK.quoteApiDown);
+      expect(out.escalate).toBe('price');
+    }
+  });
+
+  it('a clean team referral sends AND escalates — never regenerates away from escalating', async () => {
+    const regenerate = vi.fn();
+    const out = await runGuardrails(
+      { draft: "That's one for the villa team — let me bring them in.", toolRuns: [] },
+      { regenerate, log },
+    );
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(out.action).toBe('send');
+    expect(out.escalate).toBe('referral');
+  });
+
+  it('a must_escalate turn never leaves without an escalation (§6.7 assertion)', async () => {
+    const out = await runGuardrails(
+      { draft: 'I am so sorry about the AC — bringing the team in now.', toolRuns: [] },
+      { regenerate: vi.fn(), log, mustEscalate: true },
+    );
+    expect(out.action).toBe('send');
+    expect(out.escalate).not.toBeNull();
+  });
+
+  it('system-row evidence from a prior escalation licenses the referral quietly', async () => {
+    const out = await runGuardrails(
+      { draft: 'The front desk will reply right here — I have looped them in.', toolRuns: [] },
+      { regenerate: vi.fn(), log, systemEvidence: new Set(['C3']) },
+    );
+    expect(out.action).toBe('send');
+    expect(out.escalate).toBeNull(); // already escalated — no fresh ping
   });
 });

@@ -118,6 +118,8 @@ export async function processConversation(
         guestPhone: ctx.guestPhone,
         mustEscalate: plan.mustEscalate,
         unviewableMedia: directive.flags.hasMedia,
+        // §6.5 #2 "since the guest's previous message" = the cursor row's time.
+        evidenceSince: cursor === null ? null : new Date(cursor.createdAtIso),
       })
     : null;
   const body = turn !== null ? turn.text : plan.send !== null ? PHRASEBOOK[plan.send] : null;
@@ -164,8 +166,10 @@ export async function processConversation(
     );
     // Escalation BEFORE the guest dispatch: a reply saying "bringing the team
     // in" must be true at guest-receipt time. Winning-claim path only, so a
-    // losing concurrent run never double-escalates (CH-05 precedent).
-    const reason = plan.escalate ?? (turn?.escalate === true ? 'price' : null);
+    // losing concurrent run never double-escalates (CH-05 precedent). The
+    // policy plan's reason wins over the guardrails' (a complaint that also
+    // deferred a price still pings ops exactly once).
+    const reason = plan.escalate ?? turn?.escalate ?? null;
     if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail);
     if (intentId !== null && body !== null) {
       await deps.wa.dispatchText({ messageId: intentId, toE164: ctx.guestPhone, body, conversationId });
@@ -186,6 +190,7 @@ const ESCALATION_SUMMARIES: Record<EscalationReason, string> = {
   media: 'A guest sent media the AI cannot view — the AI asked them to type it.',
   leak: 'A reply was blocked by the leak scan — please review the thread.',
   promise: 'A reply was blocked by promise integrity — please review the thread.',
+  referral: 'The AI told a guest the team will follow up — please pick up the thread.',
 };
 
 /**

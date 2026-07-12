@@ -186,7 +186,10 @@ export type EscalationReason =
   | 'complaint'
   | 'media'
   | 'leak'
-  | 'promise';
+  | 'promise'
+  // The model referred the guest to the team ("let me bring them in") with no
+  // escalation planned — the fix is to MAKE the referral true (guardrail 2).
+  | 'referral';
 
 /** Phrasebook KEY, not text — policy.ts stays a leaf that never imports
  * prompt.ts (CH-06 cycle lesson); the worker resolves key → PHRASEBOOK. */
