@@ -12,19 +12,17 @@
  */
 import type Anthropic from '@anthropic-ai/sdk';
 import type { Db } from '../db/client.js';
-import { getRecentMessages, insertCostEvents, type Conversation, type Message, type NewCostEvent } from '../db/repos.js';
+import { insertCostEvents, type Conversation, type NewCostEvent } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
-import { istCalendarDay, isNightIST } from '../lib/time.js';
+import { istCalendarDay } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
+import { buildTurnContext } from './contextBuilder.js';
 import { costEventsFor, type ConverseUsage } from './cost.js';
-import { isWindowOpen } from './draftGuards.js';
 import { runGuardrails } from './guardrails.js';
-import { captionOf, locationTextOf } from './inbound.js';
-import { kbPriceWhitelist, loadKnowledge } from './knowledge.js';
+import { kbPriceWhitelist } from './knowledge.js';
 import type { EscalationReason } from './policy.js';
-import { classesFromContextKinds } from './promises.js';
-import { PHRASEBOOK, buildSituation, buildSystemPrompt, type SystemBlock } from './prompt.js';
+import { PHRASEBOOK, type SystemBlock } from './prompt.js';
 import { createHitRecorder } from './telemetry.js';
 import type { DegradedTracker } from './tools/degraded.js';
 import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
@@ -101,37 +99,18 @@ export interface TurnArgs {
  * turn must escalate (price could not be validated).
  */
 export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<TurnResult> {
-  // args.conversation is currently unread (the window operand moved to the
-  // newest batch message) but stays on TurnArgs — CH-08's context builder
-  // consumes it (summary + profile blocks).
   const { dbNow, conversationId } = args;
-  const recent = await getRecentMessages(deps.db, conversationId);
-  const baseMessages = mapTranscript(recent);
-  // Guardrail-2 evidence (§6.5 #2's second channel): claimable system rows
-  // since the guest's previous message, from the SAME fetch as the transcript
-  // (mapTranscript skips system rows, so they are already in hand).
-  const since = args.evidenceSince ?? null;
-  const systemEvidence = classesFromContextKinds(
-    recent
-      .filter(
-        (m) =>
-          m.sender === 'system' &&
-          (since === null || m.createdAt.getTime() >= since.getTime()),
-      )
-      .map((m) => (m.raw as { contextKind?: string } | null)?.contextKind)
-      .filter((kind): kind is string => typeof kind === 'string'),
-  );
-  const isNight = isNightIST(dbNow, deps.nightStart, deps.nightEnd);
-  const situation = buildSituation({
-    now: dbNow,
-    isNight,
-    serviceWindowOpen: isWindowOpen(args.newestGuestMsgAt, dbNow),
-    degraded: deps.degraded.isDegraded(),
+  // Everything the model SEES is contextBuilder's job (CH-08 extraction):
+  // transcript, guardrail-2 evidence, [6] SITUATION and the system blocks.
+  const { system, baseMessages, systemEvidence, isNight } = await buildTurnContext(deps, {
+    conversation: args.conversation,
+    dbNow,
+    conversationId,
+    evidenceSince: args.evidenceSince ?? null,
+    newestGuestMsgAt: args.newestGuestMsgAt,
     mustEscalate: args.mustEscalate ?? false,
     unviewableMedia: args.unviewableMedia ?? false,
   });
-  // Block [3] KNOWLEDGE (CH-06) — compiled kb, memoised; rides the cached head.
-  const system = buildSystemPrompt(situation, loadKnowledge().knowledge);
   const tools = deps.toolRegistry.specs();
   const toolCtx: ToolContext = {
     website: deps.website,
@@ -308,40 +287,6 @@ async function runToolLoop(
 function nonEmptyOrDeferral(text: string): string {
   return text.trim() === '' ? PHRASEBOOK.outsideKnowledge : text;
 }
-
-/**
- * Maps stored messages to the Claude message array (CH-04, media-aware since
- * CH-07). guest→user, ai→assistant, human→assistant with "(Front desk)";
- * system rows skipped; a guest media message renders its CAPTION ("[image]
- * <caption>" — the caption is guest-typed text, §6.7 review finding) or a
- * location its place/coordinates; captionless media stays a [type]
- * placeholder; leading non-user turns dropped (Anthropic opens on user).
- */
-export function mapTranscript(msgs: Message[]): TurnMessage[] {
-  const mapped: TurnMessage[] = [];
-  for (const message of msgs) {
-    if (message.sender === 'system') continue;
-    if (message.sender === 'guest') {
-      mapped.push({ role: 'user', content: renderGuestContent(message) });
-    } else if (message.sender === 'human') {
-      mapped.push({ role: 'assistant', content: `(Front desk) ${message.body ?? `[${message.type}]`}` });
-    } else {
-      mapped.push({ role: 'assistant', content: message.body ?? `[${message.type}]` });
-    }
-  }
-  while (mapped.length > 0 && mapped[0]?.role !== 'user') mapped.shift();
-  return mapped;
-}
-
-function renderGuestContent(message: Message): string {
-  if (message.body !== null) return message.body;
-  const location = locationTextOf(message);
-  if (location !== null) return `[location] ${location}`;
-  const caption = captionOf(message);
-  if (caption !== null) return `[${message.type}] ${caption}`;
-  return `[${message.type}]`;
-}
-
 
 /** One cost_events row per non-zero token bucket, per round, stamped IST-day. */
 async function logCost(deps: Pick<TurnDeps, 'db' | 'log'>, now: Date, usage: ConverseUsage): Promise<void> {
