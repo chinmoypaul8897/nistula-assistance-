@@ -44,19 +44,22 @@ export function normaliseFactContent(content: string): string {
 /**
  * Naive similarity per the plan's letter ("naive normalised-string similarity
  * is fine"): equal or one-contains-other always match; the word-overlap arm
- * (|A∩B| / min ≥ 0.8) only fires when BOTH sides have ≥4 tokens, so short
- * facts must match exactly rather than colliding on one shared word.
+ * (|A∩B| / min ≥ 0.8) only fires when BOTH sides have ≥4 UNIQUE tokens, so
+ * short facts must match exactly rather than colliding on one shared word.
+ * Containment is TOKEN-BOUNDARY (audit fix): raw substring made 'loved villa
+ * B' swallow 'loved villa B3' — unit labels are this product's vocabulary,
+ * and a swallowed save is then C4-licensed as "on file" when it is not.
  */
 export function isSimilarFact(a: string, b: string): boolean {
   const na = normaliseFactContent(a);
   const nb = normaliseFactContent(b);
   if (na.length === 0 || nb.length === 0) return na === nb;
-  if (na === nb || na.includes(nb) || nb.includes(na)) return true;
-  const ta = na.split(' ');
-  const tb = nb.split(' ');
-  if (ta.length < 4 || tb.length < 4) return false;
-  const setA = new Set(ta);
-  const setB = new Set(tb);
+  if (na === nb || ` ${na} `.includes(` ${nb} `) || ` ${nb} `.includes(` ${na} `)) return true;
+  const setA = new Set(na.split(' '));
+  const setB = new Set(nb.split(' '));
+  // Audit fix: the floor counts UNIQUE tokens — an array-length floor let
+  // "tea tea tea tea" ride the overlap arm with a one-token set.
+  if (setA.size < 4 || setB.size < 4) return false;
   let shared = 0;
   for (const token of setA) if (setB.has(token)) shared += 1;
   return shared / Math.min(setA.size, setB.size) >= 0.8;
@@ -88,25 +91,30 @@ export async function insertGuestFactGuarded(
     .from(guestFacts)
     .where(eq(guestFacts.guestId, args.guestId));
   const excess = (counted?.count ?? 0) - (FACTS_PER_GUEST_CAP - 1);
-  if (excess > 0) {
-    await db.execute(sql`DELETE FROM ${guestFacts} WHERE ${guestFacts.id} IN (
-      SELECT ${guestFacts.id} FROM ${guestFacts}
-      WHERE ${guestFacts.guestId} = ${args.guestId}
-      ORDER BY (${guestFacts.expiresAt} IS NOT NULL AND ${guestFacts.expiresAt} <= now()) DESC,
-        ${KIND_EVICTION_PRIORITY} ASC, ${guestFacts.createdAt} ASC
-      LIMIT ${excess})`);
-  }
-
-  const [fact] = await db
-    .insert(guestFacts)
-    .values({
-      guestId: args.guestId,
-      kind: args.kind,
-      content: args.content,
-      sourceMessageId: args.sourceMessageId,
-    })
-    .returning();
-  if (fact === undefined) throw new Error('guest fact insert returned no row');
+  // Evict + insert in ONE tx (audit): atomicity is a different property from
+  // concurrency — a crash between the two must not lose evicted rows with no
+  // new fact landing.
+  const fact = await db.transaction(async (tx) => {
+    if (excess > 0) {
+      await tx.execute(sql`DELETE FROM ${guestFacts} WHERE ${guestFacts.id} IN (
+        SELECT ${guestFacts.id} FROM ${guestFacts}
+        WHERE ${guestFacts.guestId} = ${args.guestId}
+        ORDER BY (${guestFacts.expiresAt} IS NOT NULL AND ${guestFacts.expiresAt} <= now()) DESC,
+          ${KIND_EVICTION_PRIORITY} ASC, ${guestFacts.createdAt} ASC
+        LIMIT ${excess})`);
+    }
+    const [row] = await tx
+      .insert(guestFacts)
+      .values({
+        guestId: args.guestId,
+        kind: args.kind,
+        content: args.content,
+        sourceMessageId: args.sourceMessageId,
+      })
+      .returning();
+    if (row === undefined) throw new Error('guest fact insert returned no row');
+    return row;
+  });
   return { outcome: 'saved', fact };
 }
 

@@ -89,6 +89,17 @@ describe('normaliseFactContent / isSimilarFact', () => {
       isSimilarFact('prefers the corner room upstairs', 'travels with two young children'),
     ).toBe(false);
   });
+
+  it('containment is token-boundary — villa labels never swallow each other (audit fix)', () => {
+    expect(isSimilarFact('loved villa B', 'loved villa B3')).toBe(false);
+    expect(isSimilarFact('likes room 1', 'likes room 12')).toBe(false);
+    // ...while genuine token-prefix containment still dedupes.
+    expect(isSimilarFact('loves tea', 'loves tea at 5pm every day')).toBe(true);
+  });
+
+  it('the overlap floor counts UNIQUE tokens — repeats cannot ride it (audit fix)', () => {
+    expect(isSimilarFact('tea tea tea tea', 'tea coffee milk sugar biscuits')).toBe(false);
+  });
 });
 
 describe('insertGuestFactGuarded', () => {
