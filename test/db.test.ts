@@ -136,6 +136,21 @@ describe('schema integrity', () => {
     expect(read?.processed).toBe(false);
   });
 
+  it("accepts the 'system' source for internal telemetry rows (CH-07)", async () => {
+    const inserted = await insertRawEvent(db, {
+      source: 'system',
+      eventType: 'guardrail',
+      payload: { rule: 'negotiation_lock', action: 'substituted' },
+      processed: true, // telemetry must never join CH-18b's processed=false re-drive set
+    });
+    const [read] = await db
+      .select()
+      .from(schema.rawEvents)
+      .where(sql`${schema.rawEvents.id} = ${inserted.id}`);
+    expect(read?.source).toBe('system');
+    expect(read?.processed).toBe(true);
+  });
+
   it('rejects values outside the pg enums', async () => {
     const text = await rejectionText(
       db.execute(

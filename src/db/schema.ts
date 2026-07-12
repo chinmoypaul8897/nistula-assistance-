@@ -54,7 +54,11 @@ export const messageStatusEnum = pgEnum('message_status', [
   'read',
   'failed',
 ]);
-export const rawEventSourceEnum = pgEnum('raw_event_source', ['whatsapp', 'ezee']);
+// 'system' (CH-07, Paul-approved §4 deviation) marks rows WE emit — guardrail
+// and policy telemetry now, CH-16's weekly quality report later. event_type
+// discriminates ('guardrail' | 'policy' | …). Appended at the END: mid-list
+// insertion makes drizzle-kit emit ADD VALUE BEFORE or a type recreate.
+export const rawEventSourceEnum = pgEnum('raw_event_source', ['whatsapp', 'ezee', 'system']);
 // §4 lists four kinds; `anthropic_cache_write` is a CH-04 addition (Paul-approved)
 // so CH-17's meter can separate the 1.25x cache-write premium from base input.
 export const costEventKindEnum = pgEnum('cost_event_kind', [
