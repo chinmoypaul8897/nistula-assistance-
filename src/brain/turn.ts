@@ -20,7 +20,7 @@ import type { ConverseFn } from './claude.js';
 import { buildTurnContext } from './contextBuilder.js';
 import { costEventsFor, type ConverseUsage } from './cost.js';
 import { runGuardrails } from './guardrails.js';
-import { kbPriceWhitelist } from './knowledge.js';
+import type { LoadedKnowledge } from './knowledge.js';
 import type { EscalationReason } from './policy.js';
 import { PHRASEBOOK, type SystemBlock } from './prompt.js';
 import { createHitRecorder } from './telemetry.js';
@@ -55,6 +55,9 @@ export interface TurnDeps {
   website: WebsiteClient;
   websiteBaseUrl: string;
   degraded: DegradedTracker;
+  /** Block [3] + the guardrail-1 fee whitelist, injected at boot (CH-08 —
+   * closes the CH-06 loadKnowledge()-singleton residual; tests inject fakes). */
+  knowledge: LoadedKnowledge;
   nightStart: string;
   nightEnd: string;
 }
@@ -155,7 +158,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       // §6.5 guardrail-1 exemption: the ₹ fees published in kb/policies.md, each
       // bound to its own fee context — so "an extra adult is ₹1,500" may be sent
       // without a tool call, while "Villa B3 is ₹1,500 per night" still cannot.
-      whitelist: kbPriceWhitelist(),
+      whitelist: deps.knowledge.whitelist,
       // CH-07 step 4: every hit persists to raw_events for the weekly review.
       record: createHitRecorder(deps.db, deps.log, {
         conversationId,

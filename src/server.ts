@@ -128,6 +128,9 @@ async function main(): Promise<void> {
   const website = createWebsiteClient({ baseUrl: config.websiteBaseUrl, log: app.log });
   const degraded = createDegradedTracker({ log: app.log });
   const toolRegistry = buildToolRegistry();
+  // Block [3] KNOWLEDGE (CH-06): load once, fail-fast if over the token budget
+  // — BEFORE registerJobs since CH-08 threads it through the worker deps.
+  const kb = loadKnowledge();
   const jobs = await registerJobs({
     boss,
     db,
@@ -138,6 +141,7 @@ async function main(): Promise<void> {
     website,
     websiteBaseUrl: config.websiteBaseUrl,
     degraded,
+    knowledge: kb,
     opsNumbers: config.opsNumbers,
     nightStart: config.nightStart,
     nightEnd: config.nightEnd,
@@ -149,9 +153,7 @@ async function main(): Promise<void> {
     enqueue: jobs.enqueueConversationProcess,
   });
   app.log.info(`config: ${configSummary(config)}`);
-  // Block [3] KNOWLEDGE (CH-06): load once, fail-fast if over the token budget,
-  // and log the version so a kb change is visible against the cache/cost logs.
-  const kb = loadKnowledge();
+  // Log the kb version so a kb change is visible against the cache/cost logs.
   app.log.info(
     { kbVersion: kb.version, kbTokens: kb.tokens, quirksPresent: kb.quirksPresent },
     'knowledge base loaded',

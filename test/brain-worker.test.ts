@@ -13,7 +13,7 @@ import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import type { ConverseFn, ConverseInput } from '../src/brain/claude.js';
 import { DEBOUNCE_WINDOWS } from '../src/brain/debounce.js';
-import { kbPriceWhitelist } from '../src/brain/knowledge.js';
+import { kbPriceWhitelist, loadKnowledge } from '../src/brain/knowledge.js';
 import { PHRASEBOOK } from '../src/brain/prompt.js';
 import { processConversation, type WorkerDeps } from '../src/brain/worker.js';
 import {
@@ -151,6 +151,10 @@ describe('processConversation — the debounced Claude turn', () => {
     await seedGuestMessage(db, conversation.id, 'villa free?', 22);
     const newest = await seedGuestMessage(db, conversation.id, '20 dec', 20);
     const { deps, graphCalls, enqueued, converseCalls } = makeRig();
+    // THE real-kb seam case (CH-08): every other test injects fakeKnowledge();
+    // this one threads the actual loadKnowledge() so the compiled-kb assertions
+    // below keep proving the boot wiring, not just the injection mechanics.
+    deps.knowledge = loadKnowledge();
 
     await processConversation(deps, conversation.id);
 
@@ -422,6 +426,7 @@ describe('processConversation — the debounced Claude turn', () => {
     const allowed = await seedConversation(db, '+917700900046');
     await seedGuestMessage(db, allowed.conversation.id, 'what do you charge for an extra adult?', 20);
     const rigA = makeRig();
+    rigA.deps.knowledge = loadKnowledge(); // the REAL whitelist is the subject here
     // unusedWebsite() throws if called — proving the reply needs NO live quote.
     rigA.deps.converse = async () => textResult(`An extra adult is ₹${amount} per night.`, MOCK_USAGE);
     await processConversation(rigA.deps, allowed.conversation.id);
@@ -436,6 +441,7 @@ describe('processConversation — the debounced Claude turn', () => {
     const blocked = await seedConversation(db, '+917700900047');
     await seedGuestMessage(db, blocked.conversation.id, 'what is B3 per night?', 20);
     const rigB = makeRig();
+    rigB.deps.knowledge = loadKnowledge();
     // Same amount, but claimed as a room rate with no tool result behind it.
     rigB.deps.converse = async () => textResult(`Villa B3 is ₹${amount} per night.`, MOCK_USAGE);
     await processConversation(rigB.deps, blocked.conversation.id);

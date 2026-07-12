@@ -8,6 +8,7 @@
 import { PgBoss } from 'pg-boss';
 import type { ConverseFn } from '../brain/claude.js';
 import { DEBOUNCE_WINDOWS, type DebounceWindows } from '../brain/debounce.js';
+import type { LoadedKnowledge } from '../brain/knowledge.js';
 import { createRateWindow, type RateWindow } from '../brain/policy.js';
 import type { DegradedTracker } from '../brain/tools/degraded.js';
 import type { ToolRegistry } from '../brain/tools/registry.js';
@@ -125,6 +126,9 @@ export interface JobsDeps {
   website: WebsiteClient;
   websiteBaseUrl: string;
   degraded: DegradedTracker;
+  /** Block [3] + fee whitelist (CH-08): boot passes loadKnowledge(); tests
+   * inject a fake — REQUIRED so no worker path can fall back to disk reads. */
+  knowledge: LoadedKnowledge;
   /** OPS_NUMBERS (E.164) for the interim price escalation; default none. */
   opsNumbers?: string[];
   /** Config NIGHT_START/NIGHT_END for the SITUATION block; default 20:00/10:00. */
@@ -162,6 +166,7 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     website: deps.website,
     websiteBaseUrl: deps.websiteBaseUrl,
     degraded: deps.degraded,
+    knowledge: deps.knowledge,
     opsNumbers: deps.opsNumbers ?? [],
     rateWindow: deps.rateWindow ?? createRateWindow(),
     nightStart: deps.nightStart ?? '20:00',

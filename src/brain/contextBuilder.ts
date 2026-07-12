@@ -13,7 +13,7 @@ import { getRecentMessages, type Conversation, type Message } from '../db/repos.
 import { isNightIST } from '../lib/time.js';
 import { isWindowOpen } from './draftGuards.js';
 import { captionOf, locationTextOf } from './inbound.js';
-import { loadKnowledge } from './knowledge.js';
+import type { LoadedKnowledge } from './knowledge.js';
 import { classesFromContextKinds, type ClaimClass } from './promises.js';
 import { buildSituation, buildSystemPrompt, type SystemBlock } from './prompt.js';
 import type { DegradedTracker } from './tools/degraded.js';
@@ -24,6 +24,10 @@ export type TurnMessage = { role: 'user' | 'assistant'; content: string | Anthro
  * straight through — structural subset, no import cycle). */
 export interface ContextBuilderDeps {
   db: Db;
+  /** Block [3] KNOWLEDGE + the guardrail fee whitelist — THREADED, never read
+   * via the module-level loadKnowledge() singleton (the CH-06 residual this
+   * chunk closes: tests inject a fake; boot injects the real load). */
+  knowledge: LoadedKnowledge;
   degraded: DegradedTracker;
   nightStart: string;
   nightEnd: string;
@@ -85,8 +89,8 @@ export async function buildTurnContext(
     mustEscalate: args.mustEscalate,
     unviewableMedia: args.unviewableMedia,
   });
-  // Block [3] KNOWLEDGE (CH-06) — compiled kb, memoised; rides the cached head.
-  const system = buildSystemPrompt(situation, loadKnowledge().knowledge);
+  // Block [3] KNOWLEDGE (CH-06) — compiled kb, injected; rides the cached head.
+  const system = buildSystemPrompt(situation, deps.knowledge.knowledge);
   return { system, baseMessages, systemEvidence, isNight };
 }
 
