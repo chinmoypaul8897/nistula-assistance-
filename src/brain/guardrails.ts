@@ -23,6 +23,7 @@ import {
   MAX_REPLY_CHARS,
   trimAtSentence,
 } from './draftGuards.js';
+import { scanForLeaks } from './leakGuards.js';
 import type { EscalationReason } from './policy.js';
 import { applyNegotiationLock, checkPriceIntegrity } from './priceGuards.js';
 import { scanPromises, type ClaimClass } from './promises.js';
@@ -61,6 +62,10 @@ export interface GuardrailDeps {
   mustEscalate?: boolean;
   /** Guardrail 5 trigger: the inbound batch asked "are you a bot?". */
   botQuestion?: boolean;
+  /** Guardrail 7: the guest's own E.164 — the ONLY phone a draft may contain. */
+  guestPhone?: string;
+  /** Night flag — the leak-scan substitution uses §6.2b's after-hours variant. */
+  isNight?: boolean;
 }
 
 export type GuardrailOutcome =
@@ -238,6 +243,25 @@ async function finalize(evaluation: Evaluation, deps: GuardrailDeps): Promise<Gu
       };
     }
     if (deps.botQuestion === true && !containsIdentityLine(text)) text = PHRASEBOOK.isBot;
+  }
+  // Guardrail 7 — LAST, on the final outgoing text (§6.5 #7): block + alert,
+  // no regenerate. The substituted team line escalates, so its promise is true.
+  const leak = scanForLeaks(text, deps.guestPhone ?? '');
+  if (!leak.ok) {
+    deps.log.info({ guardrail: 'leak_scan', hits: leak.hits }, 'draft blocked — leak detected');
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'leak_scan',
+      action: 'blocked',
+      draft: text,
+      details: { hits: leak.hits },
+    });
+    return {
+      action: 'defer',
+      text: deps.isNight === true ? PHRASEBOOK.outsideKnowledgeNight : PHRASEBOOK.outsideKnowledge,
+      toolRuns: evaluation.toolRuns,
+      escalate: 'leak',
+    };
   }
   const escalate = evaluation.referral || deps.mustEscalate === true ? 'referral' : null;
   return { action: 'send', text, toolRuns: evaluation.toolRuns, escalate };

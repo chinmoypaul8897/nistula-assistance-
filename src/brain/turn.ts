@@ -121,9 +121,10 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       .map((m) => (m.raw as { contextKind?: string } | null)?.contextKind)
       .filter((kind): kind is string => typeof kind === 'string'),
   );
+  const isNight = isNightIST(dbNow, deps.nightStart, deps.nightEnd);
   const situation = buildSituation({
     now: dbNow,
-    isNight: isNightIST(dbNow, deps.nightStart, deps.nightEnd),
+    isNight,
     serviceWindowOpen: isWindowOpen(args.newestGuestMsgAt, dbNow),
     degraded: deps.degraded.isDegraded(),
     mustEscalate: args.mustEscalate ?? false,
@@ -186,6 +187,9 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       mustEscalate: args.mustEscalate ?? false,
       // Guardrail 5 (CH-07): the policy pass's inbound bot-question flag.
       botQuestion: args.botQuestion ?? false,
+      // Guardrail 7 (CH-07): self-exemption + the after-hours substitution.
+      guestPhone: args.guestPhone,
+      isNight,
     },
   );
 
