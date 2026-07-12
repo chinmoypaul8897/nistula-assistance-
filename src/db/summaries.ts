@@ -71,6 +71,22 @@ export async function countUncoveredMessages(
   return [...rows][0]?.n ?? 0;
 }
 
+/** The summariser's view of a conversation: the stored notes + the RAW cursor
+ * value (dangling or not — the CAS compares against what is stored). */
+export async function getConversationMemory(
+  db: Db,
+  conversationId: string,
+): Promise<{ summary: string | null; summaryUptoMessageId: string | null } | null> {
+  const [row] = await db
+    .select({
+      summary: conversations.summary,
+      summaryUptoMessageId: conversations.summaryUptoMessageId,
+    })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId));
+  return row ?? null;
+}
+
 /**
  * The summariser's input range: every message (ANY sender — the cursor must
  * advance over system rows too, or a system-only stretch would re-qualify
@@ -150,7 +166,9 @@ export async function applyConversationSummary(
     conversationId: string;
     expectedPointer: string | null;
     newPointer: string;
-    summary: string;
+    /** Null preserves "no notes yet" when only the cursor advances (a
+     * system-only stretch — the summariser's model-free path). */
+    summary: string | null;
   },
 ): Promise<boolean> {
   const rows = await db

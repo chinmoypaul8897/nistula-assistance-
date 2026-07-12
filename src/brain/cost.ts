@@ -3,7 +3,16 @@
  * by design: list prices are hardcoded per MODEL_ID and INR/USD is a flat
  * constant — the goal is a daily cost signal (CH-17), not an invoice.
  * If MODEL_ID changes, update MODEL_PRICES_USD_PER_MTOK below.
+ * KNOWN (CH-08, for CH-17): the summariser may run on MODEL_ID_LIGHT, but
+ * rows are still priced at the sonnet table — a cheaper light model logs
+ * OVERSTATED INR concentrated in the nightly batch. Today MODEL_ID_LIGHT is
+ * unset (falls back to MODEL_ID), so estimates are exact; make the table
+ * per-model when a light model actually lands.
  */
+import type { Db } from '../db/client.js';
+import { insertCostEvents, type NewCostEvent } from '../db/repos.js';
+import { summarizeError } from '../lib/logger.js';
+import { istCalendarDay } from '../lib/time.js';
 
 /** Flat conversion — real rate drifts; a fixed constant keeps estimates stable. */
 export const INR_PER_USD = 90;
@@ -69,4 +78,24 @@ export function costEventsFor(usage: ConverseUsage): CostRow[] {
     });
   }
   return rows;
+}
+
+/**
+ * One cost_events row per non-zero token bucket, stamped IST-day. Best-effort
+ * by contract: telemetry must never block (or fail) a reply or a summarise —
+ * a failed insert logs a warning and nothing else. (Hoisted from turn.ts in
+ * CH-08 so the turn loop and the summariser share one write path.)
+ */
+export async function recordUsage(
+  deps: { db: Db; log: { warn: (obj: Record<string, unknown>, msg?: string) => void } },
+  now: Date,
+  usage: ConverseUsage,
+): Promise<void> {
+  try {
+    const day = istCalendarDay(now);
+    const rows: NewCostEvent[] = costEventsFor(usage).map((row) => ({ day, ...row }));
+    await insertCostEvents(deps.db, rows);
+  } catch (error) {
+    deps.log.warn({ err: summarizeError(error) }, 'cost_events insert failed (telemetry only)');
+  }
 }

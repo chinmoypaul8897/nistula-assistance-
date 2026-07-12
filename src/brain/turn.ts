@@ -12,13 +12,12 @@
  */
 import type Anthropic from '@anthropic-ai/sdk';
 import type { Db } from '../db/client.js';
-import { insertCostEvents, type Conversation, type NewCostEvent } from '../db/repos.js';
+import type { Conversation } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
-import { istCalendarDay } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
 import { buildTurnContext, type TranscriptOverflow } from './contextBuilder.js';
-import { costEventsFor, type ConverseUsage } from './cost.js';
+import { recordUsage } from './cost.js';
 import { runGuardrails } from './guardrails.js';
 import type { LoadedKnowledge } from './knowledge.js';
 import type { EscalationReason } from './policy.js';
@@ -243,7 +242,7 @@ async function runToolLoop(
       throw error; // pre-claim (D2/§6.6): pg-boss retry then the sweeper recover
     }
 
-    await logCost(deps, args.dbNow, result.usage);
+    await recordUsage(deps, args.dbNow, result.usage);
     // Token counts only (§3.3). cacheRead > 0 from round ≥2 proves the static
     // head caches even with the tool specs now in the prefix (§5.5).
     deps.log.info(
@@ -302,13 +301,3 @@ function nonEmptyOrDeferral(text: string): string {
   return text.trim() === '' ? PHRASEBOOK.outsideKnowledge : text;
 }
 
-/** One cost_events row per non-zero token bucket, per round, stamped IST-day. */
-async function logCost(deps: Pick<TurnDeps, 'db' | 'log'>, now: Date, usage: ConverseUsage): Promise<void> {
-  try {
-    const day = istCalendarDay(now);
-    const rows: NewCostEvent[] = costEventsFor(usage).map((row) => ({ day, ...row }));
-    await insertCostEvents(deps.db, rows);
-  } catch (error) {
-    deps.log.warn({ err: summarizeError(error) }, 'cost_events insert failed (telemetry only)');
-  }
-}

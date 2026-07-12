@@ -111,14 +111,8 @@ export async function buildTurnContext(
   const { dbNow, conversationId } = args;
   const fetched = await getRecentMessages(deps.db, conversationId, TRANSCRIPT_FETCH_LIMIT);
 
-  // The summary block spends from the same §6.2 envelope as the messages —
-  // net budget keeps "rolling summary + last ~30" ≤ ~6k as one unit.
   const summaryBlock = buildSummaryBlock(args.conversation.summary);
-  const budget = Math.max(
-    MIN_MESSAGE_BUDGET,
-    TRANSCRIPT_TOKEN_BUDGET - (summaryBlock === null ? 0 : estimateTokens(summaryBlock)),
-  );
-  const plan = planWindow(fetched, budget);
+  const plan = planWindow(fetched, transcriptBudgetFor(args.conversation.summary));
   const baseMessages = mapTranscript(plan.window);
 
   // Guardrail-2 evidence (§6.5 #2's second channel) — its OWN indexed query,
@@ -150,6 +144,21 @@ export async function buildTurnContext(
     isNight,
     overflow: { trimmedByTokens: plan.trimmedByTokens, uncoveredCount },
   };
+}
+
+/**
+ * The message-token budget NET of the rendered summary block — the summary
+ * spends from the same §6.2 envelope ("rolling summary + last ~30 messages"),
+ * so the two together stay ≤ ~6k. ONE computation, shared by the live turn
+ * and the summariser's boundary walk (the coverage invariant depends on both
+ * sides drawing the window identically).
+ */
+export function transcriptBudgetFor(summary: string | null): number {
+  const block = buildSummaryBlock(summary);
+  return Math.max(
+    MIN_MESSAGE_BUDGET,
+    TRANSCRIPT_TOKEN_BUDGET - (block === null ? 0 : estimateTokens(block)),
+  );
 }
 
 interface WindowPlan {
