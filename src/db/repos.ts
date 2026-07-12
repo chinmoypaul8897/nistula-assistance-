@@ -178,12 +178,25 @@ export async function insertCostEvents(db: Db, rows: NewCostEvent[]): Promise<vo
   await db.insert(costEvents).values(rows);
 }
 
+export type ConversationStatus = Conversation['status'];
+
+export interface ClaimResult {
+  claimed: boolean;
+  /** The post-claim status (null when the claim lost). CH-07's once-only
+   * cool-off line gates on this: announce only when it equals the requested
+   * transition's `to`. */
+  status: ConversationStatus | null;
+}
+
 /**
  * The optimistic turn claim (CH-03 decision D2): pointer + window columns in
- * ONE guarded UPDATE. Zero rows means a concurrent run claimed past our read
- * — the caller must NOT send. DbLike: commits in the same transaction as the
- * send-intent row. Window columns derive from the newest guest MESSAGE time,
- * never now() — a sweeper-recovered run must not fabricate a fresh window.
+ * ONE guarded UPDATE. `claimed: false` means a concurrent run claimed past our
+ * read — the caller must NOT send. DbLike: commits in the same transaction as
+ * the send-intent row. Window columns derive from the newest guest MESSAGE
+ * time, never now() — a sweeper-recovered run must not fabricate a fresh
+ * window. CH-07's optional statusTransition rides the SAME statement as a
+ * guarded CASE — a separate status write would reopen the concurrency race,
+ * and the guard means a cool-off flip can never clobber human_active (CH-14).
  */
 export async function claimConversationTurn(
   db: DbLike,
@@ -192,14 +205,21 @@ export async function claimConversationTurn(
     expectedPointer: string | null;
     newPointer: string;
     lastGuestMsgAt: Date;
+    statusTransition?: { from: ConversationStatus; to: ConversationStatus };
   },
-): Promise<boolean> {
+): Promise<ClaimResult> {
+  const transition = args.statusTransition;
   const rows = await db
     .update(conversations)
     .set({
       lastProcessedMessageId: args.newPointer,
       lastGuestMsgAt: args.lastGuestMsgAt,
       serviceWindowExpiresAt: new Date(args.lastGuestMsgAt.getTime() + 24 * 60 * 60 * 1000),
+      ...(transition === undefined
+        ? {}
+        : {
+            status: sql`CASE WHEN ${conversations.status} = ${transition.from}::conversation_status THEN ${transition.to}::conversation_status ELSE ${conversations.status} END`,
+          }),
     })
     .where(
       and(
@@ -209,8 +229,9 @@ export async function claimConversationTurn(
           : eq(conversations.lastProcessedMessageId, args.expectedPointer),
       ),
     )
-    .returning({ id: conversations.id });
-  return rows.length > 0;
+    .returning({ id: conversations.id, status: conversations.status });
+  const row = rows[0];
+  return row === undefined ? { claimed: false, status: null } : { claimed: true, status: row.status };
 }
 
 /**

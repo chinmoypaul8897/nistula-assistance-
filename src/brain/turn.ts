@@ -18,9 +18,14 @@ import { istCalendarDay, isNightIST } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
 import { costEventsFor, type ConverseUsage } from './cost.js';
+import { isWindowOpen } from './draftGuards.js';
 import { runGuardrails } from './guardrails.js';
+import { captionOf, locationTextOf } from './inbound.js';
 import { kbPriceWhitelist, loadKnowledge } from './knowledge.js';
+import type { EscalationReason } from './policy.js';
+import { classesFromContextKinds } from './promises.js';
 import { PHRASEBOOK, buildSituation, buildSystemPrompt, type SystemBlock } from './prompt.js';
+import { createHitRecorder } from './telemetry.js';
 import type { DegradedTracker } from './tools/degraded.js';
 import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
 import type { WebsiteClient } from './tools/websiteApi.js';
@@ -59,29 +64,71 @@ export interface TurnDeps {
 export interface TurnResult {
   text: string;
   toolRuns: ToolRun[];
-  /** True when guardrails deferred a price — the worker escalates to ops. */
-  escalate: boolean;
+  /** Non-null when the guardrails require an escalation this turn: a deferred
+   * price/promise, or a team-referral that must be MADE true (CH-07). */
+  escalate: EscalationReason | null;
 }
 
 type TurnMessage = { role: 'user' | 'assistant'; content: string | Anthropic.ContentBlockParam[] };
+
+/** Per-turn identity/context — grows with CH-07's policy + guardrail inputs. */
+export interface TurnArgs {
+  conversation: Conversation;
+  dbNow: Date;
+  conversationId: string;
+  /** The guest's E.164 — telemetry scrub key + leak-scan self-exemption. */
+  guestPhone: string;
+  /** §6.7 complaint flow: rendered into block [6] (worker sets it). */
+  mustEscalate?: boolean;
+  /** The batch carried media the model cannot view (mixed-batch note). */
+  unviewableMedia?: boolean;
+  /** Guardrail-2 evidence window (§6.5 #2 "since the guest's previous
+   * message") — the worker passes the cursor row's time; null/absent means no
+   * previous message, so every claimable system row counts. */
+  evidenceSince?: Date | null;
+  /** The newest batch message's time — the 24h-window operand. WHY not the
+   * conversation column: it is refreshed inside the claim, so pre-claim it
+   * describes the PREVIOUS turn and a returning guest would read as closed
+   * (review finding — the old buildSituation had this staleness bug). */
+  newestGuestMsgAt: Date;
+  /** Guardrail 5 trigger from the policy pass (CH-07 step 3). */
+  botQuestion?: boolean;
+}
 
 /**
  * Builds the prompt + transcript and runs the tool loop, then the guardrail
  * pipeline. Returns the final reply text + the tool-run audit + whether the
  * turn must escalate (price could not be validated).
  */
-export async function runClaudeTurn(
-  deps: TurnDeps,
-  conversation: Conversation,
-  dbNow: Date,
-  conversationId: string,
-): Promise<TurnResult> {
-  const baseMessages = mapTranscript(await getRecentMessages(deps.db, conversationId));
+export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<TurnResult> {
+  // args.conversation is currently unread (the window operand moved to the
+  // newest batch message) but stays on TurnArgs — CH-08's context builder
+  // consumes it (summary + profile blocks).
+  const { dbNow, conversationId } = args;
+  const recent = await getRecentMessages(deps.db, conversationId);
+  const baseMessages = mapTranscript(recent);
+  // Guardrail-2 evidence (§6.5 #2's second channel): claimable system rows
+  // since the guest's previous message, from the SAME fetch as the transcript
+  // (mapTranscript skips system rows, so they are already in hand).
+  const since = args.evidenceSince ?? null;
+  const systemEvidence = classesFromContextKinds(
+    recent
+      .filter(
+        (m) =>
+          m.sender === 'system' &&
+          (since === null || m.createdAt.getTime() >= since.getTime()),
+      )
+      .map((m) => (m.raw as { contextKind?: string } | null)?.contextKind)
+      .filter((kind): kind is string => typeof kind === 'string'),
+  );
+  const isNight = isNightIST(dbNow, deps.nightStart, deps.nightEnd);
   const situation = buildSituation({
     now: dbNow,
-    isNight: isNightIST(dbNow, deps.nightStart, deps.nightEnd),
-    serviceWindowOpen: isServiceWindowOpen(conversation.serviceWindowExpiresAt, dbNow),
+    isNight,
+    serviceWindowOpen: isWindowOpen(args.newestGuestMsgAt, dbNow),
     degraded: deps.degraded.isDegraded(),
+    mustEscalate: args.mustEscalate ?? false,
+    unviewableMedia: args.unviewableMedia ?? false,
   });
   // Block [3] KNOWLEDGE (CH-06) — compiled kb, memoised; rides the cached head.
   const system = buildSystemPrompt(situation, loadKnowledge().knowledge);
@@ -130,13 +177,26 @@ export async function runClaudeTurn(
       // bound to its own fee context — so "an extra adult is ₹1,500" may be sent
       // without a tool call, while "Villa B3 is ₹1,500 per night" still cannot.
       whitelist: kbPriceWhitelist(),
+      // CH-07 step 4: every hit persists to raw_events for the weekly review.
+      record: createHitRecorder(deps.db, deps.log, {
+        conversationId,
+        guestPhone: args.guestPhone,
+      }),
+      // Guardrail 2 (CH-07): evidence + the §6.7 must-escalate assertion.
+      systemEvidence,
+      mustEscalate: args.mustEscalate ?? false,
+      // Guardrail 5 (CH-07): the policy pass's inbound bot-question flag.
+      botQuestion: args.botQuestion ?? false,
+      // Guardrail 7 (CH-07): self-exemption + the after-hours substitution.
+      guestPhone: args.guestPhone,
+      isNight,
     },
   );
 
   return {
     text: outcome.text,
     toolRuns: outcome.toolRuns,
-    escalate: outcome.action === 'defer',
+    escalate: outcome.escalate,
   };
 }
 
@@ -250,30 +310,38 @@ function nonEmptyOrDeferral(text: string): string {
 }
 
 /**
- * Maps stored messages to the Claude message array (CH-04). guest→user,
- * ai→assistant, human→assistant with "(Front desk)"; system rows skipped; null
- * bodies → [type]; leading non-user turns dropped (Anthropic opens on user).
+ * Maps stored messages to the Claude message array (CH-04, media-aware since
+ * CH-07). guest→user, ai→assistant, human→assistant with "(Front desk)";
+ * system rows skipped; a guest media message renders its CAPTION ("[image]
+ * <caption>" — the caption is guest-typed text, §6.7 review finding) or a
+ * location its place/coordinates; captionless media stays a [type]
+ * placeholder; leading non-user turns dropped (Anthropic opens on user).
  */
 export function mapTranscript(msgs: Message[]): TurnMessage[] {
   const mapped: TurnMessage[] = [];
   for (const message of msgs) {
     if (message.sender === 'system') continue;
-    const content = message.body ?? `[${message.type}]`;
     if (message.sender === 'guest') {
-      mapped.push({ role: 'user', content });
+      mapped.push({ role: 'user', content: renderGuestContent(message) });
     } else if (message.sender === 'human') {
-      mapped.push({ role: 'assistant', content: `(Front desk) ${content}` });
+      mapped.push({ role: 'assistant', content: `(Front desk) ${message.body ?? `[${message.type}]`}` });
     } else {
-      mapped.push({ role: 'assistant', content });
+      mapped.push({ role: 'assistant', content: message.body ?? `[${message.type}]` });
     }
   }
   while (mapped.length > 0 && mapped[0]?.role !== 'user') mapped.shift();
   return mapped;
 }
 
-function isServiceWindowOpen(expiresAt: Date | null, now: Date): boolean {
-  return expiresAt !== null && now.getTime() < expiresAt.getTime();
+function renderGuestContent(message: Message): string {
+  if (message.body !== null) return message.body;
+  const location = locationTextOf(message);
+  if (location !== null) return `[location] ${location}`;
+  const caption = captionOf(message);
+  if (caption !== null) return `[${message.type}] ${caption}`;
+  return `[${message.type}]`;
 }
+
 
 /** One cost_events row per non-zero token bucket, per round, stamped IST-day. */
 async function logCost(deps: Pick<TurnDeps, 'db' | 'log'>, now: Date, usage: ConverseUsage): Promise<void> {

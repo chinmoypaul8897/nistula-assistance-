@@ -8,6 +8,7 @@
 import { PgBoss } from 'pg-boss';
 import type { ConverseFn } from '../brain/claude.js';
 import { DEBOUNCE_WINDOWS, type DebounceWindows } from '../brain/debounce.js';
+import { createRateWindow, type RateWindow } from '../brain/policy.js';
 import type { DegradedTracker } from '../brain/tools/degraded.js';
 import type { ToolRegistry } from '../brain/tools/registry.js';
 import type { WebsiteClient } from '../brain/tools/websiteApi.js';
@@ -133,6 +134,8 @@ export interface JobsDeps {
   windows?: DebounceWindows;
   /** Tests lower this to the 0.5s floor; default 2s. */
   pollingIntervalSeconds?: number;
+  /** §3.3 rate window (CH-07) — one per process; tests may inject their own. */
+  rateWindow?: RateWindow;
 }
 
 export interface Jobs {
@@ -160,6 +163,7 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     websiteBaseUrl: deps.websiteBaseUrl,
     degraded: deps.degraded,
     opsNumbers: deps.opsNumbers ?? [],
+    rateWindow: deps.rateWindow ?? createRateWindow(),
     nightStart: deps.nightStart ?? '20:00',
     nightEnd: deps.nightEnd ?? '10:00',
     enqueue,

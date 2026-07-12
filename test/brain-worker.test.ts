@@ -112,7 +112,7 @@ function makeRig(httpImpl?: WaClientDeps['httpImpl']) {
   return { deps, graphCalls, enqueued, log, converseCalls };
 }
 
-async function outbound(conversationId: string) {
+async function outbound(conversationId: string, sender?: 'ai' | 'system') {
   return db
     .select()
     .from(schema.messages)
@@ -120,8 +120,20 @@ async function outbound(conversationId: string) {
       and(
         eq(schema.messages.conversationId, conversationId),
         eq(schema.messages.direction, 'out'),
+        sender === undefined ? undefined : eq(schema.messages.sender, sender),
       ),
     );
+}
+
+/** raw_events policy/guardrail telemetry rows for one conversation (CH-07). */
+async function telemetryRows(conversationId: string) {
+  const rows = await db
+    .select()
+    .from(schema.rawEvents)
+    .where(eq(schema.rawEvents.source, 'system'));
+  return rows.filter(
+    (r) => (r.payload as { conversationId?: string }).conversationId === conversationId,
+  );
 }
 
 async function conversationRow(id: string) {
@@ -263,17 +275,23 @@ describe('processConversation — the debounced Claude turn', () => {
     expect(rig.enqueued.map((e) => e.conversationId)).toEqual([conversation.id]);
   });
 
-  it('null-body media becomes a [type] placeholder IN THE TRANSCRIPT and still advances the pointer', async () => {
+  it('null-body media in a MIXED batch stays a [type] placeholder in the transcript (media-only now falls back per §6.7)', async () => {
     const { conversation } = await seedConversation(db, '+917700900036');
-    const message = await seedGuestMessage(db, conversation.id, null, 20, 'unsupported');
+    await seedGuestMessage(db, conversation.id, null, 22, 'unsupported');
+    const message = await seedGuestMessage(db, conversation.id, 'did you get that?', 20);
     const { deps, converseCalls } = makeRig();
 
     await processConversation(deps, conversation.id);
 
     const out = await outbound(conversation.id);
-    // The reply is the model's; the placeholder now lives in what Claude saw.
+    // The reply is the model's; the placeholder lives in what Claude saw, and
+    // the situation block flags the unviewable media.
     expect(out[0]?.body).toBe(MOCK_REPLY);
-    expect(converseCalls[0]?.messages).toEqual([{ role: 'user', content: '[unsupported]' }]);
+    expect(converseCalls[0]?.messages).toEqual([
+      { role: 'user', content: '[unsupported]' },
+      { role: 'user', content: 'did you get that?' },
+    ]);
+    expect((converseCalls[0]?.system ?? []).at(-1)?.text).toContain('attached media');
     expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
   });
 
@@ -422,10 +440,14 @@ describe('processConversation — the debounced Claude turn', () => {
     rigB.deps.converse = async () => textResult(`Villa B3 is ₹${amount} per night.`, MOCK_USAGE);
     await processConversation(rigB.deps, blocked.conversation.id);
 
-    const deferred = await outbound(blocked.conversation.id);
+    const deferred = await outbound(blocked.conversation.id, 'ai');
     expect(deferred).toHaveLength(1);
     expect(deferred[0]?.body).toBe(PHRASEBOOK.quoteApiDown); // regenerated, still bad → deferred
     expect(deferred[0]?.body).not.toContain(amount); // the fabricated rate never reaches the guest
+    // The price escalation leaves the claimable evidence row (CH-07).
+    const evidence = await outbound(blocked.conversation.id, 'system');
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]?.raw).toMatchObject({ contextKind: 'ops_escalation', reason: 'price' });
   });
 
   it('runs the tool loop: get_quote result feeds a second round; the reply row carries raw.toolRuns', async () => {
@@ -495,6 +517,187 @@ describe('processConversation — the debounced Claude turn', () => {
   });
 });
 
+describe('CH-07 policy directives through the worker (§6.7)', () => {
+  it('HUMAN_REQUEST skips the model, sends the phrasebook line, escalates, records', async () => {
+    const { conversation } = await seedConversation(db, '+917700900051');
+    await seedGuestMessage(db, conversation.id, 'I want to talk to a human please', 20);
+    const { deps, converseCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    expect(converseCalls).toHaveLength(0); // §6.7: skip model
+    const sent = await outbound(conversation.id, 'ai');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toBe(PHRASEBOOK.humanRequest);
+    // Claimable evidence row + policy telemetry.
+    const evidence = await outbound(conversation.id, 'system');
+    expect(evidence[0]?.raw).toMatchObject({ contextKind: 'ops_escalation', reason: 'human_request' });
+    const hits = await telemetryRows(conversation.id);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.eventType).toBe('policy');
+    expect(hits[0]?.payload).toMatchObject({ rule: 'human_request', action: 'routed' });
+    expect(hits[0]?.processed).toBe(true);
+  });
+
+  it('COOL_OFF: one polite line on the edge, store-only after, restore when the window clears', async () => {
+    const { conversation } = await seedConversation(db, '+917700900052');
+    for (let i = 0; i < 21; i++) await seedGuestMessage(db, conversation.id, `msg ${i}`, 20);
+    const rig = makeRig();
+
+    await processConversation(rig.deps, conversation.id);
+
+    // The 21-message burst crosses §3.3's limit: ONE cool-off line, no model.
+    expect(rig.converseCalls).toHaveLength(0);
+    const afterBurst = await outbound(conversation.id, 'ai');
+    expect(afterBurst).toHaveLength(1);
+    expect(afterBurst[0]?.body).toBe(PHRASEBOOK.coolOff);
+    expect((await conversationRow(conversation.id))?.status).toBe('cooloff');
+    expect(rig.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ opsAlert: 'rate_limit_cooloff' }),
+      expect.stringContaining('[OPS-ALERT]'),
+    );
+    // cool_off telemetry recorded ONCE, on the transition.
+    const hits = await telemetryRows(conversation.id);
+    expect(hits.map((h) => (h.payload as { rule: string }).rule)).toEqual(['cool_off']);
+
+    // Still over-limit: store-only — no second line, cursor still advances.
+    const extra = await seedGuestMessage(db, conversation.id, 'and another thing', 18);
+    await processConversation(rig.deps, conversation.id);
+    expect(await outbound(conversation.id, 'ai')).toHaveLength(1);
+    expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(extra.id);
+    expect(await telemetryRows(conversation.id)).toHaveLength(1); // still once
+
+    // Window cleared (restart semantics: a fresh in-memory window): the next
+    // message restores ai_active in the same claim and gets a normal reply.
+    const fresh = makeRig();
+    await seedGuestMessage(db, conversation.id, 'sorry — is the villa free?', 16);
+    await processConversation(fresh.deps, conversation.id);
+    expect(fresh.converseCalls).toHaveLength(1);
+    expect((await conversationRow(conversation.id))?.status).toBe('ai_active');
+    const finalOut = await outbound(conversation.id, 'ai');
+    expect(finalOut).toHaveLength(2);
+    expect(finalOut.at(-1)?.body).toBe(MOCK_REPLY);
+  });
+
+  it('MEDIA_FALLBACK: a captionless photo gets the §6.7 line, no model, ops notified', async () => {
+    const { conversation } = await seedConversation(db, '+917700900053');
+    await seedGuestMessage(db, conversation.id, null, 20, 'image', { image: { id: 'm-1' } });
+    const { deps, converseCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    expect(converseCalls).toHaveLength(0);
+    const sent = await outbound(conversation.id, 'ai');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).toBe(PHRASEBOOK.mediaFallback);
+    const evidence = await outbound(conversation.id, 'system');
+    expect(evidence[0]?.raw).toMatchObject({ contextKind: 'ops_escalation', reason: 'media' });
+  });
+
+  it('a CAPTIONED photo routes to the model and renders "[image] <caption>" (review finding)', async () => {
+    const { conversation } = await seedConversation(db, '+917700900054');
+    await seedGuestMessage(db, conversation.id, null, 20, 'image', {
+      image: { id: 'm-2', caption: 'what time is checkout?' },
+    });
+    const { deps, converseCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    expect(converseCalls).toHaveLength(1);
+    expect(converseCalls[0]?.messages).toEqual([
+      { role: 'user', content: '[image] what time is checkout?' },
+    ]);
+    expect((await outbound(conversation.id, 'ai'))[0]?.body).toBe(MOCK_REPLY);
+  });
+
+  it('a shared location reaches the model as place + coordinates (§6.7)', async () => {
+    const { conversation } = await seedConversation(db, '+917700900055');
+    await seedGuestMessage(db, conversation.id, null, 20, 'location', {
+      location: { latitude: 15.5934, longitude: 73.7546, name: 'Assagao Market' },
+    });
+    const { deps, converseCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    expect(converseCalls[0]?.messages).toEqual([
+      { role: 'user', content: '[location] Assagao Market (15.5934, 73.7546)' },
+    ]);
+  });
+
+  it('COMPLAINT_SUSPECT runs the model with the must-escalate situation line and escalates', async () => {
+    const { conversation } = await seedConversation(db, '+917700900056');
+    await seedGuestMessage(db, conversation.id, 'the AC is broken, worst night ever', 20);
+    const { deps, converseCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    expect(converseCalls).toHaveLength(1);
+    const situation = (converseCalls[0]?.system ?? []).at(-1)?.text ?? '';
+    expect(situation).toContain('The guest appears unhappy');
+    // The reply still goes out; the escalation happened before dispatch.
+    expect((await outbound(conversation.id, 'ai'))[0]?.body).toBe(MOCK_REPLY);
+    const evidence = await outbound(conversation.id, 'system');
+    expect(evidence[0]?.raw).toMatchObject({ contextKind: 'ops_escalation', reason: 'complaint' });
+    const hits = await telemetryRows(conversation.id);
+    expect(hits[0]?.payload).toMatchObject({ rule: 'complaint_suspect' });
+  });
+
+  it('guardrail 4: a >24h-old batch (sweeper recovery) is blocked, recorded, cursor advanced', async () => {
+    const { conversation } = await seedConversation(db, '+917700900058');
+    const message = await seedGuestMessage(db, conversation.id, 'anyone there?', 25 * 60 * 60);
+    const { deps, log } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    // No send at all — free-form outside the window is illegal (§5.3); the
+    // turn is consumed so the sweeper cannot re-block forever.
+    expect(await outbound(conversation.id)).toHaveLength(0);
+    expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ opsAlert: 'window_closed_blocked' }),
+      expect.stringContaining('[OPS-ALERT]'),
+    );
+    const hits = await telemetryRows(conversation.id);
+    expect(hits.some((h) => (h.payload as { rule: string }).rule === 'window')).toBe(true);
+  });
+
+  it('REGRESSION: a returning guest reads as INSIDE the window (stale-column bug)', async () => {
+    const { conversation } = await seedConversation(db, '+917700900059');
+    // The conversation's stored window expired days ago — the pre-CH-07 code
+    // fed this stale column to the model ("the window has closed").
+    await db
+      .update(schema.conversations)
+      .set({ serviceWindowExpiresAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
+      .where(eq(schema.conversations.id, conversation.id));
+    await seedGuestMessage(db, conversation.id, 'hello again, back for December', 20);
+    const { deps, converseCalls, graphCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    // The fresh message re-opened the window: the reply flows AND the model is
+    // told the window is open (derived from the newest batch message).
+    expect(graphCalls).toHaveLength(1);
+    const situation = (converseCalls[0]?.system ?? []).at(-1)?.text ?? '';
+    expect(situation).toContain('within the 24-hour reply window');
+  });
+
+  it('HUMAN_ACTIVE (TTL set) is store-only: cursor advances, nothing sent, no model', async () => {
+    const { conversation } = await seedConversation(db, '+917700900057');
+    await db
+      .update(schema.conversations)
+      .set({ humanActiveUntil: new Date(Date.now() + 60 * 60 * 1000) })
+      .where(eq(schema.conversations.id, conversation.id));
+    const message = await seedGuestMessage(db, conversation.id, 'thanks, tell the front desk', 20);
+    const { deps, converseCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    expect(converseCalls).toHaveLength(0);
+    expect(await outbound(conversation.id)).toHaveLength(0);
+    expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
+  });
+});
+
 describe('claim + cursor repositories (the D2 primitives)', () => {
   it('claimConversationTurn is optimistic: stale expectations claim nothing', async () => {
     const { conversation } = await seedConversation(db, '+917700900038');
@@ -507,7 +710,7 @@ describe('claim + cursor repositories (the D2 primitives)', () => {
       newPointer: first.id,
       lastGuestMsgAt: first.createdAt,
     });
-    expect(win).toBe(true);
+    expect(win).toEqual({ claimed: true, status: 'ai_active' });
     // A run that read pointer=null before the claim above lands must lose.
     const stale = await claimConversationTurn(db, {
       conversationId: conversation.id,
@@ -515,14 +718,48 @@ describe('claim + cursor repositories (the D2 primitives)', () => {
       newPointer: second.id,
       lastGuestMsgAt: second.createdAt,
     });
-    expect(stale).toBe(false);
+    expect(stale).toEqual({ claimed: false, status: null });
     const fresh = await claimConversationTurn(db, {
       conversationId: conversation.id,
       expectedPointer: first.id,
       newPointer: second.id,
       lastGuestMsgAt: second.createdAt,
     });
-    expect(fresh).toBe(true);
+    expect(fresh.claimed).toBe(true);
+  });
+
+  it('the claim status CASE flips ONLY from its declared from-state (CH-07)', async () => {
+    const { conversation } = await seedConversation(db, '+917700900048');
+    const first = await seedGuestMessage(db, conversation.id, 'one', 10);
+    // ai_active → cooloff flips…
+    const enter = await claimConversationTurn(db, {
+      conversationId: conversation.id,
+      expectedPointer: null,
+      newPointer: first.id,
+      lastGuestMsgAt: first.createdAt,
+      statusTransition: { from: 'ai_active', to: 'cooloff' },
+    });
+    expect(enter).toEqual({ claimed: true, status: 'cooloff' });
+    // …but a transition whose from-state does not match leaves status alone
+    // (this is what protects a CH-14 human_active from a cool-off clobber).
+    const second = await seedGuestMessage(db, conversation.id, 'two', 5);
+    const mismatch = await claimConversationTurn(db, {
+      conversationId: conversation.id,
+      expectedPointer: first.id,
+      newPointer: second.id,
+      lastGuestMsgAt: second.createdAt,
+      statusTransition: { from: 'ai_active', to: 'cooloff' },
+    });
+    expect(mismatch).toEqual({ claimed: true, status: 'cooloff' }); // unchanged, claim still won
+    const third = await seedGuestMessage(db, conversation.id, 'three', 2);
+    const restore = await claimConversationTurn(db, {
+      conversationId: conversation.id,
+      expectedPointer: second.id,
+      newPointer: third.id,
+      lastGuestMsgAt: third.createdAt,
+      statusTransition: { from: 'cooloff', to: 'ai_active' },
+    });
+    expect(restore).toEqual({ claimed: true, status: 'ai_active' });
   });
 
   it('resolveMessageCursor: null pointer, live pointer, dangling pointer', async () => {

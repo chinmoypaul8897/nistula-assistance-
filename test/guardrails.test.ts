@@ -124,6 +124,21 @@ describe('guardrail 1 — the kb fee exemption is context-bound', () => {
     expect(checkPriceIntegrity('Villa C3 is ₹10,000 per night.', [], withDeposit).ok).toBe(false);
   });
 
+  it('the exemption is SENTENCE-scoped on the draft: a co-occurring fee sentence licenses nothing elsewhere (post-build audit)', () => {
+    const withDeposit = extractKbFees('A refundable security deposit of ₹10,000 is collected at check-in.');
+    // The two-sentence launder: sentence 1 legitimately names the fee, sentence 2
+    // claims the SAME figure as a nightly rate. A draft-wide cue match passed
+    // this; the sentence-scoped exemption must not.
+    const laundering =
+      'The security deposit is ₹10,000, fully refundable. Villa C3 itself is ₹10,000 per night.';
+    expect(checkPriceIntegrity(laundering, [], withDeposit).ok).toBe(false);
+    // Same shape with the real shipped fees.
+    const shipped = kbPriceWhitelist();
+    const launderingFee =
+      'The extra adult charge is ₹1,500 per night. And Villa B3 itself is just ₹1,500 per night.';
+    expect(checkPriceIntegrity(launderingFee, [], shipped).ok).toBe(false);
+  });
+
   it('never exempts a figure whose sentence names no fee (fail-closed)', () => {
     // A ₹ figure with no fee subject gets no cues, so nothing can license it.
     expect(extractKbFees('The villa costs ₹18,000.')).toEqual([]);
@@ -193,7 +208,7 @@ describe('runGuardrails — pipeline', () => {
     );
     expect(out.action).toBe('defer');
     if (out.action === 'defer') {
-      expect(out.escalate).toBe(true);
+      expect(out.escalate).toBe('price');
       expect(out.text).toBe(PHRASEBOOK.quoteApiDown);
       expect(out.text).not.toContain('99,000');
     }
@@ -209,5 +224,218 @@ describe('runGuardrails — pipeline', () => {
     expect(out.action).toBe('send');
     if (out.action === 'send') expect(out.text).toBe(PHRASEBOOK.discountAsk);
     expect(regenerate).not.toHaveBeenCalled();
+  });
+
+  it('records every hit for the weekly review — and nothing on a clean pass (CH-07)', async () => {
+    const record = vi.fn<(hit: { rule: string; action: string }) => Promise<void>>(
+      async () => {},
+    );
+    // Clean pass: zero telemetry rows.
+    await runGuardrails(
+      { draft: '₹34,000 for the two nights.', toolRuns: [quoteRun] },
+      { regenerate: vi.fn(), log, record },
+    );
+    expect(record).not.toHaveBeenCalled();
+
+    // Negotiation substitution records the ORIGINAL draft.
+    await runGuardrails(
+      { draft: 'A special offer for you.', toolRuns: [] },
+      { regenerate: vi.fn(), log, record },
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rule: 'negotiation_lock',
+        action: 'substituted',
+        draft: 'A special offer for you.',
+      }),
+    );
+
+    // Two-strike price failure records regenerated then deferred.
+    record.mockClear();
+    await runGuardrails(
+      { draft: 'A rate of ₹99,000.', toolRuns: [quoteRun] },
+      {
+        regenerate: vi.fn(async () => ({ draft: 'Still ₹99,000.', toolRuns: [quoteRun] })),
+        log,
+        record,
+      },
+    );
+    const actions = record.mock.calls.map(([hit]) => hit.action);
+    expect(actions).toEqual(['regenerated', 'deferred']);
+  });
+});
+
+describe('runGuardrails — promise integrity in the pooled pipeline (CH-07)', () => {
+  const log = { info: vi.fn() };
+
+  it('an unbacked completed-action claim regenerates once with the corrective nudge', async () => {
+    const regenerate = vi.fn(async (nudge: string) => {
+      expect(nudge).toContain('claimed an action');
+      return { draft: 'I will pass this on to the team right away.', toolRuns: [] };
+    });
+    const out = await runGuardrails(
+      { draft: 'The team has been informed about the towels.', toolRuns: [] },
+      { regenerate, log },
+    );
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(out.action).toBe('send');
+    // The clean retry is a C3 referral — it escalates so the promise is true.
+    expect(out.escalate).toBe('referral');
+  });
+
+  it('a promise that fails twice defers with the team line and escalates as promise', async () => {
+    const regenerate = vi.fn(async () => ({
+      draft: 'Housekeeping is on their way to you now.',
+      toolRuns: [],
+    }));
+    const out = await runGuardrails(
+      { draft: 'Two towels on their way to Villa B3.', toolRuns: [] },
+      { regenerate, log },
+    );
+    expect(out.action).toBe('defer');
+    expect(out.text).toBe(PHRASEBOOK.outsideKnowledge);
+    expect(out.escalate).toBe('promise');
+  });
+
+  it('price + promise violations pool into ONE shared regenerate', async () => {
+    const regenerate = vi.fn(async (nudge: string) => {
+      expect(nudge).toContain('price');
+      expect(nudge).toContain('claimed an action');
+      return { draft: 'Let me confirm with the team.', toolRuns: [] };
+    });
+    const out = await runGuardrails(
+      { draft: 'It is ₹99,000 and the team has been informed.', toolRuns: [quoteRun] },
+      { regenerate, log },
+    );
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(out.action).toBe('send');
+  });
+
+  it('a price failure still wins the deferral line when both fail twice', async () => {
+    const regenerate = vi.fn(async () => ({
+      draft: 'Still ₹99,000 and the team knows.',
+      toolRuns: [quoteRun],
+    }));
+    const out = await runGuardrails(
+      { draft: 'A rate of ₹99,000 — the team has been informed.', toolRuns: [quoteRun] },
+      { regenerate, log },
+    );
+    expect(out.action).toBe('defer');
+    if (out.action === 'defer') {
+      expect(out.text).toBe(PHRASEBOOK.quoteApiDown);
+      expect(out.escalate).toBe('price');
+    }
+  });
+
+  it('a clean team referral sends AND escalates — never regenerates away from escalating', async () => {
+    const regenerate = vi.fn();
+    const out = await runGuardrails(
+      { draft: "That's one for the villa team — let me bring them in.", toolRuns: [] },
+      { regenerate, log },
+    );
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(out.action).toBe('send');
+    expect(out.escalate).toBe('referral');
+  });
+
+  it('a must_escalate turn never leaves without an escalation (§6.7 assertion)', async () => {
+    const out = await runGuardrails(
+      { draft: 'I am so sorry about the AC — bringing the team in now.', toolRuns: [] },
+      { regenerate: vi.fn(), log, mustEscalate: true },
+    );
+    expect(out.action).toBe('send');
+    expect(out.escalate).not.toBeNull();
+  });
+
+  it('system-row evidence from a prior escalation licenses the referral quietly', async () => {
+    const out = await runGuardrails(
+      { draft: 'The front desk will reply right here — I have looped them in.', toolRuns: [] },
+      { regenerate: vi.fn(), log, systemEvidence: new Set(['C3']) },
+    );
+    expect(out.action).toBe('send');
+    expect(out.escalate).toBeNull(); // already escalated — no fresh ping
+  });
+});
+
+describe('runGuardrails — identity and format in the pooled pipeline (CH-07)', () => {
+  const log = { info: vi.fn() };
+
+  it('a bot-question turn with the approved line present sends untouched', async () => {
+    const draft = `${PHRASEBOOK.isBot} Now — which dates were you thinking of?`;
+    const out = await runGuardrails(
+      { draft, toolRuns: [] },
+      { regenerate: vi.fn(), log, botQuestion: true },
+    );
+    expect(out.action).toBe('send');
+    if (out.action === 'send') expect(out.text).toBe(draft);
+  });
+
+  it('a paraphrased identity answer regenerates, then substitutes the approved line', async () => {
+    const regenerate = vi.fn(async (nudge: string) => {
+      expect(nudge).toContain('approved line');
+      return { draft: 'I am just a friendly helper, no need to worry.', toolRuns: [] };
+    });
+    const out = await runGuardrails(
+      { draft: 'I am an assistant of sorts, yes.', toolRuns: [] },
+      { regenerate, log, botQuestion: true },
+    );
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(out.action).toBe('send');
+    if (out.action === 'send') expect(out.text).toBe(PHRASEBOOK.isBot);
+  });
+
+  it('defer WINS over an identity substitution when money also fails twice', async () => {
+    const regenerate = vi.fn(async () => ({ draft: 'Still ₹99,000, trust me.', toolRuns: [] }));
+    const out = await runGuardrails(
+      { draft: 'It is ₹99,000 for you my friend.', toolRuns: [] },
+      { regenerate, log, botQuestion: true },
+    );
+    expect(out.action).toBe('defer');
+    if (out.action === 'defer') expect(out.text).toBe(PHRASEBOOK.quoteApiDown);
+  });
+
+  it('an over-length draft regenerates with the shorter nudge, then trims at a sentence', async () => {
+    const long = `${'A lovely detail about the villa. '.repeat(40)}`;
+    const regenerate = vi.fn(async (nudge: string) => {
+      expect(nudge).toContain('too long');
+      return { draft: long, toolRuns: [] }; // the model refuses to shorten
+    });
+    const out = await runGuardrails({ draft: long, toolRuns: [] }, { regenerate, log });
+    expect(out.action).toBe('send');
+    if (out.action === 'send') {
+      expect(out.text.length).toBeLessThanOrEqual(900);
+      expect(out.text.endsWith('.')).toBe(true);
+    }
+  });
+
+  it('the deterministic clamp fixes headers/exclamations on an otherwise clean draft', async () => {
+    const out = await runGuardrails(
+      { draft: '## Your stay\nAll set for December!', toolRuns: [] },
+      { regenerate: vi.fn(), log },
+    );
+    expect(out.action).toBe('send');
+    if (out.action === 'send') expect(out.text).toBe('Your stay\nAll set for December.');
+  });
+
+  it('the length trim cannot cut the identity line off the tail (post-build audit)', async () => {
+    // The model twice answers a bot question with a >900-char draft ENDING in
+    // the approved line — the trim cuts it off; the forced re-check must
+    // substitute the approved line rather than ship without it (§6.5 #5).
+    const long = `${'A lovely detail about the villa. '.repeat(40)}${PHRASEBOOK.isBot}`;
+    const regenerate = vi.fn(async () => ({ draft: long, toolRuns: [] }));
+    const out = await runGuardrails({ draft: long, toolRuns: [] }, { regenerate, log, botQuestion: true });
+    expect(out.action).toBe('send');
+    if (out.action === 'send') expect(out.text).toBe(PHRASEBOOK.isBot);
+  });
+
+  it('bullet spam has a deterministic backstop when the model refuses to reformat', async () => {
+    const bullets = Array.from({ length: 8 }, (_, i) => `- villa point ${i}`).join('\n');
+    const regenerate = vi.fn(async () => ({ draft: bullets, toolRuns: [] }));
+    const out = await runGuardrails({ draft: bullets, toolRuns: [] }, { regenerate, log });
+    expect(out.action).toBe('send');
+    if (out.action === 'send') {
+      expect(out.text).not.toMatch(/^\s*-\s+/m); // markers collapsed
+      expect(out.text).toContain('villa point 0'); // content preserved
+    }
   });
 });

@@ -1,133 +1,43 @@
 /**
- * Guardrail pipeline v1 (plan.md §6.5, CH-05 step 5). Runs AFTER the model
- * produces a draft, BEFORE any send — the last line of defence that a nudged or
- * mistaken model cannot smuggle a fake price or a negotiation offer past. CH-05
- * ships guardrails 1 (price integrity) and 3 (negotiation lock); 2 and 4–7 land
- * in CH-07.
+ * Guardrail pipeline (plan.md §6.5). Runs AFTER the model produces a draft,
+ * BEFORE any send — the last line of defence that a nudged or mistaken model
+ * cannot smuggle a fake price, a false promise or a negotiation offer past.
+ * CH-05 shipped guardrails 1 (price) and 3 (negotiation); CH-07 completes
+ * 2 (promises), 5 (identity), 6 (length/format) here — 4 (window) gates every
+ * send in the worker, 7 (leak scan) runs last via leakGuards.
  *
- * The extract/check functions are PURE and unit-tested hard (§6.5). The pipeline
- * `runGuardrails` orchestrates: negotiation-lock rewrite → price check →
- * regenerate ONCE on a price violation → still failing ⇒ defer + escalate,
- * never send the hallucinated figure.
+ * Pipeline shape (CH-07 review decisions): negotiation substitution first,
+ * then price + promise + identity + length evaluated TOGETHER with ONE shared
+ * regenerate carrying a combined nudge. Still failing ⇒ price/promise defer
+ * (defer WINS over an identity substitution — safety over answering), identity
+ * substitutes the approved line, length trims at a sentence boundary. The
+ * deterministic format clamp runs on the FINAL text, and any mutation re-runs
+ * the pure checks (a clamp could otherwise orphan a fee figure from its cue).
+ * Check implementations live in leaf modules (priceGuards, promises,
+ * draftGuards, rupees) so this file stays the orchestrator under ~300 lines.
  */
+import {
+  applyFormatClamp,
+  bulletLineCount,
+  containsIdentityLine,
+  MAX_REPLY_CHARS,
+  trimAtSentence,
+} from './draftGuards.js';
+import { scanForLeaks } from './leakGuards.js';
+import type { EscalationReason } from './policy.js';
+import { applyNegotiationLock, checkPriceIntegrity } from './priceGuards.js';
+import { scanPromises, type ClaimClass } from './promises.js';
 import { PHRASEBOOK } from './prompt.js';
 import { extractRupeeAmounts, type KbFee } from './rupees.js';
+import type { RecordHit } from './telemetry.js';
 import type { ToolRun } from './tools/registry.js';
 
-// The ₹-amount extractor moved to rupees.ts in CH-06 so knowledge.ts can share
-// it without an import cycle (§ rupees.ts header). Re-exported here to keep the
-// public import path (`extractRupeeAmounts` from guardrails.js) that CH-05 tests
-// and callers already use.
+// Public check API — implementations live in leaf modules; the re-exports keep
+// the import path CH-05 tests and callers already use.
+export { applyNegotiationLock, backedAmounts, checkPriceIntegrity } from './priceGuards.js';
+export type { NegotiationLockResult, PriceIntegrityResult } from './priceGuards.js';
+export { scanPromises } from './promises.js';
 export { extractRupeeAmounts };
-
-/** Every numeric value anywhere inside a successful tool result's data. A
- * fractional tool figure (e.g. averagePerNight = total/nights) is stored as
- * BOTH its floor and its round so a draft that floors OR rounds it still
- * matches — toInt on the draft side always yields an integer, so the backed
- * side must offer integer forms too (review finding: decimal asymmetry would
- * escalate a valid quote as an outage). */
-function collectNumbers(value: unknown, into: Set<number>): void {
-  if (typeof value === 'number') {
-    if (Number.isFinite(value)) {
-      into.add(Math.trunc(value));
-      into.add(Math.round(value));
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectNumbers(item, into);
-    return;
-  }
-  if (value !== null && typeof value === 'object') {
-    for (const item of Object.values(value)) collectNumbers(item, into);
-  }
-}
-
-/** Every number returned by a successful tool this turn — the only figures a
- * draft may state freely. The kb fee whitelist is handled separately, because it
- * is context-BOUND (see feeExempt) rather than a flat set. */
-export function backedAmounts(toolRuns: ToolRun[]): Set<number> {
-  const allowed = new Set<number>();
-  for (const run of toolRuns) {
-    if (run.result.ok) collectNumbers(run.result.data, allowed);
-  }
-  return allowed;
-}
-
-/**
- * The kb EXEMPTION (§6.5 guardrail 1), context-bound: a published fee figure may
- * be stated without a tool result ONLY in its own fee context — the draft must
- * name the thing the fee is for ("an extra adult is ₹1,500"). It can therefore
- * never launder a fabricated stay price ("Villa B3 is ₹1,500 per night"), which
- * is §6.5's second clause: stay and per-night figures still come from tool JSON.
- */
-function feeExempt(amount: number, draft: string, fees: KbFee[]): boolean {
-  const lower = draft.toLowerCase();
-  return fees.some((fee) => fee.amount === amount && fee.cues.some((cue) => lower.includes(cue)));
-}
-
-export interface PriceIntegrityResult {
-  ok: boolean;
-  /** Amounts in the draft with no backing tool figure — the violation set. */
-  unbacked: number[];
-}
-
-/**
- * Guardrail 1: every ₹ amount in the draft must appear (as an integer, ignoring
- * ₹/comma/space formatting) in this turn's tool results — or be a published kb
- * fee stated in its own fee context. A draft with no ₹ passes trivially.
- */
-export function checkPriceIntegrity(
-  draft: string,
-  toolRuns: ToolRun[],
-  whitelist: KbFee[] = [],
-): PriceIntegrityResult {
-  const allowed = backedAmounts(toolRuns);
-  const unbacked = extractRupeeAmounts(draft).filter(
-    (n) => !allowed.has(n) && !feeExempt(n, draft, whitelist),
-  );
-  return { ok: unbacked.length === 0, unbacked };
-}
-
-// Negotiation / bargaining language (§6.5 guardrail 3). Word-boundary, case-
-// insensitive. WHY NOT a bare /\boffer\b/: the voice guide bans "offer" ONLY in
-// the negotiation sense — "the villa offers a private pool" / "we offer
-// breakfast" is permitted hospitality copy the block [4] rules even prime the
-// model to write ("offer the nearest alternative"). A bare match would nuke
-// those clean replies into the discount line (review finding). Bargain-y noun
-// offers ("special/limited/festive offer") stay caught below; a verb bargain
-// ("offer a discount / a lower price") is caught by discount/deal/price terms.
-const NEGOTIATION = [
-  /\bdiscount(s|ed|ing)?\b/i,
-  /\bdeal(s)?\b/i,
-  /\b(special|limited|exclusive|festive|seasonal)\s+offers?\b/i,
-  /\bbargain(s|ed|ing)?\b/i,
-  /\bnegotiat(e|ed|ing|ion)?\b/i,
-  /\bconcession(s)?\b/i,
-  /\b(lower|better|special|best)\s+price\b/i,
-  /\b\d+\s?%\s?off\b/i,
-  /\boff\s+the\s+price\b/i,
-];
-
-export interface NegotiationLockResult {
-  changed: boolean;
-  text: string;
-  hits: string[];
-}
-
-/**
- * Guardrail 3: if the draft contains negotiation language, replace the WHOLE
- * draft with the discount phrasebook line (a terminal substitution — no
- * regenerate). The substituted text carries no ₹, so it also clears guardrail 1.
- */
-export function applyNegotiationLock(draft: string): NegotiationLockResult {
-  const hits = NEGOTIATION.flatMap((re) => {
-    const m = re.exec(draft);
-    return m ? [m[0]] : [];
-  });
-  if (hits.length === 0) return { changed: false, text: draft, hits: [] };
-  return { changed: true, text: PHRASEBOOK.discountAsk, hits };
-}
 
 export interface GuardrailTurn {
   draft: string;
@@ -140,54 +50,267 @@ export interface GuardrailDeps {
   log: { info: (obj: Record<string, unknown>, msg?: string) => void };
   /** The context-bound kb fee whitelist (CH-06: kbPriceWhitelist()). */
   whitelist?: KbFee[];
+  /** Best-effort raw_events persistence (CH-07 step 4) — optional so the pure
+   * check suites stay DB-free; turn.ts always supplies it. */
+  record?: RecordHit;
+  /** Guardrail-2 evidence: classes licensed by claimable system rows since the
+   * guest's previous message (turn.ts computes; default none). */
+  systemEvidence?: ReadonlySet<ClaimClass>;
+  /** §6.7 complaint flow: the worker WILL escalate this turn — licenses C3 and
+   * is asserted at pipeline end (a must_escalate turn never leaves without
+   * `escalate` set). */
+  mustEscalate?: boolean;
+  /** Guardrail 5 trigger: the inbound batch asked "are you a bot?". */
+  botQuestion?: boolean;
+  /** Guardrail 7: the guest's own E.164 — the ONLY phone a draft may contain. */
+  guestPhone?: string;
+  /** Night flag — the leak-scan substitution uses §6.2b's after-hours variant. */
+  isNight?: boolean;
 }
 
 export type GuardrailOutcome =
-  | { action: 'send'; text: string; toolRuns: ToolRun[] }
-  | { action: 'defer'; text: string; toolRuns: ToolRun[]; escalate: true };
+  | { action: 'send'; text: string; toolRuns: ToolRun[]; escalate: EscalationReason | null }
+  | { action: 'defer'; text: string; toolRuns: ToolRun[]; escalate: EscalationReason };
 
 const PRICE_NUDGE =
   'A price you stated was not returned by any tool this turn. State only ₹ figures that appear in a get_quote result from this turn; if you have no live quote, do not state any price — offer to bring the team in instead.';
+const PROMISE_NUDGE =
+  'You claimed an action that has not actually happened (informing the team, arranging something, sending someone). Do not claim completed actions or dispatches — say you will pass it on to the team instead.';
+const IDENTITY_NUDGE = `The guest asked whether they are talking to a bot. Include this approved line verbatim in your reply, keeping the rest of your answer: "${PHRASEBOOK.isBot}"`;
+const LENGTH_NUDGE =
+  'Your reply is too long or list-heavy for WhatsApp. Rewrite it in 1–3 short sentences, no headers and no bullet lists.';
 
-/**
- * The pipeline (§6.5): negotiation-lock rewrite, then price integrity; on a
- * price violation regenerate once and re-check; if it still fails, do NOT send
- * the figure — defer with the approved line and flag escalation.
- */
+/** The pipeline (§6.5): 3 → pooled {1, 2, 5, length} → one shared regenerate
+ * → defer/substitute/trim → deterministic format clamp + re-check. */
 export async function runGuardrails(
   turn: GuardrailTurn,
   deps: GuardrailDeps,
 ): Promise<GuardrailOutcome> {
-  const whitelist = deps.whitelist ?? [];
-  const first = evaluate(turn, whitelist, deps.log);
-  if (first.ok) return { action: 'send', text: first.text, toolRuns: turn.toolRuns };
+  const first = await evaluate(turn, deps);
+  if (first.ok) return finalize(first, deps);
 
-  deps.log.info({ guardrail: 'price_integrity', unbacked: first.unbacked }, 'regenerating once');
-  const regenerated = await deps.regenerate(PRICE_NUDGE);
-  const second = evaluate(regenerated, whitelist, deps.log);
-  if (second.ok) return { action: 'send', text: second.text, toolRuns: regenerated.toolRuns };
-
-  // Two strikes on price integrity — never send an unbacked ₹ figure (§6.5).
+  const nudge = [
+    first.priceViolations.length > 0 ? PRICE_NUDGE : null,
+    first.promiseViolations.length > 0 ? PROMISE_NUDGE : null,
+    first.identityViolation ? IDENTITY_NUDGE : null,
+    first.tooLong ? LENGTH_NUDGE : null,
+  ]
+    .filter((n): n is string => n !== null)
+    .join('\n');
   deps.log.info(
-    { guardrail: 'price_integrity', unbacked: second.unbacked },
-    'price integrity failed twice — deferring + escalating',
+    {
+      guardrail: 'pooled',
+      prices: first.priceViolations,
+      promises: first.promiseViolations,
+      identity: first.identityViolation,
+      tooLong: first.tooLong,
+    },
+    'regenerating once',
   );
+  await recordViolations(deps, first, 'regenerated');
+  const second = await evaluate(await deps.regenerate(nudge), deps);
+  if (second.ok) {
+    await deps.record?.({
+      kind: 'guardrail',
+      // Labelled by what actually failed FIRST (audit fix: an identity- or
+      // length-only regenerate must not count as a phantom price regen).
+      rule:
+        first.priceViolations.length > 0
+          ? 'price_integrity'
+          : first.promiseViolations.length > 0
+            ? 'promise_integrity'
+            : first.identityViolation
+              ? 'identity'
+              : 'length_format',
+      action: 'sent_after_regen',
+      draft: second.text,
+    });
+    return finalize(second, deps);
+  }
+
+  // Two strikes. Money/promise failures defer (§6.5 — and defer WINS over an
+  // identity substitution: the escalation carries the question to a human).
+  if (second.priceViolations.length > 0 || second.promiseViolations.length > 0) {
+    deps.log.info(
+      { guardrail: 'pooled', prices: second.priceViolations, promises: second.promiseViolations },
+      'guardrails failed twice — deferring + escalating',
+    );
+    await recordViolations(deps, second, 'deferred');
+    const priceFailed = second.priceViolations.length > 0;
+    return {
+      action: 'defer',
+      // A price failure defers with the rate line; a promise-only failure with
+      // the team-referral line (both escalate, so both lines are true).
+      text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
+      toolRuns: second.toolRuns,
+      escalate: priceFailed ? 'price' : 'promise',
+    };
+  }
+  // Identity still missing → substitute the approved line whole (§6.5 #5).
+  if (second.identityViolation) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'identity',
+      action: 'substituted',
+      draft: second.text,
+    });
+    return finalize({ ...second, text: PHRASEBOOK.isBot }, deps);
+  }
+  // Only length left → the last-resort sentence-boundary trim. preMutated
+  // forces the finalize re-checks: a trim is a mutation like any clamp, and
+  // it can cut the identity line off the tail (post-build audit finding).
+  await deps.record?.({
+    kind: 'guardrail',
+    rule: 'length_format',
+    action: 'clamped',
+    draft: second.text,
+    details: { reason: 'over_length_after_regenerate' },
+  });
+  return finalize({ ...second, text: trimAtSentence(second.text) }, deps, true);
+}
+
+interface Evaluation {
+  ok: boolean;
+  text: string;
+  toolRuns: ToolRun[];
+  priceViolations: number[];
+  promiseViolations: string[];
+  referral: boolean;
+  identityViolation: boolean;
+  tooLong: boolean;
+}
+
+/** One pass: negotiation rewrite → price + promise + identity + length. */
+async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evaluation> {
+  const nego = applyNegotiationLock(turn.draft);
+  if (nego.changed) {
+    deps.log.info({ guardrail: 'negotiation_lock', hits: nego.hits }, 'draft substituted');
+    // The recorded draft is the ORIGINAL (what was blocked) — that is what the
+    // weekly review needs to see, not the substituted phrasebook line.
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'negotiation_lock',
+      action: 'substituted',
+      draft: turn.draft,
+      details: { hits: nego.hits },
+    });
+  }
+  const price = checkPriceIntegrity(nego.text, turn.toolRuns, deps.whitelist ?? []);
+  const promises = scanPromises(nego.text, {
+    toolRuns: turn.toolRuns,
+    systemEvidence: deps.systemEvidence ?? new Set(),
+    escalationPlanned: deps.mustEscalate === true,
+  });
+  const identityViolation = deps.botQuestion === true && !containsIdentityLine(nego.text);
+  const tooLong = nego.text.length > MAX_REPLY_CHARS || bulletLineCount(nego.text) > 3;
   return {
-    action: 'defer',
-    text: PHRASEBOOK.quoteApiDown,
-    toolRuns: regenerated.toolRuns,
-    escalate: true,
+    ok: price.ok && promises.violations.length === 0 && !identityViolation && !tooLong,
+    text: nego.text,
+    toolRuns: turn.toolRuns,
+    priceViolations: price.unbacked,
+    promiseViolations: promises.violations,
+    referral: promises.referral,
+    identityViolation,
+    tooLong,
   };
 }
 
-/** One pass: negotiation rewrite → price check. Returns the cleaned text + verdict. */
-function evaluate(
-  turn: GuardrailTurn,
-  whitelist: KbFee[],
-  log: GuardrailDeps['log'],
-): { ok: true; text: string } | { ok: false; text: string; unbacked: number[] } {
-  const nego = applyNegotiationLock(turn.draft);
-  if (nego.changed) log.info({ guardrail: 'negotiation_lock', hits: nego.hits }, 'draft substituted');
-  const price = checkPriceIntegrity(nego.text, turn.toolRuns, whitelist);
-  return price.ok ? { ok: true, text: nego.text } : { ok: false, text: nego.text, unbacked: price.unbacked };
+/**
+ * Final gate: guardrail-6 deterministic fixes on the OUTGOING text, re-running
+ * the pure checks if anything mutated; then the escalation resolution — a C3
+ * referral must be MADE true, and a must_escalate turn never leaves without an
+ * escalation (§6.7 assertion — near-tautological now, load-bearing when CH-14
+ * makes escalation a tool the model might fail to call).
+ */
+async function finalize(
+  evaluation: Evaluation,
+  deps: GuardrailDeps,
+  preMutated = false,
+): Promise<GuardrailOutcome> {
+  let text = evaluation.text;
+  const clamp = applyFormatClamp(text);
+  if (clamp.notes.length > 0) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'length_format',
+      action: 'clamped',
+      draft: text,
+      details: { notes: clamp.notes },
+    });
+  }
+  if (clamp.changed || preMutated) {
+    text = clamp.text;
+    // Re-run the pure checks on the mutated text — a clamp must never be able
+    // to smuggle a violation past the pool (review decision).
+    const price = checkPriceIntegrity(text, evaluation.toolRuns, deps.whitelist ?? []);
+    const promises = scanPromises(text, {
+      toolRuns: evaluation.toolRuns,
+      systemEvidence: deps.systemEvidence ?? new Set(),
+      escalationPlanned: deps.mustEscalate === true,
+    });
+    if (!price.ok || promises.violations.length > 0) {
+      const priceFailed = !price.ok;
+      return {
+        action: 'defer',
+        text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
+        toolRuns: evaluation.toolRuns,
+        escalate: priceFailed ? 'price' : 'promise',
+      };
+    }
+    if (deps.botQuestion === true && !containsIdentityLine(text)) text = PHRASEBOOK.isBot;
+  }
+  // Guardrail 7 — LAST, on the final outgoing text (§6.5 #7): block + alert,
+  // no regenerate. The substituted team line escalates, so its promise is true.
+  const leak = scanForLeaks(text, deps.guestPhone ?? '');
+  if (!leak.ok) {
+    deps.log.info({ guardrail: 'leak_scan', hits: leak.hits }, 'draft blocked — leak detected');
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'leak_scan',
+      action: 'blocked',
+      draft: text,
+      details: { hits: leak.hits },
+    });
+    return {
+      action: 'defer',
+      text: deps.isNight === true ? PHRASEBOOK.outsideKnowledgeNight : PHRASEBOOK.outsideKnowledge,
+      toolRuns: evaluation.toolRuns,
+      escalate: 'leak',
+    };
+  }
+  const escalate = evaluation.referral || deps.mustEscalate === true ? 'referral' : null;
+  return { action: 'send', text, toolRuns: evaluation.toolRuns, escalate };
+}
+
+async function recordViolations(
+  deps: GuardrailDeps,
+  evaluation: Evaluation,
+  action: 'regenerated' | 'deferred',
+): Promise<void> {
+  if (evaluation.priceViolations.length > 0) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'price_integrity',
+      action,
+      draft: evaluation.text,
+      details: { unbacked: evaluation.priceViolations },
+    });
+  }
+  if (evaluation.promiseViolations.length > 0) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'promise_integrity',
+      action,
+      draft: evaluation.text,
+      details: { violations: evaluation.promiseViolations },
+    });
+  }
+  if (evaluation.identityViolation) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'identity',
+      action,
+      draft: evaluation.text,
+    });
+  }
 }

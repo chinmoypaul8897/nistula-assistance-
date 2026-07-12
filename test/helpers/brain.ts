@@ -6,6 +6,7 @@
  */
 import { vi } from 'vitest';
 import type { ConverseResult } from '../../src/brain/claude.js';
+import { createRateWindow, type RateWindow } from '../../src/brain/policy.js';
 import { createDegradedTracker } from '../../src/brain/tools/degraded.js';
 import { buildToolRegistry } from '../../src/brain/tools/index.js';
 import type { ToolRegistry } from '../../src/brain/tools/registry.js';
@@ -38,13 +39,15 @@ export function unusedWebsite(): WebsiteClient {
   });
 }
 
-/** The CH-05 tool deps a worker/jobs test needs when no tool is exercised. */
+/** The CH-05/07 deps a worker/jobs test needs when no tool is exercised.
+ * Each call returns a FRESH rate window so suites stay isolated. */
 export function noToolDeps(log: { error: (obj: Record<string, unknown>, msg?: string) => void }): {
   toolRegistry: ToolRegistry;
   website: WebsiteClient;
   websiteBaseUrl: string;
   degraded: ReturnType<typeof createDegradedTracker>;
   opsNumbers: string[];
+  rateWindow: RateWindow;
 } {
   return {
     toolRegistry: buildToolRegistry(),
@@ -52,5 +55,6 @@ export function noToolDeps(log: { error: (obj: Record<string, unknown>, msg?: st
     websiteBaseUrl: WEBSITE_BASE_URL,
     degraded: createDegradedTracker({ log }),
     opsNumbers: [],
+    rateWindow: createRateWindow(),
   };
 }
