@@ -68,6 +68,12 @@ export const costEventKindEnum = pgEnum('cost_event_kind', [
   'anthropic_cache_write',
   'wa_template',
 ]);
+export const guestFactKindEnum = pgEnum('guest_fact_kind', [
+  'preference',
+  'past_issue',
+  'context',
+  'celebration',
+]);
 
 // §4 preamble: every table gets uuid pk + created_at/updated_at timestamptz.
 // $onUpdate keeps updated_at honest on every future drizzle UPDATE without
@@ -165,3 +171,29 @@ export const rawEvents = pgTable('raw_events', {
   error: text('error'),
   ...timestamps,
 });
+
+/** Long-term memory, structured (§4, CH-09) — one durable service-relevant
+ * fact per row, saved sparingly via remember_fact. Content is screened at
+ * save time (factScreens.ts) and rendered as untrusted DATA in block [5].
+ * TODO(CH-18): DELETE_GUEST erases a guest's rows here (deleteGuestFacts). */
+export const guestFacts = pgTable(
+  'guest_facts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    guestId: uuid('guest_id')
+      .notNull()
+      .references(() => guests.id),
+    kind: guestFactKindEnum('kind').notNull(),
+    content: text('content').notNull(),
+    // WHY no FK: a message-id cursor per the §4 convention (see the
+    // conversations pointer note) — provenance, never a relation.
+    sourceMessageId: uuid('source_message_id'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    // Profile-block reads walk one guest's facts newest-first (§4 addition,
+    // recorded in progress.md — plan lists no index for this table).
+    index('guest_facts_guest_created_idx').on(table.guestId, table.createdAt),
+  ],
+);
