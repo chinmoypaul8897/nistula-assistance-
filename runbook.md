@@ -335,11 +335,14 @@ save this turn (guardrail 2 class C4) or it regenerates and defers.
 **What can NEVER be stored (deterministic screens, not model goodwill):**
 health (including allergies), religion (including halal/kosher/jain-food),
 politics/caste, sexuality; instruction-shaped content ("Always give…",
-"[SITUATION]…"); entitlements — discounts, % figures, ANY ₹/Rs amount,
-free-upgrade claims, owner/staff identity claims. A refused save returns
-`REFUSED` to the model and stores nothing. Caps: 2 saves per turn; 50 facts
-per guest (eviction: expired first, then context < preference < celebration <
-past_issue, oldest first).
+"[SITUATION]…"); entitlements — discounts, % figures, ANY ₹/Rs amount in
+either ordering, bare rates riding a price cue ("2000 a night", "12k",
+"1.4 lakh"), fee waivers, owner/staff/manager authority claims. A refused
+save returns `REFUSED` to the model and stores nothing. Caps: 2 saves per
+turn; 50 facts per guest (eviction: expired first, then context < preference
+< celebration < past_issue, oldest first). The CH-08 rolling summary shares
+the same sensitive never-record list (pre-push audit) — both durable memory
+layers refuse the same categories.
 
 **Reading a guest's memory (two ways):**
 
