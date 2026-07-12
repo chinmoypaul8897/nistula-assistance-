@@ -7,7 +7,10 @@
  * rows are still priced at the sonnet table — a cheaper light model logs
  * OVERSTATED INR concentrated in the nightly batch. Today MODEL_ID_LIGHT is
  * unset (falls back to MODEL_ID), so estimates are exact; make the table
- * per-model when a light model actually lands.
+ * per-model when a light model actually lands. NOTE (audit): rows carry no
+ * model id, so per-model pricing cannot be applied retroactively — the chunk
+ * that SETS MODEL_ID_LIGHT must also give recordUsage a model dimension
+ * (column or kind suffix) BEFORE the first light-model call.
  */
 import type { Db } from '../db/client.js';
 import { insertCostEvents, type NewCostEvent } from '../db/repos.js';

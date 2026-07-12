@@ -124,7 +124,14 @@ export async function processConversation(
         botQuestion: directive.flags.botQuestion,
         // §6.5 #2 "since the guest's previous message" = the cursor row's
         // created_at::text — µs-exact into the SQL evidence query (CH-08).
-        evidenceSinceIso: cursor === null ? null : cursor.createdAtIso,
+        // A DANGLING pointer fails CLOSED (audit): null would license C3 from
+        // ALL history; an over-fresh cursor yields empty evidence → unlicensed
+        // referrals escalate — at worst a duplicate ops ping, the honest side.
+        evidenceSinceIso: dangling
+          ? ctx.dbNow.toISOString()
+          : cursor === null
+            ? null
+            : cursor.createdAtIso,
         newestGuestMsgAt: newest.createdAt,
       })
     : null;
@@ -201,17 +208,24 @@ export async function processConversation(
     await recordPolicyOutcome(deps, conversationId, ctx.guestPhone, directive, plan, announced);
     // CH-08 on-demand compaction, winning-claim path only (a losing racer's
     // context is the same — one signal is enough; stately dedupes anyway).
-    // Fire-and-forget: memory upkeep must never fail a guest turn.
+    // Fire-and-forget: memory upkeep must never fail a guest turn. BOTH arms
+    // carry a floor (post-build audit): an unfloored trim arm re-compacted a
+    // token-bound thread's notes for 1-2 fresh rows on EVERY guest turn —
+    // per-turn model spend plus lossy rewrite churn. gapMin/4 lets a
+    // persistent trim compact in small batches instead; uncovered rows wait
+    // a few turns, covered ones (count 0) never enqueue at all.
     const summarise = deps.summarise;
-    if (
-      summarise !== undefined &&
-      turn !== null &&
-      (turn.overflow.trimmedByTokens || turn.overflow.uncoveredCount >= summarise.gapMin)
-    ) {
-      try {
-        await summarise.enqueue(conversationId);
-      } catch (error) {
-        deps.log.warn({ conversationId, err: summarizeError(error) }, 'summarise enqueue failed');
+    if (summarise !== undefined && turn !== null) {
+      const trimFloor = Math.max(1, Math.floor(summarise.gapMin / 4));
+      const fire =
+        (turn.overflow.trimmedByTokens && turn.overflow.uncoveredCount >= trimFloor) ||
+        turn.overflow.uncoveredCount >= summarise.gapMin;
+      if (fire) {
+        try {
+          await summarise.enqueue(conversationId);
+        } catch (error) {
+          deps.log.warn({ conversationId, err: summarizeError(error) }, 'summarise enqueue failed');
+        }
       }
     }
   }

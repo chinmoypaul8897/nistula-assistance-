@@ -247,7 +247,19 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     workOptions,
     async (jobs) => {
       for (const job of jobs) {
-        await summariseConversation(summariserDeps, job.data.conversationId);
+        const outcome = await summariseConversation(summariserDeps, job.data.conversationId);
+        // Continuation after a CAPPED run (audit): 'applied'/'advanced' may
+        // have compacted only part of the range (count/token caps) — one
+        // follow-up job continues from the advanced cursor; a fully-compacted
+        // thread pays a single model-free noop. Stately allows the send while
+        // this job completes; failures are the sweeper class (next nightly).
+        if (outcome === 'applied' || outcome === 'advanced') {
+          try {
+            await enqueueSummarise(job.data.conversationId);
+          } catch (error) {
+            deps.log.warn({ err: summarizeError(error) }, 'summarise continuation enqueue failed');
+          }
+        }
       }
     },
   );

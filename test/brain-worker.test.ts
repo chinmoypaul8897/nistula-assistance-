@@ -846,6 +846,32 @@ describe('claim + cursor repositories (the D2 primitives)', () => {
       expect(summarised).toHaveLength(0);
     });
 
+    it('AUDIT: the trim arm carries its own floor — steady-state token-trim stops buying a model call per turn', async () => {
+      // 800-char messages: window token-caps at 26 (26×223=5798 ≤ 6000 < 27×223).
+      const body = (i: number) => `t${i}-${'x'.repeat(795)}`;
+      // 30 messages → 4 uncovered < trimFloor(5): trimmed, but QUIET.
+      const quiet = await seedConversation(db, '+917700900068');
+      for (let i = 0; i < 29; i++) {
+        await seedGuestMessage(db, quiet.conversation.id, body(i), 4000 - i * 10);
+      }
+      await seedGuestMessage(db, quiet.conversation.id, body(29), 20);
+      const rigA = makeRig();
+      const summarisedA = withSummarise(rigA, 20);
+      await processConversation(rigA.deps, quiet.conversation.id);
+      expect(summarisedA).toHaveLength(0);
+
+      // 33 messages → 7 uncovered ≥ floor(5) but < gapMin(20): trim arm fires.
+      const churny = await seedConversation(db, '+917700900069');
+      for (let i = 0; i < 32; i++) {
+        await seedGuestMessage(db, churny.conversation.id, body(i), 4000 - i * 10);
+      }
+      await seedGuestMessage(db, churny.conversation.id, body(32), 20);
+      const rigB = makeRig();
+      const summarisedB = withSummarise(rigB, 20);
+      await processConversation(rigB.deps, churny.conversation.id);
+      expect(summarisedB).toEqual([churny.conversation.id]);
+    });
+
     it('a summary covering the overflow suppresses the enqueue (coverage, not length, decides)', async () => {
       const { conversation } = await seedConversation(db, '+917700900063');
       const rows = [];

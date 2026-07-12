@@ -3,7 +3,7 @@
  * helper is one statement or an upsert-then-read; business logic lives in the
  * feature modules, never here.
  */
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import type { Db, DbLike } from './client.js';
 import { conversations, costEvents, guests, messages, rawEvents } from './schema.js';
 
@@ -153,9 +153,13 @@ export async function getUnprocessedGuestMessages(
 }
 
 /**
- * The most recent messages of a conversation, any sender/direction, returned
- * OLDEST-first for the Claude transcript (CH-04). Fetched newest-first with a
- * limit, then reversed — the (created_at, id) tuple keeps ties deterministic.
+ * The most recent TRANSCRIPT messages of a conversation (guest/ai/human),
+ * returned OLDEST-first for the Claude transcript (CH-04). System rows are
+ * excluded at the query since CH-08's audit: they never render (mapTranscript
+ * skips them) and guardrail-2 evidence has its own query now — fetching them
+ * only let them crowd the window's fetch slack (a CH-13 evidence-volume trap).
+ * Fetched newest-first with a limit, then reversed — the (created_at, id)
+ * tuple keeps ties deterministic.
  */
 export async function getRecentMessages(
   db: Db,
@@ -165,7 +169,7 @@ export async function getRecentMessages(
   const rows = await db
     .select()
     .from(messages)
-    .where(eq(messages.conversationId, conversationId))
+    .where(and(eq(messages.conversationId, conversationId), ne(messages.sender, 'system')))
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit);
   return rows.reverse();

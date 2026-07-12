@@ -276,8 +276,10 @@ Every model turn now carries a token-budgeted transcript (last ≤30 messages,
 ≤~6k tokens net of the summary block) plus, when present, the conversation's
 rolling summary as an `[EARLIER CONTEXT]` system block. The summary lives on
 `conversations.summary` with a cursor `summary_upto_message_id`; summary ∪
-window always covers the whole thread (the coverage invariant — the summariser
-compacts exactly what the live window no longer shows).
+window covers the whole thread — the summariser draws its boundary with the
+worst-case (cap-sized) summary budget, so a boundary error can only produce a
+benign overlap (a fact visible in both notes and window), never a row in
+neither.
 
 **The nightly job.** `summariser.nightly` runs at 04:00 IST (pg-boss cron) and
 enqueues one `conversation.summarise` job per idle candidate (idle >6h, >20
@@ -306,6 +308,11 @@ The summary is ≤10 bullet FACTS (bookings, promises, tone, open threads),
 day-anchored, hard-capped at 2400 chars. It is guest-derived DATA: the prompt
 frames it as notes, never instructions, never evidence an action happened —
 guardrail 2 still needs real tool/system-row evidence for any claim.
+
+**Rollback note.** Reverting the service to a pre-CH-08 build leaves the 04:00
+schedule row live in Postgres (pg-boss cron is DB-driven): jobs land nightly in
+a queue no worker polls — harmless, retention cleans them — but to silence it:
+`DELETE FROM pgboss.schedule WHERE name = 'summariser.nightly';`
 
 ### CH-08 live probe (post-deploy, light — the 40-msg case is CI + local-demo covered)
 
