@@ -19,6 +19,7 @@ import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
 import { costEventsFor, type ConverseUsage } from './cost.js';
 import { runGuardrails } from './guardrails.js';
+import { kbPriceWhitelist, loadKnowledge } from './knowledge.js';
 import { PHRASEBOOK, buildSituation, buildSystemPrompt, type SystemBlock } from './prompt.js';
 import type { DegradedTracker } from './tools/degraded.js';
 import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
@@ -82,7 +83,8 @@ export async function runClaudeTurn(
     serviceWindowOpen: isServiceWindowOpen(conversation.serviceWindowExpiresAt, dbNow),
     degraded: deps.degraded.isDegraded(),
   });
-  const system = buildSystemPrompt(situation);
+  // Block [3] KNOWLEDGE (CH-06) — compiled kb, memoised; rides the cached head.
+  const system = buildSystemPrompt(situation, loadKnowledge().knowledge);
   const tools = deps.toolRegistry.specs();
   const toolCtx: ToolContext = {
     website: deps.website,
@@ -124,8 +126,9 @@ export async function runClaudeTurn(
         return { draft: again.draft, toolRuns: again.toolRuns };
       },
       log: deps.log,
-      // CH-06 passes the compiled kb price figures; empty until then (§6.5).
-      whitelist: [],
+      // §6.5 guardrail-1 whitelist: the ₹ fee figures verbatim in kb/policies.md
+      // (early check-in / extra-guest); stay prices still come only from tools.
+      whitelist: kbPriceWhitelist(),
     },
   );
 
