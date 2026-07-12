@@ -17,7 +17,7 @@ import { summarizeError } from '../lib/logger.js';
 import { istCalendarDay } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
-import { buildTurnContext } from './contextBuilder.js';
+import { buildTurnContext, type TranscriptOverflow } from './contextBuilder.js';
 import { costEventsFor, type ConverseUsage } from './cost.js';
 import { runGuardrails } from './guardrails.js';
 import type { LoadedKnowledge } from './knowledge.js';
@@ -68,6 +68,9 @@ export interface TurnResult {
   /** Non-null when the guardrails require an escalation this turn: a deferred
    * price/promise, or a team-referral that must be MADE true (CH-07). */
   escalate: EscalationReason | null;
+  /** What the transcript window could not show (CH-08) — the worker applies
+   * the hysteresis threshold and enqueues an on-demand summarise. */
+  overflow: TranscriptOverflow;
 }
 
 type TurnMessage = { role: 'user' | 'assistant'; content: string | Anthropic.ContentBlockParam[] };
@@ -79,14 +82,17 @@ export interface TurnArgs {
   conversationId: string;
   /** The guest's E.164 — telemetry scrub key + leak-scan self-exemption. */
   guestPhone: string;
+  /** Block [5]-lite (CH-08): guest-typed name; prompt.ts sanitises. */
+  guestName?: string | null;
   /** §6.7 complaint flow: rendered into block [6] (worker sets it). */
   mustEscalate?: boolean;
   /** The batch carried media the model cannot view (mixed-batch note). */
   unviewableMedia?: boolean;
   /** Guardrail-2 evidence window (§6.5 #2 "since the guest's previous
-   * message") — the worker passes the cursor row's time; null/absent means no
-   * previous message, so every claimable system row counts. */
-  evidenceSince?: Date | null;
+   * message") — the claim cursor's created_at::text, µs-exact (CH-08: was a
+   * JS Date; the dedicated evidence query compares in SQL now). null/absent
+   * means no previous message, so every claimable system row counts. */
+  evidenceSinceIso?: string | null;
   /** The newest batch message's time — the 24h-window operand. WHY not the
    * conversation column: it is refreshed inside the claim, so pre-claim it
    * describes the PREVIOUS turn and a returning guest would read as closed
@@ -104,16 +110,20 @@ export interface TurnArgs {
 export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<TurnResult> {
   const { dbNow, conversationId } = args;
   // Everything the model SEES is contextBuilder's job (CH-08 extraction):
-  // transcript, guardrail-2 evidence, [6] SITUATION and the system blocks.
-  const { system, baseMessages, systemEvidence, isNight } = await buildTurnContext(deps, {
-    conversation: args.conversation,
-    dbNow,
-    conversationId,
-    evidenceSince: args.evidenceSince ?? null,
-    newestGuestMsgAt: args.newestGuestMsgAt,
-    mustEscalate: args.mustEscalate ?? false,
-    unviewableMedia: args.unviewableMedia ?? false,
-  });
+  // windowed transcript, summary/guest blocks, guardrail-2 evidence, [6].
+  const { system, baseMessages, systemEvidence, isNight, overflow } = await buildTurnContext(
+    deps,
+    {
+      conversation: args.conversation,
+      dbNow,
+      conversationId,
+      guestName: args.guestName ?? null,
+      evidenceSinceIso: args.evidenceSinceIso ?? null,
+      newestGuestMsgAt: args.newestGuestMsgAt,
+      mustEscalate: args.mustEscalate ?? false,
+      unviewableMedia: args.unviewableMedia ?? false,
+    },
+  );
   const tools = deps.toolRegistry.specs();
   const toolCtx: ToolContext = {
     website: deps.website,
@@ -179,6 +189,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
     text: outcome.text,
     toolRuns: outcome.toolRuns,
     escalate: outcome.escalate,
+    overflow,
   };
 }
 

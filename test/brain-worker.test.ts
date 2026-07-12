@@ -184,9 +184,15 @@ describe('processConversation — the debounced Claude turn', () => {
     // turn.ts is the only place that injects it — without this, setting the
     // injection to '' passes the whole suite (found by review).
     const system = converseCalls[0]?.system ?? [];
-    expect(system).toHaveLength(5);
+    // CH-08: [5]-lite GUEST CONTEXT joins the dynamic tail (the seeded guest
+    // has a profile name); no summary yet, so no [EARLIER CONTEXT] block.
+    expect(system).toHaveLength(6);
     expect(system[2]?.text).toMatch(/^\[KNOWLEDGE\]\n/);
     expect(system[2]?.text).toContain('Check-in is from 3 pm'); // a real compiled kb fact
+    expect(system[4]?.text).toContain('[GUEST CONTEXT]');
+    expect(system[4]?.text).toContain('Seed Guest');
+    expect(system.at(-1)?.text).toContain('[SITUATION]'); // [6] stays LAST
+    expect(system.some((b) => b.text.startsWith('[EARLIER CONTEXT]'))).toBe(false);
     // ...and the cached prefix is still ONE breakpoint, on the last static block.
     expect(system.filter((b) => b.cache_control !== undefined)).toHaveLength(1);
     expect(system[3]?.cache_control).toEqual({ type: 'ephemeral' });

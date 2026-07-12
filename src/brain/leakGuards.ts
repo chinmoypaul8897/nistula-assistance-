@@ -68,6 +68,8 @@ const TRIPWIRES = [
   '[SITUATION]',
   '[KNOWLEDGE]',
   '[CORRECTION]',
+  '[GUEST CONTEXT]',
+  '[EARLIER CONTEXT]',
   'must_escalate',
   'cache_control',
   'system prompt',

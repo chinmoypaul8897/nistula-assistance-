@@ -235,18 +235,27 @@ export async function claimConversationTurn(
 }
 
 /**
- * Conversation + guest phone + DB clock in one read — the worker's turn
+ * Conversation + guest phone/name + DB clock in one read — the worker's turn
  * context. now() from Postgres keeps every debounce age on the DB clock
- * (job eligibility `start_after < now()` is DB-clock too).
+ * (job eligibility `start_after < now()` is DB-clock too). guestName feeds
+ * block [5]-lite (CH-08): a set first name wins over the WA profile name
+ * (guest-typed either way — prompt.ts sanitises before rendering).
  */
 export async function getConversationTurnContext(
   db: Db,
   conversationId: string,
-): Promise<{ conversation: Conversation; guestPhone: string; dbNow: Date } | null> {
+): Promise<{
+  conversation: Conversation;
+  guestPhone: string;
+  guestName: string | null;
+  dbNow: Date;
+} | null> {
   const [row] = await db
     .select({
       conversation: conversations,
       guestPhone: guests.phone,
+      guestFirstName: guests.firstName,
+      guestProfileName: guests.waProfileName,
       // Raw sql fields bypass the driver's type mapping and arrive as
       // strings (observed on drizzle 0.45 + postgres.js) — map explicitly.
       dbNow: sql`now()`.mapWith((value: unknown) => new Date(value as string)),
@@ -254,7 +263,13 @@ export async function getConversationTurnContext(
     .from(conversations)
     .innerJoin(guests, eq(guests.id, conversations.guestId))
     .where(eq(conversations.id, conversationId));
-  return row ?? null;
+  if (row === undefined) return null;
+  return {
+    conversation: row.conversation,
+    guestPhone: row.guestPhone,
+    guestName: row.guestFirstName ?? row.guestProfileName,
+    dbNow: row.dbNow,
+  };
 }
 
 /**

@@ -117,11 +117,13 @@ export async function processConversation(
         dbNow: ctx.dbNow,
         conversationId,
         guestPhone: ctx.guestPhone,
+        guestName: ctx.guestName,
         mustEscalate: plan.mustEscalate,
         unviewableMedia: directive.flags.hasMedia,
         botQuestion: directive.flags.botQuestion,
-        // §6.5 #2 "since the guest's previous message" = the cursor row's time.
-        evidenceSince: cursor === null ? null : new Date(cursor.createdAtIso),
+        // §6.5 #2 "since the guest's previous message" = the cursor row's
+        // created_at::text — µs-exact into the SQL evidence query (CH-08).
+        evidenceSinceIso: cursor === null ? null : cursor.createdAtIso,
         newestGuestMsgAt: newest.createdAt,
       })
     : null;
