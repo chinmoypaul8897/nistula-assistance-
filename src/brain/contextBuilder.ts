@@ -40,7 +40,11 @@ import type { DegradedTracker } from './tools/degraded.js';
 // summary + last ~30 messages, token-budgeted"; walk back until ~6k transcript
 // tokens or 30 msgs). D4 precedent: changing them is a plan.md edit. The
 // summary block is charged AGAINST the budget (net), so the envelope as a
-// whole stays ≤ ~6k and the full request comfortably under §6.3's ~12k.
+// whole stays ≤ ~6k. Block [5] (CH-09) is NOT budgeted here: its worst case
+// is bounded by construction (15 facts × 200 code points + prefs + framing
+// ≈ ~1k tokens), so the request maths still clears §6.3's ~12k — cached head
+// ~4.2k + envelope ≤6k + [5] ≤~1k + [6] ≈ ~11.5k (audit-recorded, re-check
+// if PROFILE_FACTS_LIMIT or FACT_RENDER_MAX ever grow).
 export const TRANSCRIPT_MAX_MESSAGES = 30;
 export const TRANSCRIPT_TOKEN_BUDGET = 6000;
 /** Fetch slack over the window: system rows never render but share the fetch,
