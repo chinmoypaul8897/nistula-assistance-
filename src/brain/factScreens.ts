@@ -82,17 +82,32 @@ const INSTRUCTION_RES: readonly RegExp[] = [
 ];
 
 const ENTITLEMENT_RES: readonly RegExp[] = [
-  /\b(?:gets?|deserves?|entitled\s+to|eligible\s+for|qualifies\s+for|(?:was|were|is|are)\s+promised)\b[\s\S]{0,40}\b(?:free|discount\w*|upgrade\w*|complimentary|waive\w*|refund\w*|special\s+rate|lower\s+rate|vip)\b/i,
+  /\b(?:gets?|deserves?|entitled\s+to|eligible\s+for|qualifies\s+for|(?:was|were|is|are)\s+promised)\b[\s\S]{0,40}\b(?:free|discount\w*|upgrade\w*|complimentary|waive\w*|refund\w*|off\b|special\s+rate|lower\s+rate|vip)\b/i,
   /\bdiscount\w*/i,
-  /\b\d{1,3}\s?%/,
-  // Any rupee amount — see the module header.
+  /\b\d{1,3}\s?%|\bpercent\b/i,
+  // Any rupee amount, EITHER ordering — see the module header. The pre-push
+  // audit (BLOCKER) proved currency-first alone was porous: number-first
+  // "1500 rs", bare "2000 a night", "1.4 lakh", "12k" all stored.
   /₹/,
   /\brs\.?\s?\d/i,
+  /\b\d[\d,]*\s?(?:rs\b|inr\b|rupees?\b)/i,
   /\binr\s?\d/i,
   /\brupees?\b/i,
-  /\bfree\s+(?:upgrade|night|stay|breakfast|meal)\b/i,
-  // Identity / authority claims — never facts, always leverage.
+  /\blakhs?\b|\blacs?\b|\bcrores?\b/i,
+  /\b\d+(?:\.\d+)?\s?k\b/i,
+  // A rate/fee CUE anywhere in a fact refuses it outright — a number is fine
+  // ("travels with 2 children"), a number's PRICE CONTEXT is not. Facts are
+  // fail-closed by doctrine: a guest loses a nicety, never a service.
+  /\b(?:per\s+night|a\s+night\b|nightly|per\s+week|per\s+stay|per\s+day|rate\b|rates\b|tariff\w*|pricing|priced?\b|half\s+price)\b/i,
+  /\b(?:pays?|paid|charge\w*|bill\w*|fee\b|fees\b|waiv\w*|refund\w*)\b/i,
+  /\bfree\s+(?:upgrade|night|stay|breakfast|meal)\b|\bno\s+charge\b|\bfree\s+of\s+charge\b|\bpays?\s+nothing\b/i,
+  // Identity / authority claims — never facts, always leverage. Audit
+  // widening: verb forms (owns/runs/founded), reversed possessives and
+  // friend-of-the-owner phrasings all slipped the original enumeration.
   /\b(?:is\s+the\s+owner|owner'?s\s+(?:friend|family)|works?\s+(?:for|at|with)\s+nistula|is\s+(?:a\s+)?(?:staff|manager|employee|vip))\b/i,
+  /\b(?:owns?|runs?|founded|manages?)\s+(?:nistula|this\s+(?:villa|property|company|place))\b/i,
+  /\bis\s+the\s+(?:owner|manager|founder|director|boss)\b|\b(?:owner|manager|founder|director)\s+of\s+nistula\b|\bnistula'?s\s+(?:owner|manager|founder|director)\b/i,
+  /\b(?:friend|friends|family|relative)\s+(?:of|with)\s+the\s+(?:owner|manager|founder)\b/i,
 ];
 
 /** Sanitises then screens fact content; returns the clean string to store. */
