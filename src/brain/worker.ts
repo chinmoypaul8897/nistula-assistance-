@@ -18,7 +18,6 @@ import {
   findStaleConversations,
   getConversationTurnContext,
   getUnprocessedGuestMessages,
-  insertMessage,
   resolveMessageCursor,
 } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
@@ -26,12 +25,8 @@ import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
 import { isWindowOpen } from './draftGuards.js';
-import {
-  decidePolicy,
-  settlePlanFor,
-  type EscalationReason,
-  type RateWindow,
-} from './policy.js';
+import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
+import { decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
 import { PHRASEBOOK } from './prompt.js';
 import { createHitRecorder } from './telemetry.js';
 import { runClaudeTurn, type TurnDeps, type TurnLogger } from './turn.js';
@@ -225,90 +220,6 @@ export async function processConversation(
   // newer than the claimed pointer — re-enqueue and let debounce group them.
   // Runs on the losing-claim path too (cheaper than waiting for the sweeper).
   await recheck(deps, conversationId);
-}
-
-const ESCALATION_SUMMARIES: Record<EscalationReason, string> = {
-  price: 'Price help needed on a guest thread — the AI could not confirm a rate safely.',
-  human_request: 'A guest asked for a human — the AI stepped back and promised the front desk.',
-  complaint: 'A guest appears unhappy — the AI acknowledged it and flagged the thread.',
-  media: 'A guest sent media the AI cannot view — the AI asked them to type it.',
-  leak: 'A reply was blocked by the leak scan — please review the thread.',
-  promise: 'A reply was blocked by promise integrity — please review the thread.',
-  referral: 'The AI told a guest the team will follow up — please pick up the thread.',
-};
-
-/**
- * Interim escalation (real escalate_to_human lands CH-14): messages each OPS
- * number (conversationId null / sender system, per CH-02 D5), writes the
- * claimable evidence row on the guest conversation, and raises an ops alert —
- * in dev OPS_NUMBERS is unset, so the alert log IS the ops channel (D4).
- */
-async function escalateToOps(
-  deps: WorkerDeps,
-  conversationId: string,
-  reason: EscalationReason,
-  guestTextTail: string,
-): Promise<void> {
-  const summary = ESCALATION_SUMMARIES[reason];
-  // The card carries the guest's ask (sanitised + capped by policy.ts) — the
-  // humanRequest line's "they have the full picture" must be honest. PII to
-  // an ops WhatsApp is the CH-14 card pattern; logs still carry ids only.
-  const card = guestTextTail === '' ? summary : `${summary}\nGuest: "${guestTextTail}"`;
-  for (const ops of deps.opsNumbers) {
-    await deps.wa.sendText(ops, card, { conversationId: null, sender: 'system' });
-  }
-  try {
-    // Claimable evidence (§6.5 #2, CH-02 D5 opt-in tagging): transcript-
-    // invisible (mapTranscript skips system rows) but guardrail-2 readable.
-    await insertMessage(deps.db, {
-      conversationId,
-      direction: 'out',
-      sender: 'system',
-      type: 'text',
-      body: `ops escalated: ${reason}`,
-      status: 'sent',
-      raw: { contextKind: 'ops_escalation', reason },
-    });
-  } catch (error) {
-    deps.log.warn({ err: summarizeError(error) }, 'escalation evidence row failed (telemetry only)');
-  }
-  await alertOps(deps.log, {
-    kind: 'guest_thread_escalation',
-    summary,
-    detail: { conversationId, reason },
-  });
-}
-
-/** Policy telemetry + the §3.3 cool-off ops alert — winning-claim path only. */
-async function recordPolicyOutcome(
-  deps: WorkerDeps,
-  conversationId: string,
-  guestPhone: string,
-  directive: ReturnType<typeof decidePolicy>,
-  plan: ReturnType<typeof settlePlanFor>,
-  announced: boolean,
-): Promise<void> {
-  if (plan.telemetry === null) return;
-  // cool_off records once per ai_active→cooloff edge, not per stored message.
-  if (plan.telemetry === 'cool_off' && !announced) return;
-  const record = createHitRecorder(deps.db, deps.log, { conversationId, guestPhone });
-  await record({
-    kind: 'policy',
-    rule: plan.telemetry,
-    action: 'routed',
-    details: { directive: directive.kind, ...directive.flags },
-  });
-  if (plan.telemetry === 'cool_off') {
-    await alertOps(deps.log, {
-      kind: 'rate_limit_cooloff',
-      summary: 'guest rate-limited — one polite line sent, store-only until the window clears',
-      detail: {
-        conversationId,
-        containsHumanRequest: directive.flags.containsHumanRequest,
-        containsComplaint: directive.flags.containsComplaint,
-      },
-    });
-  }
 }
 
 async function recheck(deps: WorkerDeps, conversationId: string): Promise<void> {
