@@ -24,14 +24,17 @@ const EXEMPT = /\bfully\s+booked\b|\bbooked\s+out\b|\bsold\s+out\b/gi;
 
 const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
   // C1 — completed actions.
-  { cls: 'C1', re: /\b(?:has|have|had)\s+been\s+(?:informed|notified|told|alerted|arranged|booked|sent|dispatched)\b/i },
+  { cls: 'C1', re: /\b(?:has|have|had)\s+been\s+(?:informed|notified|told|alerted|arranged|booked|sent|dispatched|escalated|raised|logged|resolved|confirmed)\b/i },
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+(?:informed|notified|told|alerted|nudged|messaged|pinged|updated)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)\s+(?:arranged|organised|organized|booked|sent|raised|logged|escalated)\b/i },
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have|\s+had)?\s+passed\s+(?:it|this|that)\s+on\b/i },
   { cls: 'C1', re: /\bconsider\s+it\s+(?:done|sorted|arranged)\b/i },
   // Subject-anchored: "daily housekeeping is taken care of" must NOT match.
   { cls: 'C1', re: /\b(?:that|this|it)(?:'s|\s+is|\s+has\s+been)\s+(?:sorted|done|arranged|taken\s+care\s+of)\b/i },
-  { cls: 'C1', re: /\bthe\s+team\s+(?:knows|is\s+aware)\b/i },
+  // Staff-awareness claims: any staff subject, incl. British plural agreement
+  // ("the team are looking into it") — audit fix: "housekeeping knows" and
+  // "the team is looking into it" shipped unbacked before this widening.
+  { cls: 'C1', re: /\b(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\s+(?:knows|(?:is|are)\s+aware|(?:is|are)\s+looking\s+into|(?:is|are)\s+on\s+(?:it|this|that))\b/i },
   // C2 — dispatch in motion.
   { cls: 'C2', re: /\bon\s+(?:their|its|his|her|the)\s+way\b/i },
   { cls: 'C2', re: /\bsend(?:ing)?\s+(?:someone|somebody)\b/i },

@@ -416,4 +416,26 @@ describe('runGuardrails — identity and format in the pooled pipeline (CH-07)',
     expect(out.action).toBe('send');
     if (out.action === 'send') expect(out.text).toBe('Your stay\nAll set for December.');
   });
+
+  it('the length trim cannot cut the identity line off the tail (post-build audit)', async () => {
+    // The model twice answers a bot question with a >900-char draft ENDING in
+    // the approved line — the trim cuts it off; the forced re-check must
+    // substitute the approved line rather than ship without it (§6.5 #5).
+    const long = `${'A lovely detail about the villa. '.repeat(40)}${PHRASEBOOK.isBot}`;
+    const regenerate = vi.fn(async () => ({ draft: long, toolRuns: [] }));
+    const out = await runGuardrails({ draft: long, toolRuns: [] }, { regenerate, log, botQuestion: true });
+    expect(out.action).toBe('send');
+    if (out.action === 'send') expect(out.text).toBe(PHRASEBOOK.isBot);
+  });
+
+  it('bullet spam has a deterministic backstop when the model refuses to reformat', async () => {
+    const bullets = Array.from({ length: 8 }, (_, i) => `- villa point ${i}`).join('\n');
+    const regenerate = vi.fn(async () => ({ draft: bullets, toolRuns: [] }));
+    const out = await runGuardrails({ draft: bullets, toolRuns: [] }, { regenerate, log });
+    expect(out.action).toBe('send');
+    if (out.action === 'send') {
+      expect(out.text).not.toMatch(/^\s*-\s+/m); // markers collapsed
+      expect(out.text).toContain('villa point 0'); // content preserved
+    }
+  });
 });

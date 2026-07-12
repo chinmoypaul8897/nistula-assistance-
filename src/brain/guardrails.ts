@@ -112,7 +112,16 @@ export async function runGuardrails(
   if (second.ok) {
     await deps.record?.({
       kind: 'guardrail',
-      rule: first.promiseViolations.length > 0 ? 'promise_integrity' : 'price_integrity',
+      // Labelled by what actually failed FIRST (audit fix: an identity- or
+      // length-only regenerate must not count as a phantom price regen).
+      rule:
+        first.priceViolations.length > 0
+          ? 'price_integrity'
+          : first.promiseViolations.length > 0
+            ? 'promise_integrity'
+            : first.identityViolation
+              ? 'identity'
+              : 'length_format',
       action: 'sent_after_regen',
       draft: second.text,
     });
@@ -147,7 +156,9 @@ export async function runGuardrails(
     });
     return finalize({ ...second, text: PHRASEBOOK.isBot }, deps);
   }
-  // Only length left → the last-resort sentence-boundary trim.
+  // Only length left → the last-resort sentence-boundary trim. preMutated
+  // forces the finalize re-checks: a trim is a mutation like any clamp, and
+  // it can cut the identity line off the tail (post-build audit finding).
   await deps.record?.({
     kind: 'guardrail',
     rule: 'length_format',
@@ -155,7 +166,7 @@ export async function runGuardrails(
     draft: second.text,
     details: { reason: 'over_length_after_regenerate' },
   });
-  return finalize({ ...second, text: trimAtSentence(second.text) }, deps);
+  return finalize({ ...second, text: trimAtSentence(second.text) }, deps, true);
 }
 
 interface Evaluation {
@@ -211,7 +222,11 @@ async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evalu
  * escalation (§6.7 assertion — near-tautological now, load-bearing when CH-14
  * makes escalation a tool the model might fail to call).
  */
-async function finalize(evaluation: Evaluation, deps: GuardrailDeps): Promise<GuardrailOutcome> {
+async function finalize(
+  evaluation: Evaluation,
+  deps: GuardrailDeps,
+  preMutated = false,
+): Promise<GuardrailOutcome> {
   let text = evaluation.text;
   const clamp = applyFormatClamp(text);
   if (clamp.notes.length > 0) {
@@ -223,7 +238,7 @@ async function finalize(evaluation: Evaluation, deps: GuardrailDeps): Promise<Gu
       details: { notes: clamp.notes },
     });
   }
-  if (clamp.changed) {
+  if (clamp.changed || preMutated) {
     text = clamp.text;
     // Re-run the pure checks on the mutated text — a clamp must never be able
     // to smuggle a violation past the pool (review decision).

@@ -144,7 +144,10 @@ export function decidePolicy(input: PolicyInput): Directive {
     containsComplaint: COMPLAINT_RE.test(batchText),
     hasMedia: input.messages.some((m) => m.type !== 'text' && m.type !== 'location'),
   };
-  const guestTextTail = sanitiseTail(texts.at(-1) ?? '');
+  // The WHOLE batch rides the ops card (audit fix: a burst of "what's the
+  // rate?" + "call me back" must not drop the rate ask — "they have the full
+  // picture" has to be honest). sanitiseTail keeps the newest 200 chars.
+  const guestTextTail = sanitiseTail(texts.join(' | '));
   const kind = decideKind(input, flags, batchText, hasLocation);
   return { kind, flags, guestTextTail };
 }
@@ -248,6 +251,8 @@ export function settlePlanFor(directive: Directive, status: Conversation['status
         telemetry: 'human_request',
       };
     case 'MEDIA_FALLBACK':
+      // TODO(CH-13): replace the interim ops notify with a real frontdesk
+      // task (§6.7's "graceful fallback line + frontdesk task").
       return {
         ...STORE_ONLY,
         send: 'mediaFallback',

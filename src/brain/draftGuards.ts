@@ -67,6 +67,14 @@ export function applyFormatClamp(text: string): FormatClampResult {
   const noBangs = out.replace(/!+/g, '.');
   if (noBangs !== out) notes.push('exclamations_flattened');
   out = noBangs;
+  // Bullet-spam backstop (post-build audit): a short draft that keeps its >3
+  // bullets through the regenerate would otherwise ship — collapse the
+  // markers deterministically. ≤3 bullet lines stay (the voice guide's
+  // villa-comparison allowance).
+  if (bulletLineCount(out) > 3) {
+    out = out.replace(/^(\s*)[-*•]\s+/gm, '$1');
+    notes.push('bullets_collapsed');
+  }
   if (/\bINR\b/.test(out)) notes.push('inr_spelled_out');
   return { text: out, changed: out !== text, notes };
 }

@@ -30,6 +30,12 @@ describe('C1 — completed-action claims need hard evidence', () => {
     'Consider it done.',
     "That's sorted.",
     'The team is aware.',
+    // Post-build audit additions: realistic staff-awareness claims.
+    'Housekeeping knows about the towels.',
+    'The team is looking into it right now.',
+    'The team are on it.',
+    'This has been escalated to our team.',
+    'Your booking has been confirmed.', // unbackable until CH-11's get_booking
   ])('flags %j with no evidence', (draft) => {
     const scan = scanPromises(draft, NO_EVIDENCE);
     expect(scan.violations.length).toBeGreaterThan(0);
