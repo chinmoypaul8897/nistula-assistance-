@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import { upsertGuestByPhone } from '../src/db/repos.js';
+import { buildToolRegistry } from '../src/brain/tools/index.js';
 import {
   FACTS_PER_GUEST_CAP,
   deleteGuestFacts,
@@ -252,5 +253,90 @@ describe('deleteGuestFacts / updateGuestPrefs / getGuestByPhone', () => {
     const guest = await seedGuest('+917700900313');
     expect((await getGuestByPhone(db, '+917700900313'))?.id).toBe(guest.id);
     expect(await getGuestByPhone(db, '+917700900399')).toBeNull();
+  });
+});
+
+describe('remember_fact through the registry (DB integration)', () => {
+  const registry = buildToolRegistry();
+
+  function toolCtx(guestId: string, saves = { count: 0 }) {
+    const memory = {
+      db,
+      guestId,
+      conversationId: '00000000-0000-4000-8000-0000000000cc',
+      sourceMessageId: '00000000-0000-4000-8000-0000000000dd',
+      saves,
+    };
+    return {
+      ctx: {
+        website: {
+          getQuote: async () => {
+            throw new Error('no website in this test');
+          },
+          getAvailability: async () => {
+            throw new Error('no website in this test');
+          },
+        },
+        websiteBaseUrl: 'https://website.test.invalid',
+        degraded: { record: () => {} },
+        log: { error: () => {} },
+        memory,
+      } as unknown as import('../src/brain/tools/registry.js').ToolContext,
+      memory,
+    };
+  }
+
+  it('saves via the registry: row lands with provenance, counter increments', async () => {
+    const guest = await seedGuest('+917700900314');
+    const { ctx, memory } = toolCtx(guest.id);
+    const res = await registry.run(
+      'remember_fact',
+      { kind: 'preference', content: 'Loved the early check-in last time' },
+      ctx,
+    );
+    expect(res).toMatchObject({ ok: true, data: { saved: true, kind: 'preference' } });
+    expect(memory.saves.count).toBe(1);
+    const rows = await getAllGuestFacts(db, guest.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.sourceMessageId).toBe('00000000-0000-4000-8000-0000000000dd');
+  });
+
+  it('a re-save is ok:true saved:false duplicate and does NOT increment', async () => {
+    const guest = await seedGuest('+917700900315');
+    const saves = { count: 0 };
+    const { ctx } = toolCtx(guest.id, saves);
+    const input = { kind: 'celebration', content: 'Tenth anniversary on 21 December' };
+    await registry.run('remember_fact', input, ctx);
+    const dup = await registry.run('remember_fact', input, ctx);
+    expect(dup).toMatchObject({ ok: true, data: { saved: false, reason: 'duplicate' } });
+    expect(saves.count).toBe(1);
+    expect(await getAllGuestFacts(db, guest.id)).toHaveLength(1);
+  });
+
+  it('saved data never echoes content or numbers (guardrail-1 laundering pin)', async () => {
+    const guest = await seedGuest('+917700900316');
+    const { ctx } = toolCtx(guest.id);
+    const res = await registry.run(
+      'remember_fact',
+      { kind: 'context', content: 'Group of 6 adults visiting for 3 nights' },
+      ctx,
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const json = JSON.stringify(res.data);
+      expect(json).not.toMatch(/adults|nights|[0-9]/);
+    }
+  });
+
+  it('a screened save stores NOTHING (the done-when sensitive probe)', async () => {
+    const guest = await seedGuest('+917700900317');
+    const { ctx } = toolCtx(guest.id);
+    const res = await registry.run(
+      'remember_fact',
+      { kind: 'context', content: 'Guest is diabetic, keep insulin in the fridge' },
+      ctx,
+    );
+    expect(res).toMatchObject({ ok: false, error: 'REFUSED' });
+    expect(await getAllGuestFacts(db, guest.id)).toHaveLength(0);
   });
 });

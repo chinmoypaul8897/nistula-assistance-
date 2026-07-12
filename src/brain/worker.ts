@@ -133,6 +133,9 @@ export async function processConversation(
             ? null
             : cursor.createdAtIso,
         newestGuestMsgAt: newest.createdAt,
+        // remember_fact provenance (CH-09): a fact saved this turn points at
+        // the newest batch message.
+        newestGuestMsgId: newest.id,
       })
     : null;
   const body = turn !== null ? turn.text : plan.send !== null ? PHRASEBOOK[plan.send] : null;

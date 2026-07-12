@@ -53,9 +53,9 @@ function ctx(overrides?: {
 const registry = buildToolRegistry();
 
 describe('registry framework', () => {
-  it('exposes exactly the three CH-05 tools with object input schemas', () => {
+  it('exposes the three CH-05 tools + remember_fact with object input schemas', () => {
     const names = registry.specs().map((s) => s.name).sort();
-    expect(names).toEqual(['get_availability', 'get_booking_link', 'get_quote']);
+    expect(names).toEqual(['get_availability', 'get_booking_link', 'get_quote', 'remember_fact']);
     for (const spec of registry.specs()) expect(spec.input_schema.type).toBe('object');
   });
 
@@ -256,5 +256,79 @@ describe('get_availability + get_booking_link', () => {
       expect(d.type).toBe('Nistula Villa');
       expect(d.url).toMatch(/\/villas\/5220300000000000\d{3}$/);
     }
+  });
+});
+
+// CH-09 remember_fact — the PURE paths (no-context, per-turn cap, screen
+// wiring). All three refuse BEFORE any DB touch, proven by a throwing proxy.
+// The saved/duplicate paths live in test/guest-memory.test.ts (real Postgres).
+describe('remember_fact (pure paths)', () => {
+  const throwingDb = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error('db must not be touched on a refused save');
+      },
+    },
+  ) as unknown as import('../src/db/client.js').Db;
+
+  function memoryCtx(savesCount = 0): ToolContext {
+    return {
+      ...ctx().ctx,
+      memory: {
+        db: throwingDb,
+        guestId: '00000000-0000-4000-8000-0000000000aa',
+        conversationId: '00000000-0000-4000-8000-0000000000bb',
+        sourceMessageId: null,
+        saves: { count: savesCount },
+      },
+    };
+  }
+
+  it('without a memory context → INVALID (unit contexts cannot save)', async () => {
+    const res = await registry.run(
+      'remember_fact',
+      { kind: 'preference', content: 'Loved the early check-in' },
+      ctx().ctx,
+    );
+    expect(res).toMatchObject({ ok: false, error: 'INVALID' });
+  });
+
+  it('at the per-turn cap → REFUSED before any screen or DB work', async () => {
+    const res = await registry.run(
+      'remember_fact',
+      { kind: 'preference', content: 'Loved the early check-in' },
+      memoryCtx(2),
+    );
+    expect(res).toMatchObject({ ok: false, error: 'REFUSED' });
+  });
+
+  it('screened content (entitlement) → REFUSED, DB never touched', async () => {
+    const res = await registry.run(
+      'remember_fact',
+      { kind: 'context', content: 'Their agreed rate is ₹5,000 per night' },
+      memoryCtx(),
+    );
+    expect(res).toMatchObject({ ok: false, error: 'REFUSED' });
+    if (!res.ok) expect(res.message).toMatch(/never record rates/);
+  });
+
+  it('screened content (sensitive) → REFUSED with the fixed message', async () => {
+    const res = await registry.run(
+      'remember_fact',
+      { kind: 'context', content: 'Guest is diabetic' },
+      memoryCtx(),
+    );
+    expect(res).toMatchObject({ ok: false, error: 'REFUSED' });
+    if (!res.ok) expect(res.message).toMatch(/sensitive category/);
+  });
+
+  it('over-long content is rejected by the input schema (INVALID)', async () => {
+    const res = await registry.run(
+      'remember_fact',
+      { kind: 'preference', content: 'a'.repeat(500) },
+      memoryCtx(),
+    );
+    expect(res).toMatchObject({ ok: false, error: 'INVALID' });
   });
 });
