@@ -223,7 +223,10 @@ escalated).
 **Interim escalation channel:** until CH-13/14, "escalate" = a WhatsApp card
 to each `OPS_NUMBERS` entry + an `[OPS-ALERT]` log line. With `OPS_NUMBERS`
 unset (dev and the test service today) the **log line IS the ops channel** —
-do not read a missing WhatsApp ping as a failure.
+do not read a missing WhatsApp ping as a failure. **Before setting
+`OPS_NUMBERS`, know the volume:** every team-referral turn ("let me bring the
+team in", any deferral, any complaint) sends one card per ops number until
+CH-13/14 land real tasks — expect a few cards per day at current traffic.
 
 ### Weekly guardrail review (§6.5)
 
