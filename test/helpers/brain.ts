@@ -6,13 +6,29 @@
  */
 import { vi } from 'vitest';
 import type { ConverseResult } from '../../src/brain/claude.js';
+import type { LoadedKnowledge } from '../../src/brain/knowledge.js';
 import { createRateWindow, type RateWindow } from '../../src/brain/policy.js';
+import { estimateTokens } from '../../src/brain/tokens.js';
 import { createDegradedTracker } from '../../src/brain/tools/degraded.js';
 import { buildToolRegistry } from '../../src/brain/tools/index.js';
 import type { ToolRegistry } from '../../src/brain/tools/registry.js';
 import { createWebsiteClient, type WebsiteClient } from '../../src/brain/tools/websiteApi.js';
 
 const WEBSITE_BASE_URL = 'https://website.test.invalid';
+
+/** An injected block [3] fake — worker/turn tests must not read kb/ off disk
+ * (the CH-06 singleton residual, closed in CH-08). Tests that assert the REAL
+ * compiled kb (the boot-wiring seam) override deps.knowledge with
+ * loadKnowledge() instead. */
+export function fakeKnowledge(knowledge = 'Fake KB for tests: check-in is from 3 pm.'): LoadedKnowledge {
+  return {
+    knowledge,
+    tokens: estimateTokens(knowledge),
+    version: 'fakekb00',
+    quirksPresent: false,
+    whitelist: [],
+  };
+}
 
 /** A no-tool assistant turn in the CH-05 ConverseResult shape. */
 export function textResult(
@@ -46,6 +62,7 @@ export function noToolDeps(log: { error: (obj: Record<string, unknown>, msg?: st
   website: WebsiteClient;
   websiteBaseUrl: string;
   degraded: ReturnType<typeof createDegradedTracker>;
+  knowledge: LoadedKnowledge;
   opsNumbers: string[];
   rateWindow: RateWindow;
 } {
@@ -54,6 +71,7 @@ export function noToolDeps(log: { error: (obj: Record<string, unknown>, msg?: st
     website: unusedWebsite(),
     websiteBaseUrl: WEBSITE_BASE_URL,
     degraded: createDegradedTracker({ log }),
+    knowledge: fakeKnowledge(),
     opsNumbers: [],
     rateWindow: createRateWindow(),
   };

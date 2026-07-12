@@ -26,6 +26,30 @@ export async function seedConversation(
 
 let seedSeq = 0;
 
+/** Inserts a non-guest message (ai/human/system) aged into the past — shared
+ * by the worker and summariser suites (CH-08 hoisted brain-worker's local). */
+export async function seedOutboundMessage(
+  db: Db,
+  conversationId: string,
+  sender: 'ai' | 'human' | 'system',
+  body: string,
+  ageSeconds: number,
+  raw?: NewMessage['raw'],
+): Promise<Message> {
+  const { message } = await insertMessage(db, {
+    conversationId,
+    direction: 'out',
+    sender,
+    type: 'text',
+    body,
+    status: 'sent',
+    createdAt: new Date(Date.now() - ageSeconds * 1000),
+    raw,
+  });
+  if (message === null) throw new Error('seed outbound conflicted — should be unreachable');
+  return message;
+}
+
 /** Inserts a guest message aged `ageSeconds` into the past (0 = now). `raw`
  * mimics the webhook's stored inbound object (captions/locations, CH-07). */
 export async function seedGuestMessage(

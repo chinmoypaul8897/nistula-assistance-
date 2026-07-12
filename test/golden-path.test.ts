@@ -21,6 +21,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PgBoss } from 'pg-boss';
 import type { ConverseFn } from '../src/brain/claude.js';
+import { loadKnowledge } from '../src/brain/knowledge.js';
 import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import { CONVERSATION_PROCESS_QUEUE, makeEnqueue, registerJobs } from '../src/jobs/index.js';
@@ -137,6 +138,8 @@ describe('golden path — burst in, exactly one reply out', () => {
         log,
         converse: mockConverse,
         ...noToolDeps(log),
+        // The e2e threads the REAL compiled kb, mirroring server boot (CH-08).
+        knowledge: loadKnowledge(),
         windows: WINDOWS,
         pollingIntervalSeconds: 0.5,
       });

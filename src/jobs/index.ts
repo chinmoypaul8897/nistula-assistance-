@@ -8,7 +8,15 @@
 import { PgBoss } from 'pg-boss';
 import type { ConverseFn } from '../brain/claude.js';
 import { DEBOUNCE_WINDOWS, type DebounceWindows } from '../brain/debounce.js';
+import type { LoadedKnowledge } from '../brain/knowledge.js';
 import { createRateWindow, type RateWindow } from '../brain/policy.js';
+import {
+  SUMMARISER,
+  runNightlySummariser,
+  summariseConversation,
+  type SummariserDeps,
+  type SummariserThresholds,
+} from '../brain/summariser.js';
 import type { DegradedTracker } from '../brain/tools/degraded.js';
 import type { ToolRegistry } from '../brain/tools/registry.js';
 import type { WebsiteClient } from '../brain/tools/websiteApi.js';
@@ -24,6 +32,8 @@ import type { WaClient } from '../wa/client.js';
 
 export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
 export const CONVERSATION_SWEEP_QUEUE = 'conversation.sweep';
+export const CONVERSATION_SUMMARISE_QUEUE = 'conversation.summarise';
+export const SUMMARISER_NIGHTLY_QUEUE = 'summariser.nightly';
 
 let bossInstance: PgBoss | null = null;
 let bossUrl: string | null = null;
@@ -87,6 +97,22 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryLimit: 0, // the next cron tick IS the retry
     expireInSeconds: 110, // < the 2-min cadence: a hung sweep can't stack
   });
+  await boss.createQueue(CONVERSATION_SUMMARISE_QUEUE, {
+    // WHY stately, not standard+singletonKey (CH-08 review finding 1): on
+    // 12.25.1 a standard queue does NOT dedupe on singletonKey — every
+    // overflow turn would stack a duplicate job and each loser would burn a
+    // model call. Stately = ≤1 created AND ≤1 active per conversation;
+    // completed jobs never block a later re-enqueue (unlike throttle slots).
+    policy: 'stately',
+    retryLimit: 1, // covers DB hiccups only — the handler swallows model failures
+    retryDelay: 10,
+    expireInSeconds: 120, // > the converse 55s deadline + DB reads, with margin
+  });
+  await boss.createQueue(SUMMARISER_NIGHTLY_QUEUE, {
+    policy: 'standard',
+    retryLimit: 0, // tomorrow's cron IS the retry
+    expireInSeconds: 110, // the selector only queries + enqueues
+  });
 }
 
 /**
@@ -112,6 +138,14 @@ export function makeEnqueue(boss: PgBoss, windows: DebounceWindows) {
   };
 }
 
+/** The summarise enqueue (CH-08) — nightly selector and worker overflow share
+ * it; stately + singletonKey dedupes per conversation exactly like process. */
+export function makeEnqueueSummarise(boss: PgBoss) {
+  return async function enqueueConversationSummarise(conversationId: string): Promise<void> {
+    await boss.send(CONVERSATION_SUMMARISE_QUEUE, { conversationId }, { singletonKey: conversationId });
+  };
+}
+
 export interface JobsDeps {
   /** A STARTED boss (boot calls boss.start() first). */
   boss: PgBoss;
@@ -125,6 +159,14 @@ export interface JobsDeps {
   website: WebsiteClient;
   websiteBaseUrl: string;
   degraded: DegradedTracker;
+  /** Block [3] + fee whitelist (CH-08): boot passes loadKnowledge(); tests
+   * inject a fake — REQUIRED so no worker path can fall back to disk reads. */
+  knowledge: LoadedKnowledge;
+  /** The summariser's model client (MODEL_ID_LIGHT — §6.1); defaults to the
+   * main converse when unset, per plan.md CH-08 step 2. */
+  converseLight?: ConverseFn;
+  /** CH-08 thresholds — tests inject small values; production = the spec. */
+  summariser?: SummariserThresholds;
   /** OPS_NUMBERS (E.164) for the interim price escalation; default none. */
   opsNumbers?: string[];
   /** Config NIGHT_START/NIGHT_END for the SITUATION block; default 20:00/10:00. */
@@ -152,6 +194,8 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   await ensureQueues(deps.boss);
   const windows = deps.windows ?? DEBOUNCE_WINDOWS;
   const enqueue = makeEnqueue(deps.boss, windows);
+  const enqueueSummarise = makeEnqueueSummarise(deps.boss);
+  const thresholds = deps.summariser ?? SUMMARISER;
   const workerDeps: WorkerDeps = {
     db: deps.db,
     wa: deps.wa,
@@ -162,11 +206,21 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     website: deps.website,
     websiteBaseUrl: deps.websiteBaseUrl,
     degraded: deps.degraded,
+    knowledge: deps.knowledge,
     opsNumbers: deps.opsNumbers ?? [],
     rateWindow: deps.rateWindow ?? createRateWindow(),
     nightStart: deps.nightStart ?? '20:00',
     nightEnd: deps.nightEnd ?? '10:00',
     enqueue,
+    // On-demand hysteresis (CH-08): the worker reports overflow; the gate —
+    // token-trim OR gap ≥ the nightly threshold — shares ONE constant source.
+    summarise: { enqueue: enqueueSummarise, gapMin: thresholds.minUnsummarised },
+  };
+  const summariserDeps: SummariserDeps = {
+    db: deps.db,
+    log: deps.log,
+    converse: deps.converseLight ?? deps.converse,
+    thresholds,
   };
 
   // batchSize/localConcurrency stay 1 (D1-BINDING): one stately fetch
@@ -188,7 +242,33 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   await deps.boss.work(CONVERSATION_SWEEP_QUEUE, workOptions, async () => {
     await sweepStrandedConversations(workerDeps);
   });
+  await deps.boss.work<{ conversationId: string }>(
+    CONVERSATION_SUMMARISE_QUEUE,
+    workOptions,
+    async (jobs) => {
+      for (const job of jobs) {
+        const outcome = await summariseConversation(summariserDeps, job.data.conversationId);
+        // Continuation after a CAPPED run (audit): 'applied'/'advanced' may
+        // have compacted only part of the range (count/token caps) — one
+        // follow-up job continues from the advanced cursor; a fully-compacted
+        // thread pays a single model-free noop. Stately allows the send while
+        // this job completes; failures are the sweeper class (next nightly).
+        if (outcome === 'applied' || outcome === 'advanced') {
+          try {
+            await enqueueSummarise(job.data.conversationId);
+          } catch (error) {
+            deps.log.warn({ err: summarizeError(error) }, 'summarise continuation enqueue failed');
+          }
+        }
+      }
+    },
+  );
+  await deps.boss.work(SUMMARISER_NIGHTLY_QUEUE, workOptions, async () => {
+    await runNightlySummariser({ ...summariserDeps, enqueueSummarise });
+  });
   await scheduleCron(deps.boss, CONVERSATION_SWEEP_QUEUE, windows.sweepIntervalCron, 'Asia/Kolkata');
+  // The 04:00 IST nightly compaction (plan.md CH-08 step 2 / §2.3).
+  await scheduleCron(deps.boss, SUMMARISER_NIGHTLY_QUEUE, thresholds.cron, 'Asia/Kolkata');
   return { enqueueConversationProcess: enqueue };
 }
 

@@ -123,21 +123,32 @@ async function main(): Promise<void> {
     modelId: config.modelId,
     log: app.log,
   });
+  // The summariser's client (CH-08, §6.1): MODEL_ID_LIGHT when set, else the
+  // main model — createConverse binds ONE model id at construction.
+  const converseLight =
+    config.modelIdLight === undefined
+      ? converse
+      : createConverse({ apiKey: config.anthropicApiKey, modelId: config.modelIdLight, log: app.log });
   // CH-05 price tools: one website client (the origin allowlist), one shared
   // degraded tracker (process-global health), the tool registry.
   const website = createWebsiteClient({ baseUrl: config.websiteBaseUrl, log: app.log });
   const degraded = createDegradedTracker({ log: app.log });
   const toolRegistry = buildToolRegistry();
+  // Block [3] KNOWLEDGE (CH-06): load once, fail-fast if over the token budget
+  // — BEFORE registerJobs since CH-08 threads it through the worker deps.
+  const kb = loadKnowledge();
   const jobs = await registerJobs({
     boss,
     db,
     wa,
     log: app.log,
     converse,
+    converseLight,
     toolRegistry,
     website,
     websiteBaseUrl: config.websiteBaseUrl,
     degraded,
+    knowledge: kb,
     opsNumbers: config.opsNumbers,
     nightStart: config.nightStart,
     nightEnd: config.nightEnd,
@@ -149,9 +160,7 @@ async function main(): Promise<void> {
     enqueue: jobs.enqueueConversationProcess,
   });
   app.log.info(`config: ${configSummary(config)}`);
-  // Block [3] KNOWLEDGE (CH-06): load once, fail-fast if over the token budget,
-  // and log the version so a kb change is visible against the cache/cost logs.
-  const kb = loadKnowledge();
+  // Log the kb version so a kb change is visible against the cache/cost logs.
   app.log.info(
     { kbVersion: kb.version, kbTokens: kb.tokens, quirksPresent: kb.quirksPresent },
     'knowledge base loaded',

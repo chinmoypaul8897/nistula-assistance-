@@ -3,7 +3,7 @@
  * helper is one statement or an upsert-then-read; business logic lives in the
  * feature modules, never here.
  */
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import type { Db, DbLike } from './client.js';
 import { conversations, costEvents, guests, messages, rawEvents } from './schema.js';
 
@@ -153,9 +153,13 @@ export async function getUnprocessedGuestMessages(
 }
 
 /**
- * The most recent messages of a conversation, any sender/direction, returned
- * OLDEST-first for the Claude transcript (CH-04). Fetched newest-first with a
- * limit, then reversed — the (created_at, id) tuple keeps ties deterministic.
+ * The most recent TRANSCRIPT messages of a conversation (guest/ai/human),
+ * returned OLDEST-first for the Claude transcript (CH-04). System rows are
+ * excluded at the query since CH-08's audit: they never render (mapTranscript
+ * skips them) and guardrail-2 evidence has its own query now — fetching them
+ * only let them crowd the window's fetch slack (a CH-13 evidence-volume trap).
+ * Fetched newest-first with a limit, then reversed — the (created_at, id)
+ * tuple keeps ties deterministic.
  */
 export async function getRecentMessages(
   db: Db,
@@ -165,7 +169,7 @@ export async function getRecentMessages(
   const rows = await db
     .select()
     .from(messages)
-    .where(eq(messages.conversationId, conversationId))
+    .where(and(eq(messages.conversationId, conversationId), ne(messages.sender, 'system')))
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit);
   return rows.reverse();
@@ -235,18 +239,27 @@ export async function claimConversationTurn(
 }
 
 /**
- * Conversation + guest phone + DB clock in one read — the worker's turn
+ * Conversation + guest phone/name + DB clock in one read — the worker's turn
  * context. now() from Postgres keeps every debounce age on the DB clock
- * (job eligibility `start_after < now()` is DB-clock too).
+ * (job eligibility `start_after < now()` is DB-clock too). guestName feeds
+ * block [5]-lite (CH-08): a set first name wins over the WA profile name
+ * (guest-typed either way — prompt.ts sanitises before rendering).
  */
 export async function getConversationTurnContext(
   db: Db,
   conversationId: string,
-): Promise<{ conversation: Conversation; guestPhone: string; dbNow: Date } | null> {
+): Promise<{
+  conversation: Conversation;
+  guestPhone: string;
+  guestName: string | null;
+  dbNow: Date;
+} | null> {
   const [row] = await db
     .select({
       conversation: conversations,
       guestPhone: guests.phone,
+      guestFirstName: guests.firstName,
+      guestProfileName: guests.waProfileName,
       // Raw sql fields bypass the driver's type mapping and arrive as
       // strings (observed on drizzle 0.45 + postgres.js) — map explicitly.
       dbNow: sql`now()`.mapWith((value: unknown) => new Date(value as string)),
@@ -254,7 +267,13 @@ export async function getConversationTurnContext(
     .from(conversations)
     .innerJoin(guests, eq(guests.id, conversations.guestId))
     .where(eq(conversations.id, conversationId));
-  return row ?? null;
+  if (row === undefined) return null;
+  return {
+    conversation: row.conversation,
+    guestPhone: row.guestPhone,
+    guestName: row.guestFirstName ?? row.guestProfileName,
+    dbNow: row.dbNow,
+  };
 }
 
 /**

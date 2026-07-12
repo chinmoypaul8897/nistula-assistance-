@@ -15,8 +15,15 @@ import * as schema from '../src/db/schema.js';
 import { DEBOUNCE_WINDOWS } from '../src/brain/debounce.js';
 import { sweepStrandedConversations } from '../src/brain/worker.js';
 import { claimConversationTurn } from '../src/db/repos.js';
-import { CONVERSATION_PROCESS_QUEUE, CONVERSATION_SWEEP_QUEUE, makeEnqueue } from '../src/jobs/index.js';
-import { createTestBoss, TEST_URL } from './helpers/boss.js';
+import {
+  CONVERSATION_PROCESS_QUEUE,
+  CONVERSATION_SUMMARISE_QUEUE,
+  CONVERSATION_SWEEP_QUEUE,
+  SUMMARISER_NIGHTLY_QUEUE,
+  makeEnqueue,
+  makeEnqueueSummarise,
+} from '../src/jobs/index.js';
+import { createTestBoss, tickQueue, TEST_URL } from './helpers/boss.js';
 import { seedConversation, seedGuestMessage } from './helpers/seed.js';
 
 let client: ReturnType<typeof postgres>;
@@ -38,6 +45,8 @@ afterAll(async () => {
 beforeEach(async () => {
   await boss.deleteAllJobs(CONVERSATION_PROCESS_QUEUE);
   await boss.deleteAllJobs(CONVERSATION_SWEEP_QUEUE);
+  await boss.deleteAllJobs(CONVERSATION_SUMMARISE_QUEUE);
+  await boss.deleteAllJobs(SUMMARISER_NIGHTLY_QUEUE);
 });
 
 const testLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
@@ -160,5 +169,40 @@ describe('sweeper (the recovery net)', () => {
     await sweepStrandedConversations({ db, log: testLog(), windows: DEBOUNCE_WINDOWS, enqueue });
     const rows = await processJobs('created');
     expect(rows.filter((r) => r.singleton_key === stranded.conversation.id)).toHaveLength(1);
+  });
+});
+
+describe('conversation.summarise queue (CH-08 — the leg summariser.test.ts skips)', () => {
+  it('stately + singletonKey dedupes a second enqueue; tickQueue drains to the handler once', async () => {
+    const conversationId = randomUUID();
+    const enqueueSummarise = makeEnqueueSummarise(boss);
+    await enqueueSummarise(conversationId);
+    await enqueueSummarise(conversationId); // stately conflict → silent no-op
+
+    const rows = await db.execute<{ singleton_key: string | null }>(sql`
+      SELECT singleton_key FROM pgboss.job
+      WHERE name = ${CONVERSATION_SUMMARISE_QUEUE} AND state = 'created'
+    `);
+    expect([...rows]).toHaveLength(1);
+    expect([...rows][0]?.singleton_key).toBe(conversationId);
+
+    const handled: string[] = [];
+    const drained = await tickQueue<{ conversationId: string }>(
+      boss,
+      CONVERSATION_SUMMARISE_QUEUE,
+      async (data) => {
+        handled.push(data.conversationId);
+      },
+    );
+    expect(drained).toBe(1);
+    expect(handled).toEqual([conversationId]);
+
+    // Completed jobs never block a fresh enqueue (stately, not throttle).
+    await enqueueSummarise(conversationId);
+    const again = await db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM pgboss.job
+      WHERE name = ${CONVERSATION_SUMMARISE_QUEUE} AND state = 'created'
+    `);
+    expect([...again][0]?.n).toBe(1);
   });
 });
