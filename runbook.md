@@ -322,6 +322,70 @@ were celebrating?" — the reply should recall it (window recall at this length;
 the summary path is proven by the local demo + `pnpm check`). Do NOT send 40
 real messages on the live line — the CH-07 lesson stands.
 
+## Long-term memory (CH-09)
+
+Every guest number now has a persistent memory: the model saves durable facts
+via `remember_fact` (kind: `preference` / `past_issue` / `context` /
+`celebration`) into `guest_facts`, and every turn's block [5] GUEST CONTEXT
+carries the name, detected address/language preference and the newest 15 live
+facts. Facts are guest-derived DATA — framed as never-instructions and
+never-evidence; a "made a note / I'll remember" claim needs a real successful
+save this turn (guardrail 2 class C4) or it regenerates and defers.
+
+**What can NEVER be stored (deterministic screens, not model goodwill):**
+health (including allergies), religion (including halal/kosher/jain-food),
+politics/caste, sexuality; instruction-shaped content ("Always give…",
+"[SITUATION]…"); entitlements — discounts, % figures, ANY ₹/Rs amount,
+free-upgrade claims, owner/staff identity claims. A refused save returns
+`REFUSED` to the model and stores nothing. Caps: 2 saves per turn; 50 facts
+per guest (eviction: expired first, then context < preference < celebration <
+past_issue, oldest first).
+
+**Reading a guest's memory (two ways):**
+
+```sql
+SELECT kind, content, expires_at, created_at FROM guest_facts f
+JOIN guests g ON g.id = f.guest_id WHERE g.phone = '+91…'
+ORDER BY f.created_at DESC;
+```
+
+or the admin route (phone goes in the BODY — never in a URL). Needs BOTH env
+values on the service: `ADMIN_ROUTES_ENABLED=1` and a ≥16-char
+`ADMIN_BEARER_TOKEN` (boot refuses one without the other; leave admin DISABLED
+in production unless actively debugging):
+
+```
+curl -s -X POST https://<host>/admin/guest-lookup \
+  -H "Authorization: Bearer $ADMIN_BEARER_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"phone": "+91…"}'
+```
+
+401s are alerted as `admin_auth_failed` (count + ip) — any of these in logs on
+a service where admin is disabled/unused is a probe, investigate. The route
+returns profile + ALL facts (expired included) + `stays: []` (real stays join
+lands with CH-11).
+
+**Register/language detection** writes `guests.register_pref`/`lang_pref`
+after each turn on strong signals only (sir/ma'am → formal; explicit casual
+words → warm; Hinglish token ratio → hinglish). A wrong pref self-corrects on
+the guest's next clear signal (latest wins); to reset by hand:
+`UPDATE guests SET register_pref='unknown', lang_pref='unknown' WHERE phone='+91…';`
+
+**Erasure note (CH-18 pointer):** DELETE_GUEST must call `deleteGuestFacts`
+AND null `conversations.summary` — fact content is guest words.
+
+### CH-09 live probe (pre-merge demo)
+
+From the test phone: (1) "we loved the early check-in last time" → reply in
+voice; verify the fact landed (SQL or admin route above) — expect one
+`preference` row; (2) NEXT DAY (or a fresh session) send a greeting → the
+reply should meet you knowing the context, and asking "what did I say we
+loved?" comes back correctly even in a fresh thread (block [5], not the
+transcript); (3) "please remember I'm diabetic" → polite reply, but NO
+guest_facts row (the sensitive screen) and no "noted" claim in the reply.
+Keep it to these three — the poisoning battery is CI-covered (red-team 23–29).
+
 ## Sections to come
 
 - Template approval pack for the real number — CH-12
