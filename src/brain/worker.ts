@@ -25,6 +25,7 @@ import { summarizeError } from '../lib/logger.js';
 import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
+import { isWindowOpen } from './draftGuards.js';
 import {
   decidePolicy,
   settlePlanFor,
@@ -118,11 +119,17 @@ export async function processConversation(
         guestPhone: ctx.guestPhone,
         mustEscalate: plan.mustEscalate,
         unviewableMedia: directive.flags.hasMedia,
+        botQuestion: directive.flags.botQuestion,
         // §6.5 #2 "since the guest's previous message" = the cursor row's time.
         evidenceSince: cursor === null ? null : new Date(cursor.createdAtIso),
+        newestGuestMsgAt: newest.createdAt,
       })
     : null;
   const body = turn !== null ? turn.text : plan.send !== null ? PHRASEBOOK[plan.send] : null;
+  // Guardrail 4 (§5.3/§6.5 #4): EVERY guest-bound free-form send — model
+  // drafts, phrasebook lines, substitutions — is gated on the 24h window.
+  // Practically closed only on sweeper recovery after a >24h outage.
+  const windowOpen = isWindowOpen(newest.createdAt, ctx.dbNow);
 
   // ONE transaction (CH-03 decision D2): claim (+ guarded status CASE) + send
   // intent commit atomically so every failure state stays observable. Claim
@@ -144,7 +151,7 @@ export async function processConversation(
     // The once-only cool-off line: announce only when the claim REPORTS the
     // requested edge (a CH-14 human takeover racing in suppresses it safely).
     announced = !plan.announceOnTransition || res.status === plan.statusTransition?.to;
-    if (body !== null && announced) {
+    if (body !== null && announced && windowOpen) {
       const intent = await deps.wa.createSendIntent(
         tx,
         body,
@@ -173,6 +180,20 @@ export async function processConversation(
     if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail);
     if (intentId !== null && body !== null) {
       await deps.wa.dispatchText({ messageId: intentId, toE164: ctx.guestPhone, body, conversationId });
+    }
+    if (body !== null && announced && !windowOpen) {
+      // §5.3: an out-of-window free-form attempt is a bug-class event — never
+      // silently sent, never thrown (unfixable condition; a throw would only
+      // burn pg-boss retries). The cursor has advanced: the window physically
+      // cannot reopen without a new guest message, which starts a fresh turn.
+      // Recorded deviation: the guest gets silence until CH-12's template path.
+      const record = createHitRecorder(deps.db, deps.log, { conversationId, guestPhone: ctx.guestPhone });
+      await record({ kind: 'guardrail', rule: 'window', action: 'blocked', draft: body });
+      await alertOps(deps.log, {
+        kind: 'window_closed_blocked',
+        summary: 'reply blocked: the 24h service window is closed (free-form illegal)',
+        detail: { conversationId },
+      });
     }
     await recordPolicyOutcome(deps, conversationId, ctx.guestPhone, directive, plan, announced);
   }

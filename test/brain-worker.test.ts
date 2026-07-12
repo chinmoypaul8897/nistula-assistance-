@@ -642,6 +642,45 @@ describe('CH-07 policy directives through the worker (§6.7)', () => {
     expect(hits[0]?.payload).toMatchObject({ rule: 'complaint_suspect' });
   });
 
+  it('guardrail 4: a >24h-old batch (sweeper recovery) is blocked, recorded, cursor advanced', async () => {
+    const { conversation } = await seedConversation(db, '+917700900058');
+    const message = await seedGuestMessage(db, conversation.id, 'anyone there?', 25 * 60 * 60);
+    const { deps, log } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    // No send at all — free-form outside the window is illegal (§5.3); the
+    // turn is consumed so the sweeper cannot re-block forever.
+    expect(await outbound(conversation.id)).toHaveLength(0);
+    expect((await conversationRow(conversation.id))?.lastProcessedMessageId).toBe(message.id);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ opsAlert: 'window_closed_blocked' }),
+      expect.stringContaining('[OPS-ALERT]'),
+    );
+    const hits = await telemetryRows(conversation.id);
+    expect(hits.some((h) => (h.payload as { rule: string }).rule === 'window')).toBe(true);
+  });
+
+  it('REGRESSION: a returning guest reads as INSIDE the window (stale-column bug)', async () => {
+    const { conversation } = await seedConversation(db, '+917700900059');
+    // The conversation's stored window expired days ago — the pre-CH-07 code
+    // fed this stale column to the model ("the window has closed").
+    await db
+      .update(schema.conversations)
+      .set({ serviceWindowExpiresAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
+      .where(eq(schema.conversations.id, conversation.id));
+    await seedGuestMessage(db, conversation.id, 'hello again, back for December', 20);
+    const { deps, converseCalls, graphCalls } = makeRig();
+
+    await processConversation(deps, conversation.id);
+
+    // The fresh message re-opened the window: the reply flows AND the model is
+    // told the window is open (derived from the newest batch message).
+    expect(graphCalls).toHaveLength(1);
+    const situation = (converseCalls[0]?.system ?? []).at(-1)?.text ?? '';
+    expect(situation).toContain('within the 24-hour reply window');
+  });
+
   it('HUMAN_ACTIVE (TTL set) is store-only: cursor advances, nothing sent, no model', async () => {
     const { conversation } = await seedConversation(db, '+917700900057');
     await db

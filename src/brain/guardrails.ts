@@ -2,18 +2,27 @@
  * Guardrail pipeline (plan.md §6.5). Runs AFTER the model produces a draft,
  * BEFORE any send — the last line of defence that a nudged or mistaken model
  * cannot smuggle a fake price, a false promise or a negotiation offer past.
- * CH-05 shipped guardrails 1 (price integrity) and 3 (negotiation lock);
- * CH-07 adds 2 (promise integrity) and raw_events telemetry, with 4–7 landing
- * in the same chunk.
+ * CH-05 shipped guardrails 1 (price) and 3 (negotiation); CH-07 completes
+ * 2 (promises), 5 (identity), 6 (length/format) here — 4 (window) gates every
+ * send in the worker, 7 (leak scan) runs last via leakGuards.
  *
- * The check functions are PURE and live in leaf modules (priceGuards.ts,
- * promises.ts, rupees.ts) so this file stays the orchestrator under the
- * ~300-line cap. Pipeline shape (CH-07 review decision): negotiation
- * substitution first, then price + promise evaluated TOGETHER with ONE shared
- * regenerate carrying a combined corrective nudge — still failing ⇒ defer
- * with the approved line + escalate, never send. A team-referral (C3) is
- * never a violation: the fix is to escalate so the referral is true.
+ * Pipeline shape (CH-07 review decisions): negotiation substitution first,
+ * then price + promise + identity + length evaluated TOGETHER with ONE shared
+ * regenerate carrying a combined nudge. Still failing ⇒ price/promise defer
+ * (defer WINS over an identity substitution — safety over answering), identity
+ * substitutes the approved line, length trims at a sentence boundary. The
+ * deterministic format clamp runs on the FINAL text, and any mutation re-runs
+ * the pure checks (a clamp could otherwise orphan a fee figure from its cue).
+ * Check implementations live in leaf modules (priceGuards, promises,
+ * draftGuards, rupees) so this file stays the orchestrator under ~300 lines.
  */
+import {
+  applyFormatClamp,
+  bulletLineCount,
+  containsIdentityLine,
+  MAX_REPLY_CHARS,
+  trimAtSentence,
+} from './draftGuards.js';
 import type { EscalationReason } from './policy.js';
 import { applyNegotiationLock, checkPriceIntegrity } from './priceGuards.js';
 import { scanPromises, type ClaimClass } from './promises.js';
@@ -50,6 +59,8 @@ export interface GuardrailDeps {
    * is asserted at pipeline end (a must_escalate turn never leaves without
    * `escalate` set). */
   mustEscalate?: boolean;
+  /** Guardrail 5 trigger: the inbound batch asked "are you a bot?". */
+  botQuestion?: boolean;
 }
 
 export type GuardrailOutcome =
@@ -60,53 +71,86 @@ const PRICE_NUDGE =
   'A price you stated was not returned by any tool this turn. State only ₹ figures that appear in a get_quote result from this turn; if you have no live quote, do not state any price — offer to bring the team in instead.';
 const PROMISE_NUDGE =
   'You claimed an action that has not actually happened (informing the team, arranging something, sending someone). Do not claim completed actions or dispatches — say you will pass it on to the team instead.';
+const IDENTITY_NUDGE = `The guest asked whether they are talking to a bot. Include this approved line verbatim in your reply, keeping the rest of your answer: "${PHRASEBOOK.isBot}"`;
+const LENGTH_NUDGE =
+  'Your reply is too long or list-heavy for WhatsApp. Rewrite it in 1–3 short sentences, no headers and no bullet lists.';
 
-/** The pipeline (§6.5): 3 → pooled {1, 2} → one shared regenerate → defer. */
+/** The pipeline (§6.5): 3 → pooled {1, 2, 5, length} → one shared regenerate
+ * → defer/substitute/trim → deterministic format clamp + re-check. */
 export async function runGuardrails(
   turn: GuardrailTurn,
   deps: GuardrailDeps,
 ): Promise<GuardrailOutcome> {
   const first = await evaluate(turn, deps);
-  if (first.ok) return finishSend(first, deps);
+  if (first.ok) return finalize(first, deps);
 
   const nudge = [
     first.priceViolations.length > 0 ? PRICE_NUDGE : null,
     first.promiseViolations.length > 0 ? PROMISE_NUDGE : null,
+    first.identityViolation ? IDENTITY_NUDGE : null,
+    first.tooLong ? LENGTH_NUDGE : null,
   ]
     .filter((n): n is string => n !== null)
     .join('\n');
   deps.log.info(
-    { guardrail: 'pooled', prices: first.priceViolations, promises: first.promiseViolations },
+    {
+      guardrail: 'pooled',
+      prices: first.priceViolations,
+      promises: first.promiseViolations,
+      identity: first.identityViolation,
+      tooLong: first.tooLong,
+    },
     'regenerating once',
   );
   await recordViolations(deps, first, 'regenerated');
-  const regenerated = await deps.regenerate(nudge);
-  const second = await evaluate(regenerated, deps);
+  const second = await evaluate(await deps.regenerate(nudge), deps);
   if (second.ok) {
     await deps.record?.({
       kind: 'guardrail',
-      rule: second.referral || first.promiseViolations.length > 0 ? 'promise_integrity' : 'price_integrity',
+      rule: first.promiseViolations.length > 0 ? 'promise_integrity' : 'price_integrity',
       action: 'sent_after_regen',
       draft: second.text,
     });
-    return finishSend(second, deps);
+    return finalize(second, deps);
   }
 
-  // Two strikes — never send an unbacked figure or a false claim (§6.5).
-  deps.log.info(
-    { guardrail: 'pooled', prices: second.priceViolations, promises: second.promiseViolations },
-    'guardrails failed twice — deferring + escalating',
-  );
-  await recordViolations(deps, second, 'deferred');
-  const priceFailed = second.priceViolations.length > 0;
-  return {
-    action: 'defer',
-    // A price failure defers with the rate line; a promise-only failure with
-    // the team-referral line (both escalate, so both lines are true).
-    text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
-    toolRuns: regenerated.toolRuns,
-    escalate: priceFailed ? 'price' : 'promise',
-  };
+  // Two strikes. Money/promise failures defer (§6.5 — and defer WINS over an
+  // identity substitution: the escalation carries the question to a human).
+  if (second.priceViolations.length > 0 || second.promiseViolations.length > 0) {
+    deps.log.info(
+      { guardrail: 'pooled', prices: second.priceViolations, promises: second.promiseViolations },
+      'guardrails failed twice — deferring + escalating',
+    );
+    await recordViolations(deps, second, 'deferred');
+    const priceFailed = second.priceViolations.length > 0;
+    return {
+      action: 'defer',
+      // A price failure defers with the rate line; a promise-only failure with
+      // the team-referral line (both escalate, so both lines are true).
+      text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
+      toolRuns: second.toolRuns,
+      escalate: priceFailed ? 'price' : 'promise',
+    };
+  }
+  // Identity still missing → substitute the approved line whole (§6.5 #5).
+  if (second.identityViolation) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'identity',
+      action: 'substituted',
+      draft: second.text,
+    });
+    return finalize({ ...second, text: PHRASEBOOK.isBot }, deps);
+  }
+  // Only length left → the last-resort sentence-boundary trim.
+  await deps.record?.({
+    kind: 'guardrail',
+    rule: 'length_format',
+    action: 'clamped',
+    draft: second.text,
+    details: { reason: 'over_length_after_regenerate' },
+  });
+  return finalize({ ...second, text: trimAtSentence(second.text) }, deps);
 }
 
 interface Evaluation {
@@ -116,9 +160,11 @@ interface Evaluation {
   priceViolations: number[];
   promiseViolations: string[];
   referral: boolean;
+  identityViolation: boolean;
+  tooLong: boolean;
 }
 
-/** One pass: negotiation rewrite → price check + promise scan (pooled). */
+/** One pass: negotiation rewrite → price + promise + identity + length. */
 async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evaluation> {
   const nego = applyNegotiationLock(turn.draft);
   if (nego.changed) {
@@ -139,26 +185,62 @@ async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evalu
     systemEvidence: deps.systemEvidence ?? new Set(),
     escalationPlanned: deps.mustEscalate === true,
   });
+  const identityViolation = deps.botQuestion === true && !containsIdentityLine(nego.text);
+  const tooLong = nego.text.length > MAX_REPLY_CHARS || bulletLineCount(nego.text) > 3;
   return {
-    ok: price.ok && promises.violations.length === 0,
+    ok: price.ok && promises.violations.length === 0 && !identityViolation && !tooLong,
     text: nego.text,
     toolRuns: turn.toolRuns,
     priceViolations: price.unbacked,
     promiseViolations: promises.violations,
     referral: promises.referral,
+    identityViolation,
+    tooLong,
   };
 }
 
-/** Resolves the outgoing escalation: a C3 referral must be MADE true, and a
- * must_escalate turn never leaves without an escalation (§6.7 assertion —
- * near-tautological now, load-bearing when CH-14 makes escalation a tool the
- * model might fail to call). */
-function finishSend(
-  evaluation: Evaluation,
-  deps: GuardrailDeps,
-): Extract<GuardrailOutcome, { action: 'send' }> {
+/**
+ * Final gate: guardrail-6 deterministic fixes on the OUTGOING text, re-running
+ * the pure checks if anything mutated; then the escalation resolution — a C3
+ * referral must be MADE true, and a must_escalate turn never leaves without an
+ * escalation (§6.7 assertion — near-tautological now, load-bearing when CH-14
+ * makes escalation a tool the model might fail to call).
+ */
+async function finalize(evaluation: Evaluation, deps: GuardrailDeps): Promise<GuardrailOutcome> {
+  let text = evaluation.text;
+  const clamp = applyFormatClamp(text);
+  if (clamp.notes.length > 0) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'length_format',
+      action: 'clamped',
+      draft: text,
+      details: { notes: clamp.notes },
+    });
+  }
+  if (clamp.changed) {
+    text = clamp.text;
+    // Re-run the pure checks on the mutated text — a clamp must never be able
+    // to smuggle a violation past the pool (review decision).
+    const price = checkPriceIntegrity(text, evaluation.toolRuns, deps.whitelist ?? []);
+    const promises = scanPromises(text, {
+      toolRuns: evaluation.toolRuns,
+      systemEvidence: deps.systemEvidence ?? new Set(),
+      escalationPlanned: deps.mustEscalate === true,
+    });
+    if (!price.ok || promises.violations.length > 0) {
+      const priceFailed = !price.ok;
+      return {
+        action: 'defer',
+        text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
+        toolRuns: evaluation.toolRuns,
+        escalate: priceFailed ? 'price' : 'promise',
+      };
+    }
+    if (deps.botQuestion === true && !containsIdentityLine(text)) text = PHRASEBOOK.isBot;
+  }
   const escalate = evaluation.referral || deps.mustEscalate === true ? 'referral' : null;
-  return { action: 'send', text: evaluation.text, toolRuns: evaluation.toolRuns, escalate };
+  return { action: 'send', text, toolRuns: evaluation.toolRuns, escalate };
 }
 
 async function recordViolations(
@@ -182,6 +264,14 @@ async function recordViolations(
       action,
       draft: evaluation.text,
       details: { violations: evaluation.promiseViolations },
+    });
+  }
+  if (evaluation.identityViolation) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'identity',
+      action,
+      draft: evaluation.text,
     });
   }
 }

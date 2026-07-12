@@ -18,6 +18,7 @@ import { istCalendarDay, isNightIST } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
 import { costEventsFor, type ConverseUsage } from './cost.js';
+import { isWindowOpen } from './draftGuards.js';
 import { runGuardrails } from './guardrails.js';
 import { captionOf, locationTextOf } from './inbound.js';
 import { kbPriceWhitelist, loadKnowledge } from './knowledge.js';
@@ -85,6 +86,13 @@ export interface TurnArgs {
    * message") — the worker passes the cursor row's time; null/absent means no
    * previous message, so every claimable system row counts. */
   evidenceSince?: Date | null;
+  /** The newest batch message's time — the 24h-window operand. WHY not the
+   * conversation column: it is refreshed inside the claim, so pre-claim it
+   * describes the PREVIOUS turn and a returning guest would read as closed
+   * (review finding — the old buildSituation had this staleness bug). */
+  newestGuestMsgAt: Date;
+  /** Guardrail 5 trigger from the policy pass (CH-07 step 3). */
+  botQuestion?: boolean;
 }
 
 /**
@@ -93,7 +101,10 @@ export interface TurnArgs {
  * turn must escalate (price could not be validated).
  */
 export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<TurnResult> {
-  const { conversation, dbNow, conversationId } = args;
+  // args.conversation is currently unread (the window operand moved to the
+  // newest batch message) but stays on TurnArgs — CH-08's context builder
+  // consumes it (summary + profile blocks).
+  const { dbNow, conversationId } = args;
   const recent = await getRecentMessages(deps.db, conversationId);
   const baseMessages = mapTranscript(recent);
   // Guardrail-2 evidence (§6.5 #2's second channel): claimable system rows
@@ -113,7 +124,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
   const situation = buildSituation({
     now: dbNow,
     isNight: isNightIST(dbNow, deps.nightStart, deps.nightEnd),
-    serviceWindowOpen: isServiceWindowOpen(conversation.serviceWindowExpiresAt, dbNow),
+    serviceWindowOpen: isWindowOpen(args.newestGuestMsgAt, dbNow),
     degraded: deps.degraded.isDegraded(),
     mustEscalate: args.mustEscalate ?? false,
     unviewableMedia: args.unviewableMedia ?? false,
@@ -173,6 +184,8 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       // Guardrail 2 (CH-07): evidence + the §6.7 must-escalate assertion.
       systemEvidence,
       mustEscalate: args.mustEscalate ?? false,
+      // Guardrail 5 (CH-07): the policy pass's inbound bot-question flag.
+      botQuestion: args.botQuestion ?? false,
     },
   );
 
@@ -325,9 +338,6 @@ function renderGuestContent(message: Message): string {
   return `[${message.type}]`;
 }
 
-function isServiceWindowOpen(expiresAt: Date | null, now: Date): boolean {
-  return expiresAt !== null && now.getTime() < expiresAt.getTime();
-}
 
 /** One cost_events row per non-zero token bucket, per round, stamped IST-day. */
 async function logCost(deps: Pick<TurnDeps, 'db' | 'log'>, now: Date, usage: ConverseUsage): Promise<void> {

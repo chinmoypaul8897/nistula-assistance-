@@ -341,3 +341,64 @@ describe('runGuardrails — promise integrity in the pooled pipeline (CH-07)', (
     expect(out.escalate).toBeNull(); // already escalated — no fresh ping
   });
 });
+
+describe('runGuardrails — identity and format in the pooled pipeline (CH-07)', () => {
+  const log = { info: vi.fn() };
+
+  it('a bot-question turn with the approved line present sends untouched', async () => {
+    const draft = `${PHRASEBOOK.isBot} Now — which dates were you thinking of?`;
+    const out = await runGuardrails(
+      { draft, toolRuns: [] },
+      { regenerate: vi.fn(), log, botQuestion: true },
+    );
+    expect(out.action).toBe('send');
+    if (out.action === 'send') expect(out.text).toBe(draft);
+  });
+
+  it('a paraphrased identity answer regenerates, then substitutes the approved line', async () => {
+    const regenerate = vi.fn(async (nudge: string) => {
+      expect(nudge).toContain('approved line');
+      return { draft: 'I am just a friendly helper, no need to worry.', toolRuns: [] };
+    });
+    const out = await runGuardrails(
+      { draft: 'I am an assistant of sorts, yes.', toolRuns: [] },
+      { regenerate, log, botQuestion: true },
+    );
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(out.action).toBe('send');
+    if (out.action === 'send') expect(out.text).toBe(PHRASEBOOK.isBot);
+  });
+
+  it('defer WINS over an identity substitution when money also fails twice', async () => {
+    const regenerate = vi.fn(async () => ({ draft: 'Still ₹99,000, trust me.', toolRuns: [] }));
+    const out = await runGuardrails(
+      { draft: 'It is ₹99,000 for you my friend.', toolRuns: [] },
+      { regenerate, log, botQuestion: true },
+    );
+    expect(out.action).toBe('defer');
+    if (out.action === 'defer') expect(out.text).toBe(PHRASEBOOK.quoteApiDown);
+  });
+
+  it('an over-length draft regenerates with the shorter nudge, then trims at a sentence', async () => {
+    const long = `${'A lovely detail about the villa. '.repeat(40)}`;
+    const regenerate = vi.fn(async (nudge: string) => {
+      expect(nudge).toContain('too long');
+      return { draft: long, toolRuns: [] }; // the model refuses to shorten
+    });
+    const out = await runGuardrails({ draft: long, toolRuns: [] }, { regenerate, log });
+    expect(out.action).toBe('send');
+    if (out.action === 'send') {
+      expect(out.text.length).toBeLessThanOrEqual(900);
+      expect(out.text.endsWith('.')).toBe(true);
+    }
+  });
+
+  it('the deterministic clamp fixes headers/exclamations on an otherwise clean draft', async () => {
+    const out = await runGuardrails(
+      { draft: '## Your stay\nAll set for December!', toolRuns: [] },
+      { regenerate: vi.fn(), log },
+    );
+    expect(out.action).toBe('send');
+    if (out.action === 'send') expect(out.text).toBe('Your stay\nAll set for December.');
+  });
+});
