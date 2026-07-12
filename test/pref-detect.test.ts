@@ -70,6 +70,12 @@ describe('detectLang', () => {
     ).toBeNull();
   });
 
+  it('English homographs never flip a guest to hinglish (audit fix: hum/mere dropped)', () => {
+    expect(detectLang(["there's a loud hum"])).toBeNull();
+    expect(detectLang(["it's a mere 5 minute walk"])).toBe('en');
+    expect(detectLang(['the ac makes a hum at night, please have it checked'])).toBe('en');
+  });
+
   it('non-Latin (Devanagari) text yields no signal — F4 is out of v1', () => {
     expect(detectLang(['क्या विला उपलब्ध है'])).toBeNull();
   });

@@ -40,11 +40,14 @@ export function detectRegister(texts: readonly string[]): RegisterSignal | null 
 }
 
 // Unambiguous Latin-script Hindi tokens (see module header for exclusions).
+// Audit fix: 'hum' (an AC noise) and 'mere' (a mere 5 minutes) are common
+// ENGLISH words — they flipped real English complaints to hinglish and
+// blocked the en-flip forever. Dropped; 'tha' dropped too (English slang).
 const HINGLISH_TOKENS = new Set([
-  'hai', 'hain', 'tha', 'thi', 'nahi', 'nahin', 'kya', 'kaise', 'kaisa', 'kitna', 'kitne',
+  'hai', 'hain', 'thi', 'nahi', 'nahin', 'kya', 'kaise', 'kaisa', 'kitna', 'kitne',
   'accha', 'acha', 'theek', 'thik', 'bhai', 'yaar', 'chahiye', 'milega', 'milegi', 'hoga',
-  'hogi', 'karna', 'karo', 'karenge', 'batao', 'bataiye', 'aap', 'aapka', 'aapke', 'hum',
-  'humein', 'mera', 'meri', 'mere', 'apna', 'apni', 'wala', 'wali', 'bahut', 'bohot',
+  'hogi', 'karna', 'karo', 'karenge', 'batao', 'bataiye', 'aap', 'aapka', 'aapke',
+  'humein', 'mera', 'meri', 'apna', 'apni', 'wala', 'wali', 'bahut', 'bohot',
   'thoda', 'abhi', 'aaj', 'jaldi', 'shukriya', 'dhanyavaad', 'namaste', 'chalega',
   'kripya', 'paisa', 'paise', 'pani', 'kamra', 'aur', 'lekin', 'magar', 'kyunki',
   'kab', 'kahan', 'kaun', 'kuch', 'sab', 'bilkul', 'zaroor', 'haan',
