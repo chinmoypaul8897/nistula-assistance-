@@ -9,7 +9,7 @@
  *
  * Phone decade 5xx is CH-11's claim in the test-number ledger.
  */
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -97,6 +97,15 @@ async function ctxFor(
 
 const run = (input: unknown, ctx: ToolContext): Promise<ToolResult> =>
   getBookingTool.handler(input, ctx);
+
+/** Rows in the attempt log for a phone (optionally one outcome). */
+async function countAttempts(phone: string, outcome?: 'linked' | 'refused'): Promise<number> {
+  const rows = await db
+    .select({ outcome: schema.referenceAttempts.outcome })
+    .from(schema.referenceAttempts)
+    .where(eq(schema.referenceAttempts.phone, phone));
+  return outcome === undefined ? rows.length : rows.filter((r) => r.outcome === outcome).length;
+}
 
 describe('no reference — the guest\'s own linked stays', () => {
   it('returns the linked stay with no money, name, email or meal plan', async () => {
@@ -210,10 +219,7 @@ describe('the reference claim — every failure is the SAME value', () => {
     await run({ reference: '953' }, ctx);
 
     expect(ctx.booking?.claim.escalate).toBe(true);
-    const [{ n }] = await db.execute<{ n: number }>(
-      sql`SELECT count(*)::int AS n FROM reference_attempts WHERE phone = ${STRANGER} AND outcome = 'refused'`,
-    );
-    expect(Number(n)).toBe(1);
+    expect(await countAttempts(STRANGER, 'refused')).toBe(1);
   });
 
   // An honest typo must cost ONE strike, not two: the tool loop re-runs whole on
@@ -226,10 +232,7 @@ describe('the reference claim — every failure is the SAME value', () => {
     await run({ reference: '953' }, ctx); // regenerate loop — frozen, no DB write
     await run({ reference: '953' }, ctx);
 
-    const [{ n }] = await db.execute<{ n: number }>(
-      sql`SELECT count(*)::int AS n FROM reference_attempts WHERE phone = ${STRANGER}`,
-    );
-    expect(Number(n)).toBe(1);
+    expect(await countAttempts(STRANGER)).toBe(1);
   });
 
   it('refuses a second DIFFERENT reference in one turn — the model may not fish', async () => {
@@ -251,10 +254,7 @@ describe('the reference claim — every failure is the SAME value', () => {
     const res = await run({ reference: '953' }, ctx);
 
     expect(res.ok).toBe(true);
-    const [{ n }] = await db.execute<{ n: number }>(
-      sql`SELECT count(*)::int AS n FROM reference_attempts WHERE phone = ${OWNER}`,
-    );
-    expect(Number(n)).toBe(0);
+    expect(await countAttempts(OWNER)).toBe(0);
   });
 
   // A verified claim on a CANCELLED booking is still theirs — link it, but a

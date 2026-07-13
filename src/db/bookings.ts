@@ -87,6 +87,16 @@ export type UpsertMirrorOutcome =
 function fieldChanged(field: MirrorDiffField, prev: BookingMirror, next: MirrorRowInput): boolean {
   const a = (prev as Record<MirrorDiffField, unknown>)[field] ?? null;
   const b = (next as Record<MirrorDiffField, unknown>)[field] ?? null;
+  if (field === 'physicalRoomLabel') {
+    // A null room label from a POLL means "this payload carries no room
+    // information", never "the room was unassigned". BKG-02 payloads have no
+    // RoomID at all (CH-10 confirmed on all 22 live rows) while BKG-03
+    // FetchSingleBooking DOES return one — so without this, the next poll of an
+    // enriched booking would wipe the villa label AND emit a phantom
+    // booking.modified into the queue CH-12 has a hard precondition to purge.
+    // See coalesceMirrorInput, which keeps the stored value on the way in.
+    return b !== null && a !== b;
+  }
   if (field === 'amount') {
     // Numeric compare: eZee may re-send '976.00' as '976.0000' — a scale
     // difference must never fake a modification (money stays verbatim in
@@ -100,6 +110,18 @@ function fieldChanged(field: MirrorDiffField, prev: BookingMirror, next: MirrorR
 /** Changed diff-fields between the stored row and a fresh normalisation. */
 export function diffMirrorFields(prev: BookingMirror, next: MirrorRowInput): MirrorDiffField[] {
   return MIRROR_DIFF_FIELDS.filter((field) => fieldChanged(field, prev, next));
+}
+
+/**
+ * Fields where "absent from this payload" must not mean "cleared". Only the
+ * room label so far: BKG-02 polls never carry one, BKG-03 does, and the poller
+ * runs constantly — so an un-coalesced write would erase every enriched label
+ * within 60 seconds of the reconcile script writing it.
+ */
+export function coalesceMirrorInput(prev: BookingMirror, next: MirrorRowInput): MirrorRowInput {
+  return next.physicalRoomLabel === null && prev.physicalRoomLabel !== null
+    ? { ...next, physicalRoomLabel: prev.physicalRoomLabel }
+    : next;
 }
 
 /**
@@ -141,7 +163,11 @@ export async function upsertMirrorRow(
   const REVIVING_STATUSES: readonly BookingStatus[] = ['checked_in', 'checked_out'];
   const resurrectionBlocked =
     prev.status === 'cancelled' && !REVIVING_STATUSES.includes(input.status);
-  const effective = resurrectionBlocked ? { ...input, status: 'cancelled' as const } : input;
+  const withStatus = resurrectionBlocked ? { ...input, status: 'cancelled' as const } : input;
+  // Keep a room label we already hold when the incoming payload has none — the
+  // WRITE half of the rule fieldChanged states (a poll carries no room info, so
+  // it must not erase what FetchSingleBooking gave us).
+  const effective = coalesceMirrorInput(prev, withStatus);
   const changed = diffMirrorFields(prev, effective);
   const [row] = await db
     .update(bookingsMirror)
