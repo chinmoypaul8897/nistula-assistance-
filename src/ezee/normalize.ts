@@ -52,11 +52,17 @@ export function mapStatus(
     return { status: 'cancelled', issue: null };
   }
   const verb = (tranStatus ?? '').toLowerCase().trim();
-  if (verb === 'new') {
-    if (isConfirmed === '1') return { status: 'confirmed', issue: null };
+  // The confirmation gate covers BOTH change verbs that can carry a tran
+  // (BKG-02 defines IsConfirmed on every BookingTran): an unconfirmed hold
+  // that gets EDITED is still a hold — mapping it 'modified' would count it
+  // live for CH-11/12 (pre-push audit DEFECT, the CH-09 narrower-than-
+  // contract pattern).
+  if (verb === 'new' || verb === 'modify') {
+    if (isConfirmed === '1') {
+      return { status: verb === 'new' ? 'confirmed' : 'modified', issue: null };
+    }
     return { status: 'unknown', issue: `unconfirmed_hold:IsConfirmed=${isConfirmed ?? 'absent'}` };
   }
-  if (verb === 'modify') return { status: 'modified', issue: null };
   if (verb === 'cancel') return { status: 'cancelled', issue: null };
   return {
     status: 'unknown',

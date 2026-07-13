@@ -1,9 +1,10 @@
 /**
  * CH-10 poller integration battery — real Postgres + real pg-boss, fake eZee
- * client (§3.5: no live calls). Drives runPoll() directly; the cron/queue
- * plumbing is registerJobs wiring covered by the jobs suite conventions.
+ * client (§3.5: no live calls). Drives runPoll() directly; the registerJobs
+ * cron/worker mount is thin glue verified by the dev-boot smoke (queue +
+ * schedule rows inspected in the DB), not by this suite.
  * Mandated cases (plan CH-10 tests): ACK-only-after-commit, event diffing,
- * plus the cancel-semantics and failure-ladder batteries.
+ * plus the cancel-semantics, resurrection-guard and failure-ladder batteries.
  */
 import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
@@ -48,6 +49,23 @@ function loadEnvelope(name: string): EzeePollOutcome {
 
 function ok(reservations: EzeeReservation[], cancels: EzeeCancelReservation[] = []): EzeePollOutcome {
   return { status: 'ok', reservations, cancels, raw: { Reservations: {} } };
+}
+
+function makeMultiRes(uniqueId: string): EzeeReservation {
+  const base = makeRes(uniqueId);
+  const tran = (base.BookingTran as Record<string, unknown>[])[0] ?? {};
+  return {
+    ...base,
+    BookingTran: [
+      tran,
+      {
+        ...tran,
+        TransactionId: `T2-${uniqueId}`,
+        RoomTypeCode: '5220300000000000001',
+        RoomTypeName: 'Nistula Apartment',
+      },
+    ],
+  };
 }
 
 function makeRes(uniqueId: string, tranOverrides: Record<string, unknown> = {}): EzeeReservation {
@@ -225,6 +243,50 @@ describe('cancel semantics', () => {
     ]);
   });
 
+  it('a FULL cancel — N suffixed entries covering all N rooms — flips the row', async () => {
+    // BKG-02's own full-cancel shape: no bare entry, one suffixed entry per
+    // room. Judged one-by-one this was ACKed away with nothing flipped —
+    // the pre-push audit BLOCKER; the same-base group logic is the fix.
+    const { poller, ackCalls, alerts } = makePoller([
+      ok([makeMultiRes('X9500')]),
+      ok(
+        [],
+        [
+          { UniqueID: 'X9500-1', Status: 'Cancel' },
+          { UniqueID: 'X9500-2', Status: 'Cancel' },
+        ],
+      ),
+    ]);
+    await poller.runPoll();
+    await drainEvents('created');
+    await poller.runPoll();
+    expect((await getMirrorByReservationNo(db, 'X9500'))?.status).toBe('cancelled');
+    expect(await drainEvents('cancelled')).toEqual(['X9500']); // ONE event for the base
+    expect(alerts('ezee_partial_cancel_suspect')).toHaveLength(0);
+    expect(ackCalls[1]).toEqual([
+      { bookingId: 'X9500-1', pmsBookingId: 'X9500-1', status: 'Cancel' },
+      { bookingId: 'X9500-2', pmsBookingId: 'X9500-2', status: 'Cancel' },
+    ]);
+  });
+
+  it('a stale New after an ACKed cancel cannot resurrect the booking', async () => {
+    // The cancel was ACKed away — eZee will never resend it; last-write
+    // would un-cancel the booking forever (pre-push audit DEFECT).
+    const { poller, ackCalls, alerts } = makePoller([
+      ok([], [{ UniqueID: 'X9700', Status: 'Cancel' }]), // never-seen → tombstone
+      ok([makeRes('X9700')]), // the stale New lands afterwards
+    ]);
+    await poller.runPoll();
+    await drainEvents('cancelled');
+    await poller.runPoll();
+    expect((await getMirrorByReservationNo(db, 'X9700'))?.status).toBe('cancelled');
+    expect(alerts('ezee_cancel_conflict')).toHaveLength(1);
+    expect(await drainEvents('modified')).not.toContain('X9700'); // event suppressed
+    expect(await drainEvents('created')).not.toContain('X9700');
+    // Still ACKed: the payload is preserved in raw; a human owns the conflict.
+    expect(ackCalls[1]).toEqual([{ bookingId: 'X9700', pmsBookingId: 'X9700', status: 'New' }]);
+  });
+
   it('a never-mirrored cancel gets a tombstone stub + event + ACK', async () => {
     const { poller, ackCalls } = makePoller([
       ok([], [{ UniqueID: '88800-1', Status: 'Cancel' }]),
@@ -335,6 +397,42 @@ describe('failure ladder', () => {
     expect((await getMirrorByReservationNo(db, 'X9400'))?.status).toBe('confirmed');
     expect(rig.lines.some((l) => l.obj.context === 'ack')).toBe(true);
     await drainEvents('created');
+  });
+
+  it('PERSISTENT ACK failures reach the 5-consecutive alert (audit DEFECT pin)', async () => {
+    // The ladder must settle AFTER the ACK: an early reset made this class
+    // unalertable forever while eZee's un-ACKed queue grew unbounded.
+    const rig = makePoller([ok([makeRes('X9600')])]); // same envelope every cycle
+    rig.setAckResult({ status: 'ezee_error', errorCode: '500', errorMessage: null });
+    for (let i = 0; i < 5; i++) await rig.poller.runPoll();
+    expect(rig.alerts('ezee_poll_failing')).toHaveLength(1);
+    await rig.poller.runPoll(); // 6th — suppressed
+    expect(rig.alerts('ezee_poll_failing')).toHaveLength(1);
+    rig.setAckResult({ status: 'ok' });
+    await rig.poller.runPoll(); // clean cycle — recovery + re-arm
+    expect(rig.lines.some((l) => l.msg === '[ezee] poll recovered')).toBe(true);
+    await drainEvents('created');
+  });
+
+  it('an auth-class ACK failure alerts once, not every cycle', async () => {
+    const rig = makePoller([ok([makeRes('X9650')])]);
+    rig.setAckResult({ status: 'ezee_error', errorCode: '301', errorMessage: null });
+    await rig.poller.runPoll();
+    await rig.poller.runPoll();
+    expect(rig.alerts('ezee_auth_failed')).toHaveLength(1);
+    await drainEvents('created');
+  });
+
+  it('deterministic per-item tx failures feed the ladder (poison-pill pin)', async () => {
+    await boss.deleteQueue(BOOKING_EVENT_QUEUES.created);
+    try {
+      const rig = makePoller([ok([makeRes('X9800')])]); // created-event send fails every cycle
+      for (let i = 0; i < 5; i++) await rig.poller.runPoll();
+      expect(rig.alerts('ezee_poll_failing')).toHaveLength(1);
+      expect(rig.lines.some((l) => l.obj.context === 'tx')).toBe(true);
+    } finally {
+      await ensureQueues(boss);
+    }
   });
 });
 

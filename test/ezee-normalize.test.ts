@@ -120,7 +120,12 @@ describe('mapStatus table', () => {
     ['New', '0', undefined, 'unknown'],
     ['New', undefined, undefined, 'unknown'],
     ['Modify', '1', undefined, 'modified'],
+    // An EDITED unconfirmed hold is still a hold — never a live status
+    // (pre-push audit DEFECT: the gate must cover both change verbs).
+    ['Modify', '0', undefined, 'unknown'],
+    ['Modify', undefined, undefined, 'unknown'],
     ['Cancel', '1', undefined, 'cancelled'],
+    ['Cancel', '0', undefined, 'cancelled'],
     ['New', '1', 'Arrived', 'checked_in'],
     ['New', '1', 'CheckedIn', 'checked_in'],
     ['Modify', '1', 'Checked Out', 'checked_out'],
@@ -237,16 +242,33 @@ describe('eventKindForUpsert', () => {
     const before = row('confirmed');
     expect(
       eventKindForUpsert(
-        { outcome: 'modified', row: row('modified'), before, changed: ['checkOut'] },
+        {
+          outcome: 'modified',
+          row: row('modified'),
+          before,
+          changed: ['checkOut'],
+          resurrectionBlocked: false,
+        },
         'Modify',
       ),
     ).toBe('modified');
     expect(
       eventKindForUpsert(
-        { outcome: 'cancelled', row: row('cancelled'), before, changed: ['status'] },
+        {
+          outcome: 'cancelled',
+          row: row('cancelled'),
+          before,
+          changed: ['status'],
+          resurrectionBlocked: false,
+        },
         undefined,
       ),
     ).toBe('cancelled');
-    expect(eventKindForUpsert({ outcome: 'unchanged', row: row('confirmed') }, 'New')).toBeNull();
+    expect(
+      eventKindForUpsert(
+        { outcome: 'unchanged', row: row('confirmed'), resurrectionBlocked: false },
+        'New',
+      ),
+    ).toBeNull();
   });
 });

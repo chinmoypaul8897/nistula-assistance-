@@ -68,9 +68,21 @@ export type MirrorDiffField = (typeof MIRROR_DIFF_FIELDS)[number];
 
 export type UpsertMirrorOutcome =
   | { outcome: 'created'; row: BookingMirror }
-  | { outcome: 'modified'; row: BookingMirror; before: BookingMirror; changed: MirrorDiffField[] }
-  | { outcome: 'cancelled'; row: BookingMirror; before: BookingMirror; changed: MirrorDiffField[] }
-  | { outcome: 'unchanged'; row: BookingMirror };
+  | {
+      outcome: 'modified';
+      row: BookingMirror;
+      before: BookingMirror;
+      changed: MirrorDiffField[];
+      resurrectionBlocked: boolean;
+    }
+  | {
+      outcome: 'cancelled';
+      row: BookingMirror;
+      before: BookingMirror;
+      changed: MirrorDiffField[];
+      resurrectionBlocked: boolean;
+    }
+  | { outcome: 'unchanged'; row: BookingMirror; resurrectionBlocked: boolean };
 
 function fieldChanged(field: MirrorDiffField, prev: BookingMirror, next: MirrorRowInput): boolean {
   const a = (prev as Record<MirrorDiffField, unknown>)[field] ?? null;
@@ -115,18 +127,27 @@ export async function upsertMirrorRow(
     if (row === undefined) throw new Error('mirror insert returned no row');
     return { outcome: 'created', row };
   }
-  const changed = diffMirrorFields(prev, input);
+  // A cancelled row never silently returns to a bookable status: cancel
+  // entries are ACKed away (eZee will not redeliver them), so a stale
+  // New/Modify redelivery landing AFTER an applied cancel would otherwise
+  // un-cancel the booking with no signal left to correct it (pre-push audit
+  // DEFECT). A recognised live CurrentStatus (checked_in/checked_out) IS
+  // proof of life and passes; the poller alerts ops on every block.
+  const resurrectionBlocked =
+    prev.status === 'cancelled' && (input.status === 'confirmed' || input.status === 'modified');
+  const effective = resurrectionBlocked ? { ...input, status: 'cancelled' as const } : input;
+  const changed = diffMirrorFields(prev, effective);
   const [row] = await db
     .update(bookingsMirror)
-    .set({ ...input, syncedAt: sql`now()` })
+    .set({ ...effective, syncedAt: sql`now()` })
     .where(eq(bookingsMirror.id, prev.id))
     .returning();
   if (row === undefined) throw new Error('mirror update returned no row');
-  if (changed.length === 0) return { outcome: 'unchanged', row };
+  if (changed.length === 0) return { outcome: 'unchanged', row, resurrectionBlocked };
   if (row.status === 'cancelled' && prev.status !== 'cancelled') {
-    return { outcome: 'cancelled', row, before: prev, changed };
+    return { outcome: 'cancelled', row, before: prev, changed, resurrectionBlocked };
   }
-  return { outcome: 'modified', row, before: prev, changed };
+  return { outcome: 'modified', row, before: prev, changed, resurrectionBlocked };
 }
 
 export type CancelOutcome =

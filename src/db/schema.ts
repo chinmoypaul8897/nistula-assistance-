@@ -245,7 +245,8 @@ export const bookingsMirror = pgTable(
 );
 
 /** Link table guest↔booking (§4, CH-10) — phone match now; reference_in_chat
- * and manual arrive with CH-11/admin. Real relations, so real FKs. */
+ * and manual arrive with CH-11/admin. Real relations, so real FKs.
+ * TODO(CH-18): DELETE_GUEST must erase a guest's rows here (guest-keyed). */
 export const guestStays = pgTable(
   'guest_stays',
   {

@@ -136,6 +136,35 @@ describe('upsertMirrorRow', () => {
     );
     expect(again.outcome).toBe('unchanged');
   });
+
+  it('a cancelled row is never resurrected by confirmed/modified (audit DEFECT)', async () => {
+    await upsertMirrorRow(db, makeInput({ ezeeReservationNo: 'RES-1008', status: 'cancelled' }));
+    // A stale New redelivery after the cancel was ACKed away: status must
+    // stay cancelled (nothing at eZee would ever correct an un-cancel).
+    const blocked = await upsertMirrorRow(
+      db,
+      makeInput({ ezeeReservationNo: 'RES-1008', status: 'confirmed' }),
+    );
+    expect(blocked.outcome).toBe('unchanged'); // only status differed — and it was held
+    if (blocked.outcome === 'unchanged') expect(blocked.resurrectionBlocked).toBe(true);
+    expect((await getMirrorByReservationNo(db, 'RES-1008'))?.status).toBe('cancelled');
+    // Non-status fields still update under the guard, flagged as blocked.
+    const partial = await upsertMirrorRow(
+      db,
+      makeInput({ ezeeReservationNo: 'RES-1008', status: 'modified', guestEmail: 'new@example.com' }),
+    );
+    expect(partial.outcome).toBe('modified');
+    if (partial.outcome === 'modified') expect(partial.resurrectionBlocked).toBe(true);
+    expect((await getMirrorByReservationNo(db, 'RES-1008'))?.status).toBe('cancelled');
+    // A recognised live CurrentStatus (checked_in) IS proof of life — passes.
+    const revived = await upsertMirrorRow(
+      db,
+      makeInput({ ezeeReservationNo: 'RES-1008', status: 'checked_in', guestEmail: 'new@example.com' }),
+    );
+    expect(revived.outcome).toBe('modified');
+    if (revived.outcome === 'modified') expect(revived.resurrectionBlocked).toBe(false);
+    expect((await getMirrorByReservationNo(db, 'RES-1008'))?.status).toBe('checked_in');
+  });
 });
 
 describe('diffMirrorFields', () => {
