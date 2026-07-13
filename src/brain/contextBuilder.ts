@@ -2,8 +2,9 @@
  * Context builder (plan.md §6.3, CH-08). Extracted from turn.ts so the turn
  * file keeps only the tool loop + guardrail orchestration: this module owns
  * everything the model SEES before the first call — the token-budgeted
- * transcript window, the [5]-lite guest block, the rolling-summary block, the
- * guardrail-2 evidence read, and [6] SITUATION (all via prompt.ts builders).
+ * transcript window, the block [5] guest profile (name/prefs/facts, CH-09),
+ * the rolling-summary block, the guardrail-2 evidence read, and [6]
+ * SITUATION (via the prompt.ts/profileBlock.ts builders).
  *
  * Coverage invariant (shared with the summariser): summary ∪ window covers the
  * whole thread. `overflow` reports what THIS turn could not see so the worker
@@ -18,14 +19,15 @@ import {
   type Conversation,
   type Message,
 } from '../db/repos.js';
+import { getActiveGuestFacts } from '../db/guestMemory.js';
 import { countUncoveredMessages, getSystemContextKinds } from '../db/summaries.js';
 import { isNightIST } from '../lib/time.js';
 import { isWindowOpen } from './draftGuards.js';
 import { captionOf, locationTextOf } from './inbound.js';
 import type { LoadedKnowledge } from './knowledge.js';
+import { buildGuestBlock } from './profileBlock.js';
 import { classesFromContextKinds, type ClaimClass } from './promises.js';
 import {
-  buildGuestBlock,
   buildSituation,
   buildSummaryBlock,
   buildSystemPrompt,
@@ -38,7 +40,11 @@ import type { DegradedTracker } from './tools/degraded.js';
 // summary + last ~30 messages, token-budgeted"; walk back until ~6k transcript
 // tokens or 30 msgs). D4 precedent: changing them is a plan.md edit. The
 // summary block is charged AGAINST the budget (net), so the envelope as a
-// whole stays ≤ ~6k and the full request comfortably under §6.3's ~12k.
+// whole stays ≤ ~6k. Block [5] (CH-09) is NOT budgeted here: its worst case
+// is bounded by construction (15 facts × 200 code points + prefs + framing
+// ≈ ~1k tokens), so the request maths still clears §6.3's ~12k — cached head
+// ~4.2k + envelope ≤6k + [5] ≤~1k + [6] ≈ ~11.5k (audit-recorded, re-check
+// if PROFILE_FACTS_LIMIT or FACT_RENDER_MAX ever grow).
 export const TRANSCRIPT_MAX_MESSAGES = 30;
 export const TRANSCRIPT_TOKEN_BUDGET = 6000;
 /** Fetch slack over the window: system rows never render but share the fetch,
@@ -68,8 +74,11 @@ export interface ContextBuilderArgs {
   conversation: Conversation;
   dbNow: Date;
   conversationId: string;
-  /** Block [5]-lite input (guest-typed; prompt.ts sanitises). */
+  /** Block [5] name input (guest-typed; profileBlock.ts sanitises). */
   guestName: string | null;
+  /** Block [5] tone inputs (CH-09) — default 'unknown' keeps old callers valid. */
+  registerPref?: 'warm_first_name' | 'formal_sir_maam' | 'unknown';
+  langPref?: 'en' | 'hinglish' | 'unknown';
   /** Guardrail-2 evidence window start (§6.5 #2) as the claim cursor's
    * created_at::text — µs-exact, never a JS Date (CH-03 trap). Null means no
    * previous message, so every claimable system row counts. */
@@ -111,6 +120,8 @@ export async function buildTurnContext(
   const { dbNow, conversationId } = args;
   const fetched = await getRecentMessages(deps.db, conversationId, TRANSCRIPT_FETCH_LIMIT);
 
+  // Block [5] (CH-09): live facts, newest 15 — pre-claim like every read here.
+  const facts = await getActiveGuestFacts(deps.db, args.conversation.guestId);
   const summaryBlock = buildSummaryBlock(args.conversation.summary);
   const plan = planWindow(fetched, transcriptBudgetFor(args.conversation.summary));
   const baseMessages = mapTranscript(plan.window);
@@ -132,7 +143,12 @@ export async function buildTurnContext(
     unviewableMedia: args.unviewableMedia,
   });
   const system = buildSystemPrompt(situation, deps.knowledge.knowledge, {
-    guestBlock: buildGuestBlock(args.guestName),
+    guestBlock: buildGuestBlock({
+      name: args.guestName,
+      registerPref: args.registerPref ?? 'unknown',
+      langPref: args.langPref ?? 'unknown',
+      facts,
+    }),
     summaryBlock,
   });
 

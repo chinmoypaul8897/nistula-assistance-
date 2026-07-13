@@ -75,7 +75,7 @@ export type GuardrailOutcome =
 const PRICE_NUDGE =
   'A price you stated was not returned by any tool this turn. State only ₹ figures that appear in a get_quote result from this turn; if you have no live quote, do not state any price — offer to bring the team in instead.';
 const PROMISE_NUDGE =
-  'You claimed an action that has not actually happened (informing the team, arranging something, sending someone). Do not claim completed actions or dispatches — say you will pass it on to the team instead.';
+  'You claimed an action that has not actually happened (informing the team, arranging something, sending someone). Do not claim completed actions or dispatches — say you will pass it on to the team instead. Never say you have noted or will remember something unless a remember_fact save succeeded this turn.';
 const IDENTITY_NUDGE = `The guest asked whether they are talking to a bot. Include this approved line verbatim in your reply, keeping the rest of your answer: "${PHRASEBOOK.isBot}"`;
 const LENGTH_NUDGE =
   'Your reply is too long or list-heavy for WhatsApp. Rewrite it in 1–3 short sentences, no headers and no bullet lists.';

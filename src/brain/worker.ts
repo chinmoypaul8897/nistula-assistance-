@@ -13,11 +13,13 @@
  * sender:'system' evidence row (§6.5 #2's second channel — the convention
  * CH-13's task events reuse).
  */
+import { updateGuestPrefs } from '../db/guestMemory.js';
 import {
   claimConversationTurn,
   findStaleConversations,
   getConversationTurnContext,
   getUnprocessedGuestMessages,
+  insertMessage,
   resolveMessageCursor,
 } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
@@ -25,8 +27,10 @@ import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
 import { isWindowOpen } from './draftGuards.js';
+import { guestTextOf } from './inbound.js';
 import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
 import { decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
+import { detectLang, detectRegister } from './prefDetect.js';
 import { PHRASEBOOK } from './prompt.js';
 import { createHitRecorder } from './telemetry.js';
 import { runClaudeTurn, type TurnDeps, type TurnLogger } from './turn.js';
@@ -119,6 +123,8 @@ export async function processConversation(
         conversationId,
         guestPhone: ctx.guestPhone,
         guestName: ctx.guestName,
+        registerPref: ctx.registerPref,
+        langPref: ctx.langPref,
         mustEscalate: plan.mustEscalate,
         unviewableMedia: directive.flags.hasMedia,
         botQuestion: directive.flags.botQuestion,
@@ -133,6 +139,9 @@ export async function processConversation(
             ? null
             : cursor.createdAtIso,
         newestGuestMsgAt: newest.createdAt,
+        // remember_fact provenance (CH-09): a fact saved this turn points at
+        // the newest batch message.
+        newestGuestMsgId: newest.id,
       })
     : null;
   const body = turn !== null ? turn.text : plan.send !== null ? PHRASEBOOK[plan.send] : null;
@@ -227,6 +236,55 @@ export async function processConversation(
           deps.log.warn({ conversationId, err: summarizeError(error) }, 'summarise enqueue failed');
         }
       }
+    }
+    // CH-09 (audit): an ok:true remember_fact run (saved OR duplicate — the
+    // fact is on file either way) writes a claimable evidence row so the
+    // NEXT turn's truthful "yes, I've noted it" stays licensed (guardrail-2
+    // C4 via CONTEXT_KIND_CLAIMS) instead of deferring + pinging ops. Same
+    // convention as the escalation row; winning-claim path, best-effort.
+    const factOnFile =
+      turn !== null &&
+      turn.toolRuns.some((run) => run.name === 'remember_fact' && run.result.ok);
+    if (factOnFile) {
+      try {
+        await insertMessage(deps.db, {
+          conversationId,
+          direction: 'out',
+          sender: 'system',
+          type: 'text',
+          body: 'fact saved',
+          status: 'sent',
+          raw: { contextKind: 'fact_saved' },
+        });
+      } catch (error) {
+        deps.log.warn(
+          { conversationId, err: summarizeError(error) },
+          'fact-saved evidence row failed (telemetry only)',
+        );
+      }
+    }
+    // CH-09 step 4: register/language heuristics on the batch text — write
+    // only on a positive signal (latest wins), so a neutral batch never
+    // flips a stored pref. Winning-claim path like the summarise hook, and
+    // NOT gated on the model running: phrasebook/store-only turns carry
+    // guest text too. Fire-and-forget — tone upkeep never fails a turn.
+    try {
+      const texts = msgs.map(guestTextOf).filter((t): t is string => t !== null);
+      const register = detectRegister(texts);
+      const lang = detectLang(texts);
+      const patch: Parameters<typeof updateGuestPrefs>[2] = {};
+      if (register !== null && register !== ctx.registerPref) patch.registerPref = register;
+      if (lang !== null && lang !== ctx.langPref) patch.langPref = lang;
+      if (patch.registerPref !== undefined || patch.langPref !== undefined) {
+        await updateGuestPrefs(deps.db, ctx.conversation.guestId, patch);
+        // Ids + enum values only — never the batch text (§3.3).
+        deps.log.info(
+          { conversationId, guestId: ctx.conversation.guestId, ...patch },
+          'guest prefs updated',
+        );
+      }
+    } catch (error) {
+      deps.log.warn({ conversationId, err: summarizeError(error) }, 'pref detection failed');
     }
   }
 

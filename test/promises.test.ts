@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classesFromContextKinds,
   scanPromises,
+  TOOL_CLAIMS,
   type ClaimClass,
   type PromiseEvidence,
 } from '../src/brain/promises.js';
@@ -133,9 +134,115 @@ describe('evidence channels', () => {
     expect(withFailure.violations.length).toBeGreaterThan(0);
   });
 
-  it('price tools license NOTHING today (TOOL_CLAIMS ships empty)', () => {
+  it('price tools license NOTHING (only remember_fact is registered)', () => {
     const quoteRun: ToolRun = { name: 'get_quote', input: {}, result: { ok: true, data: { total: 1 } } };
     const scan = scanPromises('The team has been informed.', { ...NO_EVIDENCE, toolRuns: [quoteRun] });
     expect(scan.violations.length).toBeGreaterThan(0);
+    expect([...TOOL_CLAIMS.keys()]).toEqual(['remember_fact']);
+    expect([...(TOOL_CLAIMS.get('remember_fact') ?? [])]).toEqual(['C4']);
+  });
+});
+
+describe('C4 — memory promises need a real remember_fact save (CH-09)', () => {
+  const savedRun: ToolRun = {
+    name: 'remember_fact',
+    input: {},
+    result: { ok: true, data: { saved: true, kind: 'preference' } },
+  };
+  const duplicateRun: ToolRun = {
+    name: 'remember_fact',
+    input: {},
+    result: { ok: true, data: { saved: false, reason: 'duplicate' } },
+  };
+  const refusedRun: ToolRun = {
+    name: 'remember_fact',
+    input: {},
+    result: { ok: false, error: 'REFUSED', message: 'not stored' },
+  };
+
+  it.each([
+    "I'll remember that for your next visit.",
+    "We'll remember the early check-in worked well for you.",
+    "I've made a note of that.",
+    'I have just made a note for the team.',
+    "I've noted your preference.",
+    "I'll keep that in mind for December.",
+    'Saved that to your profile.',
+    'Noted for your next stay.',
+    // Pre-push audit battery: all nine shipped unbacked before the widening.
+    'I shall note that down.',
+    "I'll note that down for your next stay.",
+    "We've put that on file.",
+    "It's in your file now.",
+    "I won't forget the anniversary.",
+    "That's gone into your notes.",
+    'Your preference is saved with us.',
+    'We have that on record now.',
+    "I'll be sure to remember.",
+  ])('flags %j with no successful save', (draft) => {
+    expect(scanPromises(draft, NO_EVIDENCE).violations.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    'Noted — let me check with the team.', // bare "Noted —" is ordinary speech
+    'I remember you loved the pool last time.', // recall is backed by block [5]
+    'We remember your stay fondly.',
+  ])('does NOT flag %j', (draft) => {
+    expect(scanPromises(draft, NO_EVIDENCE).violations).toEqual([]);
+  });
+
+  it('a successful save licenses the memory claim', () => {
+    const scan = scanPromises("Lovely — I'll remember that for next time.", {
+      ...NO_EVIDENCE,
+      toolRuns: [savedRun],
+    });
+    expect(scan.violations).toEqual([]);
+  });
+
+  it('a duplicate skip still licenses (the fact IS on file)', () => {
+    const scan = scanPromises("I've noted that already.", {
+      ...NO_EVIDENCE,
+      toolRuns: [duplicateRun],
+    });
+    expect(scan.violations).toEqual([]);
+  });
+
+  it('a REFUSED save licenses nothing', () => {
+    const scan = scanPromises("I've made a note of that.", {
+      ...NO_EVIDENCE,
+      toolRuns: [refusedRun],
+    });
+    expect(scan.violations.length).toBeGreaterThan(0);
+  });
+
+  it('a memory save never cross-licenses C1 (no bleed)', () => {
+    const scan = scanPromises('The team has been informed.', {
+      ...NO_EVIDENCE,
+      toolRuns: [savedRun],
+    });
+    expect(scan.violations.length).toBeGreaterThan(0);
+  });
+
+  it('an escalation never licenses a memory claim (C3-only rule holds)', () => {
+    const scan = scanPromises("I'll remember that.", {
+      ...NO_EVIDENCE,
+      escalationPlanned: true,
+    });
+    expect(scan.violations.length).toBeGreaterThan(0);
+  });
+
+  it('a fact_saved evidence row licenses the NEXT turn’s truthful confirmation (audit)', () => {
+    expect(classesFromContextKinds(['fact_saved'])).toEqual(new Set(['C4']));
+    const scan = scanPromises("Yes — I've noted your love of early check-ins.", {
+      ...NO_EVIDENCE,
+      systemEvidence: classesFromContextKinds(['fact_saved']),
+    });
+    expect(scan.violations).toEqual([]);
+    // ...and it licenses ONLY C4 — never a completed-action claim.
+    const c1 = scanPromises('The team has been informed.', {
+      ...NO_EVIDENCE,
+      systemEvidence: classesFromContextKinds(['fact_saved']),
+    });
+    expect(c1.violations.length).toBeGreaterThan(0);
   });
 });

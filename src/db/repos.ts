@@ -252,6 +252,8 @@ export async function getConversationTurnContext(
   conversation: Conversation;
   guestPhone: string;
   guestName: string | null;
+  registerPref: Guest['registerPref'];
+  langPref: Guest['langPref'];
   dbNow: Date;
 } | null> {
   const [row] = await db
@@ -260,6 +262,9 @@ export async function getConversationTurnContext(
       guestPhone: guests.phone,
       guestFirstName: guests.firstName,
       guestProfileName: guests.waProfileName,
+      // Block [5] tone inputs (CH-09) — same joined read, zero extra query.
+      registerPref: guests.registerPref,
+      langPref: guests.langPref,
       // Raw sql fields bypass the driver's type mapping and arrive as
       // strings (observed on drizzle 0.45 + postgres.js) — map explicitly.
       dbNow: sql`now()`.mapWith((value: unknown) => new Date(value as string)),
@@ -272,6 +277,8 @@ export async function getConversationTurnContext(
     conversation: row.conversation,
     guestPhone: row.guestPhone,
     guestName: row.guestFirstName ?? row.guestProfileName,
+    registerPref: row.registerPref,
+    langPref: row.langPref,
     dbNow: row.dbNow,
   };
 }

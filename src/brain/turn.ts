@@ -81,8 +81,11 @@ export interface TurnArgs {
   conversationId: string;
   /** The guest's E.164 — telemetry scrub key + leak-scan self-exemption. */
   guestPhone: string;
-  /** Block [5]-lite (CH-08): guest-typed name; prompt.ts sanitises. */
+  /** Block [5]: guest-typed name; profileBlock.ts sanitises. */
   guestName?: string | null;
+  /** Block [5] tone inputs (CH-09) — the guest row's stored prefs. */
+  registerPref?: 'warm_first_name' | 'formal_sir_maam' | 'unknown';
+  langPref?: 'en' | 'hinglish' | 'unknown';
   /** §6.7 complaint flow: rendered into block [6] (worker sets it). */
   mustEscalate?: boolean;
   /** The batch carried media the model cannot view (mixed-batch note). */
@@ -97,6 +100,9 @@ export interface TurnArgs {
    * describes the PREVIOUS turn and a returning guest would read as closed
    * (review finding — the old buildSituation had this staleness bug). */
   newestGuestMsgAt: Date;
+  /** The newest batch message's id — remember_fact's source_message_id
+   * provenance (CH-09). Absent ⇒ facts save with null provenance. */
+  newestGuestMsgId?: string;
   /** Guardrail 5 trigger from the policy pass (CH-07 step 3). */
   botQuestion?: boolean;
 }
@@ -117,6 +123,8 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       dbNow,
       conversationId,
       guestName: args.guestName ?? null,
+      registerPref: args.registerPref,
+      langPref: args.langPref,
       evidenceSinceIso: args.evidenceSinceIso ?? null,
       newestGuestMsgAt: args.newestGuestMsgAt,
       mustEscalate: args.mustEscalate ?? false,
@@ -129,6 +137,16 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
     websiteBaseUrl: deps.websiteBaseUrl,
     degraded: deps.degraded,
     log: deps.log,
+    // ONE memory context for the whole turn: the regenerate loop reuses this
+    // object, so the mutable saves counter caps remember_fact across BOTH
+    // loops (CH-09 — max 2 saves per turn, not per loop).
+    memory: {
+      db: deps.db,
+      guestId: args.conversation.guestId,
+      conversationId,
+      sourceMessageId: args.newestGuestMsgId ?? null,
+      saves: { count: 0 },
+    },
   };
 
   // ONE wall-clock budget for the whole turn (first loop + any regenerate loop)
@@ -260,7 +278,13 @@ async function runToolLoop(
       'claude turn',
     );
 
-    finalText = result.text;
+    // Keep the last NON-EMPTY prose: Sonnet often writes its reply in the
+    // SAME round as a tool_use (observed live with remember_fact — the save
+    // is a side effect, so the follow-up round can come back empty). An
+    // unconditional overwrite clobbered that prose and shipped the deferral
+    // + a spurious ops referral instead (CH-09 demo finding). Whatever text
+    // survives here still passes the full guardrail pipeline.
+    finalText = result.text.trim() === '' ? finalText : result.text;
     if (forceProse || result.toolUses.length === 0) {
       if (forceProse && result.toolUses.length > 0) {
         // Cap hit with the model still wanting tools — worth an ops signal.

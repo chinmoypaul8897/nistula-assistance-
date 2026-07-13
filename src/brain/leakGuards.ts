@@ -17,9 +17,10 @@
  *   and exempts ONLY the guest's own number (last-10 match handles +91/0/bare
  *   spellings). The business number is not exempt: no approved copy sends any
  *   phone number, so one in a draft is anomalous by construction.
- * - §6.5 #7's "other guests' NAMES" arm is deliberately deferred: no
- *   cross-guest data reaches the prompt until CH-09/11 — recorded, not
- *   forgotten.
+ * - §6.5 #7's "other guests' NAMES" arm is deliberately deferred to CH-11
+ *   (Paul-approved 2026-07-12): CH-09's block [5] carries only THIS guest's
+ *   own facts (fact queries are guest-scoped, pinned by tests), so no
+ *   cross-guest data reaches the prompt until CH-11's stays/bookings do.
  */
 import { LEAK_SCAN_SOURCES, PHRASEBOOK, REGISTER_EXEMPLARS } from './prompt.js';
 
@@ -65,6 +66,7 @@ const TRIPWIRES = [
   'get_quote',
   'get_availability',
   'get_booking_link',
+  'remember_fact',
   '[SITUATION]',
   '[KNOWLEDGE]',
   '[CORRECTION]',

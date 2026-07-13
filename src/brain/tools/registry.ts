@@ -7,17 +7,22 @@
  * `ToolRun[]`.
  */
 import { z } from 'zod';
+import type { Db } from '../../db/client.js';
 import type { AlertLogger } from '../../ops/alerts.js';
 import type { WebsiteClient } from './websiteApi.js';
 
-/** Friendly, model-facing error enum (§6.4). Kept small and stable. */
+/** Friendly, model-facing error enum (§6.4). Kept small and stable.
+ * REFUSED (CH-09): a screened-out remember_fact save — distinct from INVALID
+ * so telemetry can count poisoning attempts, and ok:false by design so a
+ * refused save can never license a memory claim (guardrail 2 C4). */
 export type ToolErrorCode =
   | 'INVALID'
   | 'UNKNOWN_VILLA'
   | 'AMBIGUOUS_VILLA'
   | 'UNAVAILABLE'
   | 'UPSTREAM_DOWN'
-  | 'UNKNOWN_TOOL';
+  | 'UNKNOWN_TOOL'
+  | 'REFUSED';
 
 export type ToolResult =
   | { ok: true; data: unknown; note?: 'MIN_NIGHTS' }
@@ -30,12 +35,31 @@ export interface ToolRun {
   result: ToolResult;
 }
 
+/**
+ * Per-TURN memory identity (CH-09). The registry itself is built once at boot
+ * (specs are part of the cached prompt prefix), so anything per-turn rides the
+ * ToolContext: turn.ts builds ONE object per turn and shares it across the
+ * first and regenerate loops — which is exactly what lets `saves` cap the
+ * whole turn at 2, not 2 per loop.
+ */
+export interface ToolMemoryContext {
+  db: Db;
+  guestId: string;
+  conversationId: string;
+  /** Newest guest message of the batch — guest_facts.source_message_id provenance. */
+  sourceMessageId: string | null;
+  /** Mutable per-turn save counter (max 2 per turn, plan §8 CH-09 step 2). */
+  saves: { count: number };
+}
+
 /** Everything a handler needs, injected (no module globals). */
 export interface ToolContext {
   website: WebsiteClient;
   websiteBaseUrl: string;
   degraded: { record(outcome: 'down' | 'up'): void };
   log: AlertLogger;
+  /** Absent ⇒ remember_fact cannot save (contexts with no guest identity). */
+  memory?: ToolMemoryContext;
 }
 
 /** The Anthropic tool spec shape (a JSON-schema input_schema). */
