@@ -27,6 +27,8 @@ import {
   type WorkerLogger,
 } from '../brain/worker.js';
 import type { Db } from '../db/client.js';
+import type { EzeeClient } from '../ezee/client.js';
+import { createEzeePoller } from '../ezee/poller.js';
 import { summarizeError } from '../lib/logger.js';
 import type { WaClient } from '../wa/client.js';
 
@@ -213,6 +215,10 @@ export interface JobsDeps {
   pollingIntervalSeconds?: number;
   /** §3.3 rate window (CH-07) — one per process; tests may inject their own. */
   rateWindow?: RateWindow;
+  /** CH-10 eZee mirror. pollerEnabled comes from EZEE_POLLER_ENABLED —
+   * default OFF: two pollers ACKing one eZee queue steal each other's
+   * bookings (dev would consume prod's), so only Railway ever sets 1. */
+  ezee?: { client: EzeeClient; pollerEnabled: boolean };
 }
 
 export interface Jobs {
@@ -304,15 +310,46 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   await scheduleCron(deps.boss, CONVERSATION_SWEEP_QUEUE, windows.sweepIntervalCron, 'Asia/Kolkata');
   // The 04:00 IST nightly compaction (plan.md CH-08 step 2 / §2.3).
   await scheduleCron(deps.boss, SUMMARISER_NIGHTLY_QUEUE, thresholds.cron, 'Asia/Kolkata');
+  if (deps.ezee !== undefined) {
+    if (deps.ezee.pollerEnabled) {
+      const poller = createEzeePoller({
+        db: deps.db,
+        boss: deps.boss,
+        client: deps.ezee.client,
+        log: deps.log,
+      });
+      await deps.boss.work(EZEE_POLL_QUEUE, workOptions, async () => {
+        await poller.runPoll();
+      });
+      // '* * * * *' = the §2.3 60s cadence (cron's floor); the constant
+      // singletonKey pairs with the stately queue for overlap protection.
+      await scheduleCron(deps.boss, EZEE_POLL_QUEUE, '* * * * *', 'Asia/Kolkata', {
+        singletonKey: 'poll',
+      });
+      deps.log.info({}, 'eZee poller ENABLED (60s cron)');
+    } else {
+      // A cron registered by an earlier enabled boot in this SAME database
+      // must stop firing into a workerless queue.
+      await deps.boss.unschedule(EZEE_POLL_QUEUE).catch(() => {});
+      deps.log.warn(
+        {},
+        'eZee poller DISABLED (EZEE_POLLER_ENABLED=0) — bookings_mirror will go stale',
+      );
+    }
+  }
   return { enqueueConversationProcess: enqueue };
 }
 
-/** Cron registration helper (CH-03 step 1) — every business cron states its tz explicitly. */
+/** Cron registration helper (CH-03 step 1) — every business cron states its
+ * tz explicitly. `extra` carries send options for the scheduled job (CH-10:
+ * the poll's constant singletonKey); schedule() upserts per queue, so
+ * re-registration across restarts never duplicates. */
 export async function scheduleCron(
   boss: PgBoss,
   name: string,
   cron: string,
   tz: string,
+  extra?: { singletonKey?: string },
 ): Promise<void> {
-  await boss.schedule(name, cron, {}, { tz });
+  await boss.schedule(name, cron, {}, { tz, ...extra });
 }
