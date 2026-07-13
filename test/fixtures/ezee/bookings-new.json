@@ -1,0 +1,108 @@
+{
+  "Reservations": {
+    "Reservation": [
+      {
+        "BookingTran": [
+          {
+            "SubBookingId": "12341254",
+            "TransactionId": "123400000000001902",
+            "Createdatetime": "2026-07-10 11:40:30",
+            "Modifydatetime": "2026-07-10 11:40:30",
+            "Status": "New",
+            "IsConfirmed": "1",
+            "VoucherNo": "single1276/1",
+            "PackageCode": "123400000000000001",
+            "PackageName": "European Plan",
+            "RateplanCode": "123400000000000006",
+            "RateplanName": "Nistula Villa EP",
+            "RoomTypeCode": "5220300000000000003",
+            "RoomTypeName": "Nistula Villa",
+            "Start": "2027-01-05",
+            "End": "2027-01-07",
+            "ArrivalTime": "12:00:00",
+            "DepartureTime": "11:00:00",
+            "CurrencyCode": "INR",
+            "TotalAmountAfterTax": "976.00",
+            "TotalAmountBeforeTax": "800.00",
+            "TotalTax": "176.00",
+            "TotalDiscount": "0.00",
+            "TotalExtraCharge": "0.00",
+            "TotalPayment": "0.00",
+            "TACommision": "0.00",
+            "Salutation": "Ms.",
+            "FirstName": "Test ",
+            "LastName": " GuestOne ",
+            "Gender": "Female",
+            "Address": "",
+            "City": "Lorem",
+            "State": "Lorem",
+            "Country": "IN",
+            "Nationality": "Lorem",
+            "Zipcode": "403507",
+            "Phone": "",
+            "Mobile": "917700900405",
+            "Fax": "",
+            "Email": "guest405@example.com",
+            "TransportationMode": "",
+            "Vehicle": "",
+            "PickupDate": "",
+            "PickupTime": "",
+            "Source": "Internet Booking Engine",
+            "Comment": "Lorem ipsum dolor sit amet.",
+            "AffiliateName": "",
+            "AffiliateCode": "",
+            "TaxDeatil": [
+              { "TaxCode": "AA", "TaxName": "GST @ 12%", "TaxAmount": "96.0000" },
+              { "TaxCode": "LT", "TaxName": "Cess @ 10%", "TaxAmount": "80.0000" }
+            ],
+            "RentalInfo": [
+              {
+                "EffectiveDate": "2027-01-05",
+                "PackageCode": "123400000000000001",
+                "PackageName": "European Plan",
+                "RoomTypeCode": "5220300000000000003",
+                "RoomTypeName": "Nistula Villa",
+                "Adult": "4",
+                "Child": "2",
+                "RentPreTax": "550.00",
+                "Rent": "671.00",
+                "Discount": "0.00"
+              },
+              {
+                "EffectiveDate": "2027-01-06",
+                "PackageCode": "123400000000000001",
+                "PackageName": "European Plan",
+                "RoomTypeCode": "5220300000000000003",
+                "RoomTypeName": "Nistula Villa",
+                "Adult": "4",
+                "Child": "2",
+                "RentPreTax": "250.00",
+                "Rent": "305.00",
+                "Discount": "0.00"
+              }
+            ]
+          }
+        ],
+        "LocationId": "1234",
+        "UniqueID": "11241254",
+        "BookedBy": "Internet Booking Engine",
+        "Salutation": "Ms.",
+        "FirstName": "Test ",
+        "LastName": " GuestOne ",
+        "Gender": "Female",
+        "Address": "",
+        "City": "Lorem",
+        "State": "Lorem",
+        "Country": "IN",
+        "Zipcode": "403507",
+        "Phone": "",
+        "Mobile": "3534",
+        "Fax": "",
+        "Email": "guest405@example.com",
+        "Source": "Internet Booking Engine",
+        "PaymentMethod": "Cash",
+        "IsChannelBooking": "0"
+      }
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "Reservations": {
+    "Reservation": {
+      "BookingTran": {
+        "SubBookingId": "12341300",
+        "TransactionId": "123400000000001955",
+        "Status": "New",
+        "IsConfirmed": "1",
+        "RoomTypeCode": "5220300000000000001",
+        "RoomTypeName": "Nistula Apartment",
+        "RateplanCode": "123400000000000009",
+        "Start": "2027-02-10",
+        "End": "2027-02-12",
+        "CurrencyCode": "INR",
+        "TotalAmountAfterTax": "18500.00",
+        "FirstName": "Test",
+        "LastName": "GuestTwo",
+        "Phone": "",
+        "Mobile": "+1 234 567 8901",
+        "Email": "guest406@example.com",
+        "Source": "Booking.com",
+        "RentalInfo": {
+          "EffectiveDate": "2027-02-10",
+          "RoomTypeCode": "5220300000000000001",
+          "RoomTypeName": "Nistula Apartment",
+          "Adult": "2",
+          "Child": "0",
+          "Rent": "9250.00"
+        }
+      },
+      "LocationId": "1234",
+      "UniqueID": "11241300",
+      "BookedBy": "Booking.com",
+      "FirstName": "Test",
+      "LastName": "GuestTwo",
+      "Mobile": "+1 234 567 8901",
+      "Email": "guest406@example.com",
+      "Source": "Booking.com",
+      "IsChannelBooking": "1"
+    },
+    "CancelReservation": {
+      "LocationId": "1234",
+      "UniqueID": "11241299",
+      "Status": "Cancel",
+      "Canceldatetime": "2026-07-12 10:00:00",
+      "Remark": "Lorem ipsum dolor sit amet.",
+      "VoucherNo": ""
+    }
+  }
+}

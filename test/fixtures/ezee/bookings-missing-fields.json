@@ -1,0 +1,36 @@
+{
+  "Reservations": {
+    "Reservation": [
+      {
+        "BookingTran": {
+          "SubBookingId": "12341500",
+          "TransactionId": "123400000000002100",
+          "Status": "New",
+          "IsConfirmed": "1",
+          "RoomTypeCode": "",
+          "RoomTypeName": "",
+          "Start": "",
+          "End": "",
+          "CurrencyCode": "",
+          "TotalAmountAfterTax": "",
+          "FirstName": "",
+          "LastName": "",
+          "Phone": "",
+          "Mobile": "",
+          "Email": "",
+          "Source": ""
+        },
+        "LocationId": "1234",
+        "UniqueID": "11241500",
+        "BookedBy": "",
+        "FirstName": "Test",
+        "LastName": "GuestFour",
+        "Phone": "",
+        "Mobile": "",
+        "Email": "",
+        "Source": "Walkin",
+        "IsChannelBooking": "0"
+      }
+    ]
+  }
+}

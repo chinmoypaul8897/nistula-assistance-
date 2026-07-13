@@ -1,0 +1,57 @@
+{
+  "Reservations": {
+    "Reservation": [
+      {
+        "BookingTran": [
+          {
+            "SubBookingId": "12341254",
+            "TransactionId": "123400000000001902",
+            "Createdatetime": "2026-07-10 11:40:30",
+            "Modifydatetime": "2026-07-11 09:02:11",
+            "Status": "Modify",
+            "IsConfirmed": "1",
+            "VoucherNo": "single1276/1",
+            "RateplanCode": "123400000000000006",
+            "RateplanName": "Nistula Villa EP",
+            "RoomTypeCode": "5220300000000000003",
+            "RoomTypeName": "Nistula Villa",
+            "Start": "2027-01-05",
+            "End": "2027-01-08",
+            "CurrencyCode": "INR",
+            "TotalAmountAfterTax": "1464.00",
+            "Salutation": "Ms.",
+            "FirstName": "Test",
+            "LastName": "GuestOne",
+            "Phone": "",
+            "Mobile": "917700900405",
+            "Email": "guest405@example.com",
+            "Source": "Internet Booking Engine",
+            "Comment": "",
+            "RentalInfo": [
+              {
+                "EffectiveDate": "2027-01-05",
+                "RoomTypeCode": "5220300000000000003",
+                "RoomTypeName": "Nistula Villa",
+                "Adult": "4",
+                "Child": "2",
+                "Rent": "488.00",
+                "Discount": "0.00"
+              }
+            ]
+          }
+        ],
+        "LocationId": "1234",
+        "UniqueID": "11241254",
+        "BookedBy": "Internet Booking Engine",
+        "FirstName": "Test",
+        "LastName": "GuestOne",
+        "Phone": "",
+        "Mobile": "917700900405",
+        "Email": "guest405@example.com",
+        "Source": "Internet Booking Engine",
+        "PaymentMethod": "Cash",
+        "IsChannelBooking": "0"
+      }
+    ]
+  }
+}

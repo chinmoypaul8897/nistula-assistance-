@@ -1,0 +1,75 @@
+{
+  "Reservations": {
+    "Reservation": [
+      {
+        "BookingTran": [
+          {
+            "SubBookingId": "12341401",
+            "TransactionId": "123400000000002001",
+            "Status": "New",
+            "IsConfirmed": "1",
+            "RoomTypeCode": "5220300000000000003",
+            "RoomTypeName": "Nistula Villa",
+            "RateplanCode": "123400000000000006",
+            "Start": "2027-03-01",
+            "End": "2027-03-04",
+            "CurrencyCode": "INR",
+            "TotalAmountAfterTax": "90000.00",
+            "FirstName": "Test",
+            "LastName": "GuestThree",
+            "Mobile": "917700900407",
+            "Email": "guest407@example.com",
+            "Source": "Internet Booking Engine",
+            "RentalInfo": [
+              {
+                "EffectiveDate": "2027-03-01",
+                "RoomTypeCode": "5220300000000000003",
+                "RoomTypeName": "Nistula Villa",
+                "Adult": "6",
+                "Child": "2",
+                "Rent": "30000.00"
+              }
+            ]
+          },
+          {
+            "SubBookingId": "12341402",
+            "TransactionId": "123400000000002002",
+            "Status": "New",
+            "IsConfirmed": "1",
+            "RoomTypeCode": "5220300000000000001",
+            "RoomTypeName": "Nistula Apartment",
+            "RateplanCode": "123400000000000009",
+            "Start": "2027-03-01",
+            "End": "2027-03-03",
+            "CurrencyCode": "INR",
+            "TotalAmountAfterTax": "24000.00",
+            "FirstName": "Test",
+            "LastName": "GuestThree",
+            "Mobile": "917700900407",
+            "Email": "guest407@example.com",
+            "Source": "Internet Booking Engine",
+            "RentalInfo": [
+              {
+                "EffectiveDate": "2027-03-01",
+                "RoomTypeCode": "5220300000000000001",
+                "RoomTypeName": "Nistula Apartment",
+                "Adult": "3",
+                "Child": "1",
+                "Rent": "12000.00"
+              }
+            ]
+          }
+        ],
+        "LocationId": "1234",
+        "UniqueID": "11241400",
+        "BookedBy": "Internet Booking Engine",
+        "FirstName": "Test",
+        "LastName": "GuestThree",
+        "Mobile": "917700900407",
+        "Email": "guest407@example.com",
+        "Source": "Internet Booking Engine",
+        "IsChannelBooking": "0"
+      }
+    ]
+  }
+}
