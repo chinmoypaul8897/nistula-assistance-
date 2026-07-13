@@ -165,6 +165,26 @@ describe('upsertMirrorRow', () => {
     if (revived.outcome === 'modified') expect(revived.resurrectionBlocked).toBe(false);
     expect((await getMirrorByReservationNo(db, 'RES-1008'))?.status).toBe('checked_in');
   });
+
+  it('the resurrection guard is an ALLOWLIST — unknown/no_show cannot revive either', async () => {
+    // Close-out audit: a denylist of {confirmed, modified} let `unknown`
+    // through, and `unknown` is exactly what an unconfirmed-hold redelivery
+    // maps to — the commonest stale payload there is.
+    for (const status of ['unknown', 'no_show', 'confirmed', 'modified'] as const) {
+      const res = `RES-REVIVE-${status}`;
+      await upsertMirrorRow(db, makeInput({ ezeeReservationNo: res, status: 'cancelled' }));
+      const attempt = await upsertMirrorRow(db, makeInput({ ezeeReservationNo: res, status }));
+      if (attempt.outcome !== 'created') expect(attempt.resurrectionBlocked).toBe(true);
+      expect((await getMirrorByReservationNo(db, res))?.status).toBe('cancelled');
+    }
+    // Only proof-of-life revives.
+    for (const status of ['checked_in', 'checked_out'] as const) {
+      const res = `RES-REVIVE-${status}`;
+      await upsertMirrorRow(db, makeInput({ ezeeReservationNo: res, status: 'cancelled' }));
+      await upsertMirrorRow(db, makeInput({ ezeeReservationNo: res, status }));
+      expect((await getMirrorByReservationNo(db, res))?.status).toBe(status);
+    }
+  });
 });
 
 describe('diffMirrorFields', () => {

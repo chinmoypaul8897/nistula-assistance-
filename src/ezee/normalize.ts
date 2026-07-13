@@ -4,12 +4,31 @@
  * status 'unknown' with the anomaly named in `issues`; the poller logs, the
  * row still mirrors with raw intact (§5.2 "never crash").
  *
- * OBSERVED FIELD NAMES: the shapes handled here are authored from the doc
- * mirror (docs/ezee/04_bookings.md BKG-02/BKG-03 examples). §5.2 makes the
- * FIRST LIVE PAYLOAD the authority — after the first non-empty live poll,
- * record the actual field names in progress.md and correct any divergence
- * here (most suspect: whether BKG-02 polls carry RoomID/RoomName at all —
- * the docs show them only on BKG-03 FetchSingleBooking).
+ * OBSERVED FIELD NAMES — RECONCILED AGAINST THE LIVE PAYLOAD (§5.2 mandate,
+ * captured 2026-07-13 from the property's real backlog; also in progress.md):
+ *
+ *   Reservation : UniqueID · LocationId · BookedBy · Salutation · FirstName ·
+ *                 LastName · Gender · Address · City · State · Country ·
+ *                 Zipcode · Phone · Mobile · Fax · Email · Source ·
+ *                 PaymentMethod · IsChannelBooking
+ *   BookingTran : the documented set, PLUS three fields the docs omit —
+ *                 FolioNo · ExtraCharge · PaymentDetail (they ride into `raw`)
+ *   RentalInfo  : EffectiveDate · Adult · Child · Rent · RentPreTax ·
+ *                 Discount · PackageCode/Name · RoomTypeCode/Name
+ *   CancelReservation : UniqueID · Status · Canceldatetime · Remark · VoucherNo
+ *
+ * Two live findings that are LOAD-BEARING here:
+ *  1. `CurrentStatus: "Confirmed Reservation"` is what EVERY real booking
+ *     carries, and it is NOT in eZee's documented value list (docs name only
+ *     Arrived / Checked Out / Cancel / Void). mapStatus therefore MUST fall
+ *     through an unrecognised CurrentStatus to the Status verb — treating an
+ *     unknown CurrentStatus as 'unknown' would hide every real booking from
+ *     CH-11/CH-12. Do not "tighten" that fall-through.
+ *  2. BKG-02 poll payloads carry NO `RoomID`/`RoomName` — confirmed on all 22
+ *     live reservations — so `physical_room_label` is ALWAYS null from the
+ *     poller. BKG-03 FetchSingleBooking DOES return them (e.g. RoomID
+ *     5220300000000000008 / RoomName "06"). The parsing below stays tolerant
+ *     of both. TODO(CH-11): enrich physical_room_label via FetchSingleBooking.
  */
 import type { MirrorRowInput, UpsertMirrorOutcome } from '../db/bookings.js';
 import { normalizePhone } from '../lib/phone.js';

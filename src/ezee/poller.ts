@@ -191,6 +191,19 @@ export function createEzeePoller(deps: EzeePollerDeps): EzeePoller {
               reservationNo: item.uniqueId,
             });
           }
+          // Guard the BASE key too (close-out audit — the original BLOCKER's
+          // class by another route). Suffixed cancels tombstone under
+          // '877-1..3', but the reservation itself keys on '877' and may still
+          // arrive on a LATER poll — eZee really does deliver a cancel without
+          // its create (observed live on booking 952). Without a cancelled row
+          // under the base id, that create would land 'confirmed' and the
+          // cancellation — already ACKed away, never redelivered — would be
+          // lost forever. The base tombstone makes the resurrection guard fire.
+          const base = first.uniqueId.replace(/-\d+$/, '');
+          if (base !== first.uniqueId) {
+            await insertCancelStub(tx, base, first.entry);
+            await sendInTx(boss, tx, BOOKING_EVENT_QUEUES.cancelled, { reservationNo: base });
+          }
           return;
         }
         const distinctIds = new Set(items.map((i) => i.uniqueId));
