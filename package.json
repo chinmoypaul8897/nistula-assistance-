@@ -17,6 +17,7 @@
     "kb:build": "tsx scripts/kb-build.ts",
     "ezee:backfill": "tsx scripts/ezee-backfill.ts",
     "ezee:capture": "tsx scripts/ezee-capture.ts",
+    "ezee:reconcile": "tsx scripts/ezee-reconcile.ts",
     "format": "prettier --write ."
   },
   "dependencies": {

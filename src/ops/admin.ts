@@ -13,6 +13,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { getAllGuestFacts, getGuestByPhone } from '../db/guestMemory.js';
+import { getGuestStays } from '../db/stays.js';
+import { projectAll } from '../brain/stayView.js';
 import { summarizeError } from '../lib/logger.js';
 import { normalizePhone } from '../lib/phone.js';
 import { timingSafeStringEqual } from '../wa/signature.js';
@@ -78,8 +80,12 @@ export const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, op
           expiresAt: fact.expiresAt,
           createdAt: fact.createdAt,
         })),
-        // TODO(CH-11): guest_stays join (the table lands with CH-10's mirror).
-        stays: [],
+        // CH-11: the real guest_stays join — PROJECTED, never raw. A mirror row
+        // still carries the guest's address/city/zip inside `raw` (CH-10 strips
+        // only card and identity-document fields), so handing rows out whole
+        // would newly expose them on an admin surface. The stay view is the only
+        // door, here as everywhere.
+        stays: projectAll(await getGuestStays(opts.db, guest.id)),
       });
     } catch (error) {
       request.log.error({ err: summarizeError(error) }, 'admin guest-lookup failed');

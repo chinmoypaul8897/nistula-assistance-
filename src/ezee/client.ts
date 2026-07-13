@@ -59,6 +59,9 @@ export interface EzeeClient {
   fetchPendingBookings(): Promise<EzeePollOutcome>;
   ackBookings(items: EzeeAckItem[]): Promise<EzeeAckOutcome>;
   fetchSingleBooking(filter: { bookingId: string; guestMobileNo?: string }): Promise<EzeePollOutcome>;
+  /** BKG-05 ArrivalList — bookings by arrival DATE (CH-11's reconcile). A read:
+   * it never ACKs, so it cannot consume the shared queue. */
+  fetchArrivals(range: { fromDate: string; toDate: string }): Promise<EzeePollOutcome>;
 }
 
 // §5.2: 15s timeout on eZee calls (their processing is slower than the
@@ -157,8 +160,11 @@ export function createEzeeClient(deps: EzeeClientDeps): EzeeClient {
     bookingId: string;
     guestMobileNo?: string;
   }): Promise<EzeePollOutcome> {
-    // BKG-03 stars BookingId as required; GuestMobileNo-only lookup is
-    // undocumented — TODO(CH-11): probe live whether BookingId can be omitted.
+    // BKG-03 stars BookingId as required (04_bookings.md:1456), so a
+    // GuestMobileNo-ONLY lookup is not a documented shape — we never send one.
+    // BKG-03 is also the only call that returns RoomID/RoomName, which is the
+    // only source of a real villa label (the poll carries none): CH-11's
+    // reconcile hydrates through here.
     return toPollOutcome(
       await post('FetchSingleBooking', {
         BookingId: filter.bookingId,
@@ -167,5 +173,26 @@ export function createEzeeClient(deps: EzeeClientDeps): EzeeClient {
     );
   }
 
-  return { fetchPendingBookings, ackBookings, fetchSingleBooking };
+  /**
+   * BKG-05 ArrivalList (04_bookings.md:1854) — bookings by ARRIVAL DATE range.
+   * Both dates are required and ride a nested `Date` block, verbatim per the doc.
+   *
+   * WHY this exists (CH-11): `bookings_mirror` is fed only by the BKG-02 QUEUE,
+   * and a queue is a change feed, not the property's booking book. Nothing
+   * establishes that what it happened to hold is the set of real live bookings.
+   * This is the read that answers "is our mirror complete?".
+   *
+   * It is a READ: it never ACKs, so it cannot consume the shared un-ACKed queue
+   * and is therefore safe to call from ANY environment — the EZEE_POLLER_ENABLED
+   * split-brain rule is about the acknowledgement, not about reading.
+   */
+  async function fetchArrivals(range: { fromDate: string; toDate: string }): Promise<EzeePollOutcome> {
+    return toPollOutcome(
+      await post('ArrivalList', {
+        Date: { from_date: range.fromDate, to_date: range.toDate },
+      }),
+    );
+  }
+
+  return { fetchPendingBookings, ackBookings, fetchSingleBooking, fetchArrivals };
 }

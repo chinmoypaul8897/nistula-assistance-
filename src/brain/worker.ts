@@ -14,7 +14,7 @@
  * CH-13's task events reuse).
  */
 import { updateGuestPrefs } from '../db/guestMemory.js';
-import { getGuestStays } from '../db/stays.js';
+import { getGuestStays, linkStaysByPhone } from '../db/stays.js';
 import {
   claimConversationTurn,
   findStaleConversations,
@@ -109,10 +109,22 @@ export async function processConversation(
     msgs.map((m) => ({ id: m.id, createdAt: m.createdAt })),
     ctx.dbNow,
   );
-  // CH-11 booking awareness. ONE pre-claim read, projected ONCE, fed to BOTH
-  // consumers: decidePolicy runs BEFORE the context builder, so the stage cannot
-  // travel the other way — and two reads could disagree inside one turn.
-  // Pre-claim (CH-03 D2), so a throw here is retry-safe.
+  // CH-11 booking awareness. Link first, then read: a guest is usually mirrored
+  // BEFORE they ever message us, so their bookings are found on their first
+  // inbound turn. Idempotent (the guest_stays unique), so every turn re-links
+  // for free and a new booking is picked up on the guest's next message.
+  //
+  // WHY here and not in the webhook (§8 CH-11 step 1 says "on any inbound
+  // MESSAGE" — recorded deviation): the webhook's storage runs AFTER the 200 ack
+  // on a path Meta never redelivers, so a throw there is unrecoverable and would
+  // sit upstream of the message insert that the stale-conversation sweeper keys
+  // off. Here it is pre-claim (CH-03 D2) — a throw is retried by pg-boss, and the
+  // turn is the true unit anyway (a 3-message burst needs one link pass).
+  await linkStaysByPhone(deps.db, ctx.conversation.guestId, ctx.guestPhone);
+
+  // ONE read, projected ONCE, fed to BOTH consumers: decidePolicy runs BEFORE
+  // the context builder, so the stage cannot travel the other way — and two
+  // reads could disagree inside one turn.
   const stays = projectAll(await getGuestStays(deps.db, ctx.conversation.guestId));
   const stayContext = {
     stage: deriveStage(stays, istCalendarDay(ctx.dbNow)),

@@ -40,6 +40,8 @@ function fakeClient(byId: Record<string, EzeePollOutcome>): EzeeClient {
     ackBookings: () => Promise.reject(new Error('backfill must never ACK')),
     fetchSingleBooking: ({ bookingId }) =>
       Promise.resolve(byId[bookingId] ?? { status: 'ok', reservations: [], cancels: [], raw: {} }),
+    // CH-11 (BKG-05): the backfill must never reach for the arrivals list either.
+    fetchArrivals: () => Promise.reject(new Error('backfill must never list arrivals')),
   };
 }
 
