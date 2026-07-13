@@ -160,7 +160,7 @@ export async function buildTurnContext(
       langPref: args.langPref ?? 'unknown',
       facts,
       stays: selectStays(stays, today),
-      bookingNeedsHuman: needsHuman(stays),
+      bookingNeedsHuman: needsHuman(stays, today),
     }),
     summaryBlock,
   });

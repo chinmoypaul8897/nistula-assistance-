@@ -32,7 +32,7 @@ import {
 } from '../../db/stays.js';
 import { summarizeError } from '../../lib/logger.js';
 import { referenceWasStated, verifyClaim } from '../referenceClaim.js';
-import { project, selectStays, type DescribedStay } from '../stayView.js';
+import { needsHuman, project, selectStays, type DescribedStay } from '../stayView.js';
 import { toInputSchema, type ToolBookingContext, type ToolDef, type ToolResult } from './registry.js';
 
 const inputSchema = z.object({
@@ -97,7 +97,7 @@ export const getBookingTool: ToolDef = {
           stays: stays.map(payload),
           // The model needs to distinguish "no booking" (an honest lead) from
           // "a booking a person must handle" — they are different sentences.
-          undescribable_booking_exists: booking.stays.some((s) => !s.describable && s.live),
+          undescribable_booking_exists: needsHuman(booking.stays, booking.today),
         },
       };
     }

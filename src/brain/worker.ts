@@ -128,7 +128,7 @@ export async function processConversation(
   const stays = projectAll(await getGuestStays(deps.db, ctx.conversation.guestId));
   const stayContext = {
     stage: deriveStage(stays, istCalendarDay(ctx.dbNow)),
-    needsHuman: needsHuman(stays),
+    needsHuman: needsHuman(stays, istCalendarDay(ctx.dbNow)),
   };
 
   const directive = decidePolicy({

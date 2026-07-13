@@ -88,9 +88,11 @@ export interface UndescribableStay {
   bookingId: string;
   reservationNo: string;
   reason: UndescribableReason;
-  /** Whether this row is recent enough to matter — an ancient cancellation is
-   * simply not a stay, but a cancelled booking for next week needs a human. */
   live: boolean;
+  /** Internal only — NEVER rendered. It is how `needsHuman` tells an ancient
+   * cancellation (that guest really is a lead) from one for next week (a person
+   * must call them). Null on a tombstone, which is ancient by construction. */
+  checkIn: string | null;
 }
 
 export type StayView = DescribedStay | UndescribableStay;
@@ -127,7 +129,12 @@ function isLiveStatus(status: BookingMirror['status']): boolean {
  */
 export function project(row: BookingMirror, siblings: readonly BookingMirror[]): StayView {
   const live = isLiveStatus(row.status);
-  const base = { bookingId: row.id, reservationNo: row.ezeeReservationNo, live };
+  const base = {
+    bookingId: row.id,
+    reservationNo: row.ezeeReservationNo,
+    live,
+    checkIn: row.checkIn,
+  };
 
   if (!isDescribableStatus(row.status)) {
     return { describable: false, ...base, reason: 'status_not_describable' };
@@ -191,6 +198,11 @@ export function deriveStage(views: readonly StayView[], today: string): Stage {
   return 'lead';
 }
 
+/** How near a booking must be for a problem with it to need a person now.
+ * A cancellation from last year is history; one for next week is a phone call. */
+const RELEVANCE_DAYS_BACK = 7;
+const RELEVANCE_DAYS_FORWARD = 180;
+
 /**
  * Does this guest hold a booking a human must look at? Kept SEPARATE from the
  * stage on purpose: CH-16 hard-wires the four stage words to its AUTO_SEND_TYPES
@@ -198,12 +210,25 @@ export function deriveStage(views: readonly StayView[], today: string): Stage {
  * folded into `lead` — that would auto-send pre-sales copy to someone with a
  * booking problem.
  *
- * An ancient cancellation is NOT a problem — that guest genuinely is a lead.
- * Only an undescribable row that is still LIVE, or whose dates we cannot even
- * see, needs a person.
+ * Keyed on DATES, not on `live`. A cancelled booking is not "live" by status —
+ * yet a cancellation for NEXT WEEK is precisely the case a person must handle,
+ * and an ancient one is not a problem at all (that guest genuinely IS a lead).
+ * Tombstones carry no dates and are ancient by construction, so they never fire.
  */
-export function needsHuman(views: readonly StayView[]): boolean {
-  return views.some((v) => !v.describable && v.live);
+export function needsHuman(views: readonly StayView[], today: string): boolean {
+  const from = shiftDay(today, -RELEVANCE_DAYS_BACK);
+  const to = shiftDay(today, RELEVANCE_DAYS_FORWARD);
+  return views.some(
+    (v) => !v.describable && v.checkIn !== null && v.checkIn >= from && v.checkIn <= to,
+  );
+}
+
+/** Calendar-day arithmetic on a YYYY-MM-DD string. Constructed at UTC midnight
+ * on both sides, so it is pure day maths — no timezone can shift it. */
+function shiftDay(day: string, days: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 /** Live stays, for the guardrail gate and block [5]. */

@@ -202,20 +202,34 @@ describe('deriveStage — from DATES, never from status', () => {
 });
 
 describe('needsHuman — separate from the stage, so CH-16 cannot auto-send at a broken booking', () => {
-  it('is true for a LIVE booking we cannot describe (a multi-room stay)', () => {
-    const r = row({ raw: { BookingTran: [{}, {}] } });
-    expect(needsHuman(projectAll([r]))).toBe(true);
-    // …and the stage still reads lead, which is exactly why the flag is separate.
+  it('is true for a near-term booking we cannot describe (a multi-room stay)', () => {
+    const r = row({ raw: { BookingTran: [{}, {}] }, checkIn: '2026-08-26' });
+    expect(needsHuman(projectAll([r]), TODAY)).toBe(true);
+    // …and the stage still reads lead, which is exactly why the flag is separate:
+    // CH-16 hard-wires the four stage words to its auto-send rules.
     expect(deriveStage(projectAll([r]), TODAY)).toBe('lead');
   });
 
-  it('is false for an old cancellation — that guest genuinely IS a lead', () => {
-    const r = row({ status: 'cancelled', checkIn: null, checkOut: null });
-    expect(needsHuman(projectAll([r]))).toBe(false);
+  // Keyed on DATES, not on `live`. A cancellation is not "live" by status — but
+  // one for NEXT WEEK is precisely what a person must handle. Keying on `live`
+  // would have missed it entirely (the worker e2e caught this).
+  it('is true for a booking cancelled for next week', () => {
+    const r = row({ status: 'cancelled', checkIn: '2026-07-20', checkOut: '2026-07-22' });
+    expect(needsHuman(projectAll([r]), TODAY)).toBe(true);
+  });
+
+  it('is false for an ancient cancellation — that guest genuinely IS a lead', () => {
+    const old = row({ status: 'cancelled', checkIn: '2025-01-05', checkOut: '2025-01-07' });
+    expect(needsHuman(projectAll([old]), TODAY)).toBe(false);
+  });
+
+  it('is false for a dateless cancel tombstone (ancient by construction)', () => {
+    const stub = row({ status: 'cancelled', checkIn: null, checkOut: null });
+    expect(needsHuman(projectAll([stub]), TODAY)).toBe(false);
   });
 
   it('is false when every stay is describable', () => {
-    expect(needsHuman(projectAll([row()]))).toBe(false);
+    expect(needsHuman(projectAll([row()]), TODAY)).toBe(false);
   });
 });
 
