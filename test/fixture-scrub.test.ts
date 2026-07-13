@@ -111,6 +111,114 @@ describe('scrubFixture', () => {
   });
 });
 
+describe('scrubFixture — eZee payloads (CH-10)', () => {
+  const EZEE_CAPTURE = {
+    Reservations: {
+      Reservation: [
+        {
+          UniqueID: '55110022',
+          FirstName: 'Priya',
+          LastName: 'Sharma',
+          Mobile: '919812345678',
+          Phone: '',
+          Fax: '02212345678',
+          Email: 'priya.sharma@realmail.example',
+          Address: '14 Sea View Road',
+          City: 'Mumbai',
+          State: 'MH',
+          Zipcode: '400001',
+          Nationality: 'Indian',
+          Source: 'Booking.com',
+          BookingTran: [
+            {
+              TransactionId: '522030000000009999',
+              Status: 'New',
+              IsConfirmed: '1',
+              RoomTypeCode: '5220300000000000003',
+              Start: '2027-01-05',
+              TotalAmountAfterTax: '976.00',
+              FirstName: 'Priya',
+              LastName: 'Sharma',
+              Mobile: '919812345678',
+              Email: 'priya.sharma@realmail.example',
+              Comment: 'call me on 98123 45678 after 6',
+              CCNo: '4111111111111111',
+              CCLink: 'YmFzZTY0LWNhcmQtbGluaw==',
+              CardHoldersName: 'Priya Sharma',
+              IdentityNo: 'ABCDE1234F',
+              DateOfBirth: '1990-01-01',
+              Sharer: [{ FirstName: 'Rohit', LastName: 'Sharma', IdentityNo: 'ZZZZ9999Z' }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const { scrubbed, stats } = scrubFixture(EZEE_CAPTURE);
+  const json = JSON.stringify(scrubbed);
+
+  it('DELETES card and identity keys outright (digit-preserve can never keep a PAN)', () => {
+    for (const gone of ['CCNo', 'CCLink', 'CardHoldersName', 'IdentityNo', 'DateOfBirth']) {
+      expect(json).not.toContain(`"${gone}"`);
+    }
+    expect(json).not.toContain('4111111111111111');
+    expect(json).not.toContain('ABCDE1234F');
+    expect(json).not.toContain('ZZZZ9999Z');
+  });
+
+  it('scrubs eZee phone/email/name keys and blanks location-grade fields', () => {
+    expect(json).not.toContain('9812345678');
+    expect(json).not.toContain('02212345678');
+    expect(json).not.toContain('realmail.example');
+    expect(json).not.toContain('Priya');
+    expect(json).not.toContain('Sea View Road');
+    expect(json).not.toContain('400001');
+    expect(json).toMatch(/guest\d+@example\.com/);
+    expect(stats.emails).toBeGreaterThan(0);
+    expect(stats.blanked).toBeGreaterThan(0);
+  });
+
+  it('the same person keeps one identity across keys; ids and dates survive', () => {
+    const value = scrubbed as typeof EZEE_CAPTURE;
+    const res = value.Reservations.Reservation[0];
+    const tran = res?.BookingTran[0];
+    expect(res?.Mobile).toBe(tran?.Mobile); // deterministic phone mapping
+    expect(res?.LastName).toBe(tran?.LastName); // deterministic name mapping
+    expect(tran?.RoomTypeCode).toBe('5220300000000000003'); // ids untouched
+    expect(tran?.Start).toBe('2027-01-05'); // dates untouched
+    expect(tran?.TotalAmountAfterTax).toBe('976.00'); // money untouched
+    expect(tran?.Comment).toBe('Lorem ipsum dolor sit amet.'); // free text gone
+    expect(res?.Phone).toBe(''); // empty stays empty — nothing fabricated
+  });
+
+  it('emits nothing the CI guards would catch', () => {
+    expect(json).not.toMatch(/\+91[0-9]{5,}/);
+    for (const run of json.match(/91\d{10}/g) ?? []) {
+      expect(run).toMatch(/^9177009/);
+    }
+  });
+});
+
+describe('committed eZee fixtures hygiene (CH-10)', () => {
+  const dir = new URL('./fixtures/ezee/', import.meta.url);
+
+  it('every 91-run is reserved; no card/identity keys; only example.com emails', () => {
+    for (const file of readdirSync(dir)) {
+      const content = readFileSync(new URL(file, dir), 'utf8');
+      expect(content, file).not.toMatch(/\+91[0-9]{5,}/);
+      for (const run of content.match(/91\d{10}/g) ?? []) {
+        expect(run, `${file}: ${run}`).toMatch(/^9177009/);
+      }
+      for (const key of ['"CCNo"', '"CCLink"', '"IdentityNo"', '"DateOfBirth"']) {
+        expect(content, file).not.toContain(key);
+      }
+      for (const email of content.match(/[\w.+-]+@[\w.-]+/g) ?? []) {
+        expect(email, file).toMatch(/@example\.com$/);
+      }
+    }
+  });
+});
+
 describe('committed fixtures hygiene (stricter than the CI grep backstop)', () => {
   const dir = new URL('./fixtures/wa/', import.meta.url);
 

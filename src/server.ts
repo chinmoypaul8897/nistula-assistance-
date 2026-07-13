@@ -15,6 +15,7 @@ import { createWebsiteClient } from './brain/tools/websiteApi.js';
 import { ConfigError, configSummary, loadConfig } from './config.js';
 import { runMigrations } from './db/migrate.js';
 import { closeDb, getDb } from './db/client.js';
+import { createEzeeClient } from './ezee/client.js';
 import { getBoss, registerJobs, stopBoss } from './jobs/index.js';
 import { createLogger } from './lib/logger.js';
 import { adminRoutes } from './ops/admin.js';
@@ -105,6 +106,15 @@ async function main(): Promise<void> {
   if (config.websiteBaseUrl === undefined) {
     throw new ConfigError('WEBSITE_BASE_URL is required from CH-05 (plan.md §3.7 phase model)');
   }
+  // The eZee mirror boots from CH-10 — base URL and User-Agent carry registry
+  // defaults, so only the two credentials can be missing. Required even when
+  // the poller is disabled: fetchSingleBooking stays usable (CH-11) and a
+  // partial credential set must fail at boot, not at the first live call.
+  if (config.ezeeHotelCode === undefined || config.ezeeAuthCode === undefined) {
+    throw new ConfigError(
+      'EZEE_HOTEL_CODE and EZEE_AUTH_CODE are required from CH-10 (plan.md §3.7 phase model)',
+    );
+  }
   await runMigrations(databaseUrl); // idempotent, before listen (CH-01)
   const app = buildServer();
   const { db } = getDb(databaseUrl);
@@ -135,6 +145,16 @@ async function main(): Promise<void> {
   const website = createWebsiteClient({ baseUrl: config.websiteBaseUrl, log: app.log });
   const degraded = createDegradedTracker({ log: app.log });
   const toolRegistry = buildToolRegistry();
+  // CH-10 eZee mirror: the client always builds (fetchSingleBooking is a
+  // CH-11 dependency); whether the 60s poller mounts is the flag's call —
+  // registerJobs logs the state loudly either way.
+  const ezee = createEzeeClient({
+    baseUrl: config.ezeeBaseUrl,
+    hotelCode: config.ezeeHotelCode,
+    authCode: config.ezeeAuthCode,
+    userAgent: config.ezeeUserAgent,
+    log: app.log,
+  });
   // Block [3] KNOWLEDGE (CH-06): load once, fail-fast if over the token budget
   // — BEFORE registerJobs since CH-08 threads it through the worker deps.
   const kb = loadKnowledge();
@@ -153,6 +173,7 @@ async function main(): Promise<void> {
     opsNumbers: config.opsNumbers,
     nightStart: config.nightStart,
     nightEnd: config.nightEnd,
+    ezee: { client: ezee, pollerEnabled: config.ezeePollerEnabled },
   });
   await app.register(waWebhookRoutes, {
     db,

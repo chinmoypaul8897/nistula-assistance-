@@ -1,0 +1,30 @@
+{
+  "Reservations": {
+    "CancelReservation": [
+      {
+        "LocationId": "1234",
+        "UniqueID": "11241008-1",
+        "Status": "Cancel",
+        "Canceldatetime": "2026-07-12 14:21:16",
+        "Remark": "Lorem ipsum dolor sit amet.",
+        "VoucherNo": "100335/1"
+      },
+      {
+        "LocationId": "1234",
+        "UniqueID": "11241008-2",
+        "Status": "Cancel",
+        "Canceldatetime": "2026-07-12 14:21:27",
+        "Remark": "Lorem ipsum dolor sit amet.",
+        "VoucherNo": "100335/2"
+      },
+      {
+        "LocationId": "1234",
+        "UniqueID": "11241011",
+        "Status": "Cancel",
+        "Canceldatetime": "2026-07-12 14:18:57",
+        "Remark": "",
+        "VoucherNo": ""
+      }
+    ]
+  }
+}

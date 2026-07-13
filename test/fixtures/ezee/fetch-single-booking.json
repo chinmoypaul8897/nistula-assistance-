@@ -1,0 +1,52 @@
+{
+  "Reservations": {
+    "Reservation": [
+      {
+        "BookingTran": [
+          {
+            "SubBookingId": "12341600",
+            "TransactionId": "123400000000002200",
+            "Status": "New",
+            "IsConfirmed": "1",
+            "CurrentStatus": "Arrived",
+            "RoomTypeCode": "5220300000000000003",
+            "RoomTypeName": "Nistula Villa",
+            "RoomID": "5220300000000000011",
+            "RoomName": "B3",
+            "RateplanCode": "123400000000000006",
+            "Start": "2027-04-01",
+            "End": "2027-04-03",
+            "CurrencyCode": "INR",
+            "TotalAmountAfterTax": "64000.00",
+            "FirstName": "Test",
+            "LastName": "GuestFive",
+            "Mobile": "917700900408",
+            "Email": "guest408@example.com",
+            "Source": "Internet Booking Engine",
+            "RentalInfo": [
+              {
+                "RoomID": "5220300000000000011",
+                "RoomName": "B3",
+                "EffectiveDate": "2027-04-01",
+                "RoomTypeCode": "5220300000000000003",
+                "RoomTypeName": "Nistula Villa",
+                "Adult": "6",
+                "Child": "0",
+                "Rent": "32000.00"
+              }
+            ]
+          }
+        ],
+        "LocationId": "1234",
+        "UniqueID": "11241600",
+        "BookedBy": "Internet Booking Engine",
+        "FirstName": "Test",
+        "LastName": "GuestFive",
+        "Mobile": "917700900408",
+        "Email": "guest408@example.com",
+        "Source": "Internet Booking Engine",
+        "IsChannelBooking": "0"
+      }
+    ]
+  }
+}

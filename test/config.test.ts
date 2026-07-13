@@ -14,6 +14,7 @@ describe('loadConfig (plan §3.7 registry)', () => {
     expect(config.graphBaseUrl).toBe('https://graph.facebook.com/v23.0');
     expect(config.ezeeBaseUrl).toBe('https://live.ipms247.com');
     expect(config.ezeeUserAgent).toBe('openAPI-Nistula');
+    expect(config.ezeePollerEnabled).toBe(false); // default OFF — split-brain guard (CH-10)
     expect(config.draftMode).toBe(true);
     expect(config.nightStart).toBe('20:00');
     expect(config.nightEnd).toBe('10:00');
@@ -160,5 +161,15 @@ describe('configSummary (secret-free boot print)', () => {
     expect(summary).toContain('ANTHROPIC_API_KEY=set');
     expect(summary).toContain('DATABASE_URL=set');
     expect(summary).toContain('OPS_NUMBERS=1 number(s)');
+  });
+});
+
+describe('EZEE_POLLER_ENABLED (CH-10 split-brain guard)', () => {
+  it("is off by default, on only for an explicit '1', and visible in the summary", () => {
+    expect(loadConfig(minimalEnv).ezeePollerEnabled).toBe(false);
+    const on = loadConfig({ ...minimalEnv, EZEE_POLLER_ENABLED: '1' });
+    expect(on.ezeePollerEnabled).toBe(true);
+    expect(configSummary(on)).toContain('EZEE_POLLER_ENABLED=true');
+    expect(() => loadConfig({ ...minimalEnv, EZEE_POLLER_ENABLED: 'yes' })).toThrow(ConfigError);
   });
 });

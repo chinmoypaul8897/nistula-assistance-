@@ -389,6 +389,65 @@ transcript); (3) "please remember I'm diabetic" → polite reply, but NO
 guest_facts row (the sensitive screen) and no "noted" claim in the reply.
 Keep it to these three — the poisoning battery is CI-covered (red-team 23–29).
 
+## eZee mirror (CH-10)
+
+**What runs:** a 60s poller (`ezee.poll`, cron `* * * * *` IST) mirrors every
+eZee reservation into `bookings_mirror`, emits `booking.created|modified|
+cancelled` onto pg-boss (no consumers until CH-12), links stays to known
+guests by phone, and ACKs eZee ONLY for reservations whose transaction
+committed. Un-ACKed data stays queued at eZee — redelivery is always safe
+(the diff-aware upsert lands 'unchanged' and re-ACKs without new events).
+
+**THE ONE RULE — `EZEE_POLLER_ENABLED`:** eZee's un-ACKed queue is shared per
+AuthCode. Whoever polls AND ACKs consumes the booking for everyone else — a
+local dev poller would eat real bookings the production mirror then never
+sees. So the flag defaults **0** everywhere; **exactly one environment (the
+Railway service) sets `1`**. Local dev NEVER flips it on. Boot logs the state
+loudly either way (`eZee poller ENABLED/DISABLED`); production with the flag
+off = a stale mirror and no lifecycle sends, so check that line first when
+"bookings aren't appearing".
+
+**Reading the mirror:** local `docker exec nistula-assistance-postgres-1 psql
+-U nistula -d nistula -c "SELECT ezee_reservation_no, status, check_in,
+check_out, guest_phone, synced_at FROM bookings_mirror ORDER BY synced_at
+DESC LIMIT 10;"` — production via the CH-09 stdin-script pattern (never paste
+the DATABASE_URL into a shell line).
+
+**Cancels are per-room:** eZee delivers a FULL cancel of an N-room booking as
+N suffixed entries (`12345228-1`, `-2`) with no bare entry. The poller groups
+same-base entries within a cycle: a group covering every room flips the row;
+fewer entries than rooms is a TRUE partial — status deliberately NOT flipped
+(the booking lives for the other rooms), alert raised, human verifies in the
+eZee UI. A partial spread across two polls stays on the alert path — it never
+silently cancels; resolve by hand until CH-11's re-sync lands.
+
+**Alerts you may see** (log-only until CH-17): `ezee_auth_failed`
+(201/202/301/302/303-class — creds rotated/disabled at eZee; fires ONCE
+until recovery; fix the vars, don't wait) · `ezee_poll_failing` (5
+consecutive failed cycles — fetch, ACK, or per-item tx failures all count;
+next cron tick is the retry) · `ezee_multi_tran_reservation` (multi-room
+booking — typed columns carry the first room; raw has all) ·
+`ezee_partial_cancel_suspect` (see above — verify in the eZee UI, fix by
+hand) · `ezee_cancel_conflict` (a live payload arrived for a row already
+cancelled — status kept cancelled, check the eZee UI for which is true) ·
+`ezee_unknown_status` (a status outside the mapping, or an unconfirmed hold
+— mirrored as `unknown`, excluded from lifecycle) ·
+`ezee_unackable_reservation` (payload without a UniqueID — will redeliver
+every poll until eZee support resolves it).
+
+**Scripts:** `pnpm ezee:capture [out.json]` — one-shot poll WITHOUT ACK
+(safe anywhere; §5.2-sanctioned): prints the live field-name inventory and
+optionally writes a scrubbed fixture — review before committing. `pnpm
+ezee:backfill <bookingId...>` — FetchSingleBooking per id into the mirror; NO
+events (lifecycle must never fire on history); ids only, BKG-20 ReadBooking
+is broken on this property and is never called.
+
+**Live round-trip check (the CH-10 DoD):** create a low-risk test booking in
+the eZee UI (tomorrow's date) → within ~60s the deployed service logs
+`[ezee] poll processed` and the row appears → modify the dates → row shows
+`modified` + new dates → cancel → `cancelled`. The booking stops being
+redelivered after the first ACK — that silence IS the ACK-after-commit proof.
+
 ## Sections to come
 
 - Template approval pack for the real number — CH-12

@@ -27,6 +27,8 @@ import {
   type WorkerLogger,
 } from '../brain/worker.js';
 import type { Db } from '../db/client.js';
+import type { EzeeClient } from '../ezee/client.js';
+import { createEzeePoller } from '../ezee/poller.js';
 import { summarizeError } from '../lib/logger.js';
 import type { WaClient } from '../wa/client.js';
 
@@ -34,6 +36,17 @@ export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
 export const CONVERSATION_SWEEP_QUEUE = 'conversation.sweep';
 export const CONVERSATION_SUMMARISE_QUEUE = 'conversation.summarise';
 export const SUMMARISER_NIGHTLY_QUEUE = 'summariser.nightly';
+export const EZEE_POLL_QUEUE = 'ezee.poll';
+// One queue per §5.2 event kind (plan CH-10 step 4's letter). No workers
+// until CH-12 — see the retention note in ensureQueues.
+export const BOOKING_CREATED_QUEUE = 'booking.created';
+export const BOOKING_MODIFIED_QUEUE = 'booking.modified';
+export const BOOKING_CANCELLED_QUEUE = 'booking.cancelled';
+export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
+  created: BOOKING_CREATED_QUEUE,
+  modified: BOOKING_MODIFIED_QUEUE,
+  cancelled: BOOKING_CANCELLED_QUEUE,
+};
 
 let bossInstance: PgBoss | null = null;
 let bossUrl: string | null = null;
@@ -113,6 +126,30 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryLimit: 0, // tomorrow's cron IS the retry
     expireInSeconds: 110, // the selector only queries + enqueues
   });
+  await boss.createQueue(EZEE_POLL_QUEUE, {
+    // stately + the constant singletonKey on the schedule send = the CH-10
+    // overlap protection (≤1 created AND ≤1 active poll, DB-enforced).
+    policy: 'stately',
+    retryLimit: 0, // the next 60s cron tick IS the retry
+    // Worst case ≈ two eZee calls (3 tries × 15s + backoff each ≈ 47s) plus
+    // per-reservation txs + the ACK — 180s gives headroom; an expired hung
+    // run is discarded (retryLimit 0) and ACK-after-commit makes the
+    // redelivery safe. Changing this later needs updateQueue (CH-03 lesson).
+    expireInSeconds: 180,
+  });
+  // The booking.* event queues MUST exist before the poller's first in-tx
+  // send: boss.send throws on a missing queue, which would roll back the
+  // mirror upsert and poison every poll cycle (never-ACKed redelivery loop).
+  // retentionSeconds is the pg-boss default, stated so the CH-12 wait is a
+  // visible bound: events queued before CH-12's workers exist survive 14
+  // days; beyond that CH-12's reconciliation sweep re-derives from
+  // bookings_mirror (§3.4) — the queues are wake-ups, not the truth.
+  for (const queue of Object.values(BOOKING_EVENT_QUEUES)) {
+    await boss.createQueue(queue, {
+      policy: 'standard',
+      retentionSeconds: 14 * 24 * 3600,
+    });
+  }
 }
 
 /**
@@ -178,6 +215,10 @@ export interface JobsDeps {
   pollingIntervalSeconds?: number;
   /** §3.3 rate window (CH-07) — one per process; tests may inject their own. */
   rateWindow?: RateWindow;
+  /** CH-10 eZee mirror. pollerEnabled comes from EZEE_POLLER_ENABLED —
+   * default OFF: two pollers ACKing one eZee queue steal each other's
+   * bookings (dev would consume prod's), so only Railway ever sets 1. */
+  ezee?: { client: EzeeClient; pollerEnabled: boolean };
 }
 
 export interface Jobs {
@@ -269,15 +310,46 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   await scheduleCron(deps.boss, CONVERSATION_SWEEP_QUEUE, windows.sweepIntervalCron, 'Asia/Kolkata');
   // The 04:00 IST nightly compaction (plan.md CH-08 step 2 / §2.3).
   await scheduleCron(deps.boss, SUMMARISER_NIGHTLY_QUEUE, thresholds.cron, 'Asia/Kolkata');
+  if (deps.ezee !== undefined) {
+    if (deps.ezee.pollerEnabled) {
+      const poller = createEzeePoller({
+        db: deps.db,
+        boss: deps.boss,
+        client: deps.ezee.client,
+        log: deps.log,
+      });
+      await deps.boss.work(EZEE_POLL_QUEUE, workOptions, async () => {
+        await poller.runPoll();
+      });
+      // '* * * * *' = the §2.3 60s cadence (cron's floor); the constant
+      // singletonKey pairs with the stately queue for overlap protection.
+      await scheduleCron(deps.boss, EZEE_POLL_QUEUE, '* * * * *', 'Asia/Kolkata', {
+        singletonKey: 'poll',
+      });
+      deps.log.info({}, 'eZee poller ENABLED (60s cron)');
+    } else {
+      // A cron registered by an earlier enabled boot in this SAME database
+      // must stop firing into a workerless queue.
+      await deps.boss.unschedule(EZEE_POLL_QUEUE).catch(() => {});
+      deps.log.warn(
+        {},
+        'eZee poller DISABLED (EZEE_POLLER_ENABLED=0) — bookings_mirror will go stale',
+      );
+    }
+  }
   return { enqueueConversationProcess: enqueue };
 }
 
-/** Cron registration helper (CH-03 step 1) — every business cron states its tz explicitly. */
+/** Cron registration helper (CH-03 step 1) — every business cron states its
+ * tz explicitly. `extra` carries send options for the scheduled job (CH-10:
+ * the poll's constant singletonKey); schedule() upserts per queue, so
+ * re-registration across restarts never duplicates. */
 export async function scheduleCron(
   boss: PgBoss,
   name: string,
   cron: string,
   tz: string,
+  extra?: { singletonKey?: string },
 ): Promise<void> {
-  await boss.schedule(name, cron, {}, { tz });
+  await boss.schedule(name, cron, {}, { tz, ...extra });
 }
