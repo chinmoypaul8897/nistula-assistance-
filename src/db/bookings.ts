@@ -129,12 +129,18 @@ export async function upsertMirrorRow(
   }
   // A cancelled row never silently returns to a bookable status: cancel
   // entries are ACKed away (eZee will not redeliver them), so a stale
-  // New/Modify redelivery landing AFTER an applied cancel would otherwise
-  // un-cancel the booking with no signal left to correct it (pre-push audit
-  // DEFECT). A recognised live CurrentStatus (checked_in/checked_out) IS
-  // proof of life and passes; the poller alerts ops on every block.
+  // redelivery landing AFTER an applied cancel would otherwise un-cancel the
+  // booking with no signal left to correct it.
+  //
+  // ALLOWLIST, not a denylist (close-out audit): only a CurrentStatus that is
+  // positive PROOF OF LIFE may revive a cancelled row. A denylist of
+  // {confirmed, modified} silently let `unknown` through — and `unknown` is
+  // exactly what an unconfirmed-hold redelivery maps to (mapStatus: New/Modify
+  // + IsConfirmed!=1), so the hole was reachable by the commonest stale
+  // payload there is. no_show on a cancelled booking is likewise not a revival.
+  const REVIVING_STATUSES: readonly BookingStatus[] = ['checked_in', 'checked_out'];
   const resurrectionBlocked =
-    prev.status === 'cancelled' && (input.status === 'confirmed' || input.status === 'modified');
+    prev.status === 'cancelled' && !REVIVING_STATUSES.includes(input.status);
   const effective = resurrectionBlocked ? { ...input, status: 'cancelled' as const } : input;
   const changed = diffMirrorFields(prev, effective);
   const [row] = await db

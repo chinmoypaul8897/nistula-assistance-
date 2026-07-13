@@ -199,6 +199,9 @@ ANTHROPIC_API_KEY · MODEL_ID (default claude-sonnet-4-5) · MODEL_ID_LIGHT (opt
 GRAPH_BASE_URL · WA_PHONE_NUMBER_ID · WA_ACCESS_TOKEN (MUST be a System User permanent token — dashboard test tokens expire in 24h) · WA_APP_SECRET · WA_VERIFY_TOKEN
 WEBSITE_BASE_URL          # dev: vercel preview · prod: https://nistula.life
 EZEE_BASE_URL=https://live.ipms247.com · EZEE_HOTEL_CODE · EZEE_AUTH_CODE · EZEE_USER_AGENT=openAPI-Nistula
+EZEE_POLLER_ENABLED=0        # CH-10 addition. BINDING: exactly ONE environment may set 1 (Railway).
+                             # eZee's un-ACKed queue is shared per AuthCode — a second poller ACK-consumes
+                             # real bookings the production mirror then never sees. Local .env NEVER sets 1.
 OPS_NUMBERS               # comma-separated E.164 — Paul + front-desk lead (alerts, digests, draft approvals)
 STAFF_ROSTER_JSON         # [{"name":"…","phone":"+91…","role":"housekeeping|maintenance|frontdesk","villas":["B1","B3"]}]
 DRAFT_MODE=true · AUTO_SEND_TYPES=            # csv: presales,instay,… unlocked over time

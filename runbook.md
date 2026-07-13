@@ -407,11 +407,35 @@ loudly either way (`eZee poller ENABLED/DISABLED`); production with the flag
 off = a stale mirror and no lifecycle sends, so check that line first when
 "bookings aren't appearing".
 
+**eZee's queue is BATCHED and FLAKY — read this before debugging "bookings
+aren't appearing".** It hands over a *window* at a time: a fresh batch only
+appears once the previous one is ACKed, so a single poll never proves the
+queue is empty, and **a poll against a backlogged queue tells you nothing
+about whether a specific new booking is queued** (this exact trap produced a
+wrong conclusion during CH-10). It also *flaps*: identical requests alternate
+between returning data and returning nothing. An empty reply is treated as
+"do nothing", never as "nothing exists" — which is why empty polls are silent
+in the logs and the drain looks uneven. To test whether something is queued,
+drain the queue first.
+
 **Reading the mirror:** local `docker exec nistula-assistance-postgres-1 psql
 -U nistula -d nistula -c "SELECT ezee_reservation_no, status, check_in,
 check_out, guest_phone, synced_at FROM bookings_mirror ORDER BY synced_at
-DESC LIMIT 10;"` — production via the CH-09 stdin-script pattern (never paste
-the DATABASE_URL into a shell line).
+DESC LIMIT 10;"` — production reads need the **Postgres service's
+`DATABASE_PUBLIC_URL`** (the app's `DATABASE_URL` is `postgres.railway.internal`
+and only resolves inside Railway), fetched in-process and never printed.
+
+**Moving secrets to Railway: use Node, never a PowerShell pipe.** PS 5.1 (and
+.NET's `Process.StandardInput`) prepends a UTF-8 BOM to piped stdin, so the
+stored value is silently 3 bytes longer — eZee then rejects the AuthCode with
+a misleading error. Pipe with `spawn` + `Buffer.from(value, 'ascii')`, and
+**verify length + absence of a BOM afterwards** — never just "the command ran".
+
+**eZee has NO amend/modify endpoint.** Dates can only be changed by a human in
+the front-desk "Amend Stay" screen (the API path cancels and re-creates).
+`InsertBooking` also needs **POST + form-urlencoded** and a **per-night,
+comma-separated, tax-exclusive** `baserate` — the vendor docs are wrong on
+both; the `nistula-website` codebase is the working reference.
 
 **Cancels are per-room:** eZee delivers a FULL cancel of an N-room booking as
 N suffixed entries (`12345228-1`, `-2`) with no bare entry. The poller groups

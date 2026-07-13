@@ -287,6 +287,29 @@ describe('cancel semantics', () => {
     expect(ackCalls[1]).toEqual([{ bookingId: 'X9700', pmsBookingId: 'X9700', status: 'New' }]);
   });
 
+  it('a suffixed cancel arriving BEFORE its reservation cannot be lost (base guarded)', async () => {
+    // Close-out audit: eZee really does deliver a cancel without its create
+    // (observed live on 952). Tombstoning only the suffixed ids left the BASE
+    // key unguarded, so a later create landed 'confirmed' and the
+    // cancellation — already ACKed away — was lost. The original BLOCKER's
+    // class by another route.
+    const { poller, alerts } = makePoller([
+      ok([], [{ UniqueID: 'X9900-1', Status: 'Cancel' }, { UniqueID: 'X9900-2', Status: 'Cancel' }]),
+      ok([makeRes('X9900')]), // the reservation itself arrives on a LATER poll
+    ]);
+    await poller.runPoll();
+    // Base tombstone exists alongside the per-room ones.
+    expect((await getMirrorByReservationNo(db, 'X9900'))?.status).toBe('cancelled');
+    expect((await getMirrorByReservationNo(db, 'X9900-1'))?.status).toBe('cancelled');
+    await drainEvents('cancelled');
+
+    await poller.runPoll();
+    // The late create must NOT resurrect it.
+    expect((await getMirrorByReservationNo(db, 'X9900'))?.status).toBe('cancelled');
+    expect(alerts('ezee_cancel_conflict')).toHaveLength(1);
+    expect(await drainEvents('created')).not.toContain('X9900');
+  });
+
   it('a never-mirrored cancel gets a tombstone stub + event + ACK', async () => {
     const { poller, ackCalls } = makePoller([
       ok([], [{ UniqueID: '88800-1', Status: 'Cancel' }]),
