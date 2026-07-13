@@ -58,6 +58,11 @@ const envSchema = z.object({
   EZEE_HOTEL_CODE: z.string().optional(), // EZEE_* required from CH-10
   EZEE_AUTH_CODE: z.string().optional(),
   EZEE_USER_AGENT: z.string().default('openAPI-Nistula'),
+  // Default OFF (CH-10 split-brain guard): eZee's un-ACKed queue is shared
+  // per AuthCode — a dev poller would consume and ACK REAL bookings the
+  // production mirror then never sees. Only Railway sets 1. New §3.7
+  // registry var (recorded CH-10 deviation, pending the plan.md fold-in).
+  EZEE_POLLER_ENABLED: z.enum(['0', '1']).default('0'),
   OPS_NUMBERS: z.string().optional(),
   STAFF_ROSTER_JSON: z.string().optional(),
   DRAFT_MODE: z.enum(['true', 'false']).default('true'),
@@ -101,6 +106,7 @@ export interface Config {
   ezeeHotelCode: string | undefined;
   ezeeAuthCode: string | undefined;
   ezeeUserAgent: string;
+  ezeePollerEnabled: boolean;
   opsNumbers: string[];
   staffRoster: StaffMember[];
   draftMode: boolean;
@@ -168,6 +174,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ezeeHotelCode: raw.EZEE_HOTEL_CODE,
     ezeeAuthCode: raw.EZEE_AUTH_CODE,
     ezeeUserAgent: raw.EZEE_USER_AGENT,
+    ezeePollerEnabled: raw.EZEE_POLLER_ENABLED === '1',
     opsNumbers: parseOpsNumbers(raw.OPS_NUMBERS),
     staffRoster: parseStaffRoster(raw.STAFF_ROSTER_JSON),
     draftMode: raw.DRAFT_MODE === 'true',
@@ -261,6 +268,7 @@ export function configSummary(config: Config): string {
     `EZEE_HOTEL_CODE=${presence(config.ezeeHotelCode)}`,
     `EZEE_AUTH_CODE=${presence(config.ezeeAuthCode)}`,
     `EZEE_USER_AGENT=${config.ezeeUserAgent}`,
+    `EZEE_POLLER_ENABLED=${config.ezeePollerEnabled}`,
     `OPS_NUMBERS=${config.opsNumbers.length} number(s)`,
     `STAFF_ROSTER_JSON=${config.staffRoster.length} member(s)`,
     `DRAFT_MODE=${config.draftMode}`,
