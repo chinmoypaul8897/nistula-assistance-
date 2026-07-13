@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import type { Db } from '../../db/client.js';
 import type { AlertLogger } from '../../ops/alerts.js';
+import type { StayView } from '../stayView.js';
 import type { WebsiteClient } from './websiteApi.js';
 
 /** Friendly, model-facing error enum (§6.4). Kept small and stable.
@@ -52,14 +53,59 @@ export interface ToolMemoryContext {
   saves: { count: number };
 }
 
+/**
+ * Per-TURN booking identity (CH-11) — the get_booking half of the same pattern.
+ *
+ * `guestText` is the load-bearing field and the reason this group exists: §6.4
+ * requires the GUEST to state the booking name and check-in date, but tool
+ * ARGUMENTS are authored by the model, which can read the (attacker-chosen)
+ * WhatsApp profile name straight out of block [5]. So the secret is never a tool
+ * argument — the handler corroborates OUR stored record against the words the
+ * guest actually typed this turn, which arrive here and nowhere else.
+ */
+export interface ToolBookingContext {
+  db: Db;
+  guestId: string;
+  /** The claimant's E.164 — the 3-strikes counter is keyed on the phone. */
+  guestPhone: string;
+  /** ONLY the guest's own typed words from this batch. Never the model's text,
+   * never the profile name, never a saved fact, never the rolling summary. */
+  guestText: string;
+  /** This guest's stays, already projected (the worker's single read). */
+  stays: readonly StayView[];
+  /** Today's IST calendar day, from the DB clock — the SAME clock block [6]
+   * prints and the stage is derived from. A handler calling new Date() would be
+   * a second clock, and could sort a stay differently from the prompt the model
+   * is reading in the same turn. */
+  today: string;
+  /** Mutable per-turn latch. The tool loop RE-RUNS on a guardrail regenerate
+   * (and one round may carry parallel calls), so without this an honest typo
+   * would burn two strikes and the model could walk a range of reservation
+   * numbers inside one turn. Once refused, every later call in either loop
+   * returns the same frozen value with no DB read at all. */
+  claim: {
+    /** A claim was already refused this turn — every later one is free and mute. */
+    refused: boolean;
+    /** A distinct reference was already claimed this turn (cap: one). */
+    attempted: string | null;
+    /** Set when a refusal must reach a human; turn.ts carries it out. */
+    escalate: boolean;
+  };
+}
+
 /** Everything a handler needs, injected (no module globals). */
 export interface ToolContext {
   website: WebsiteClient;
   websiteBaseUrl: string;
   degraded: { record(outcome: 'down' | 'up'): void };
-  log: AlertLogger;
+  /** AlertLogger (error) plus an OPTIONAL warn — the worker always passes a full
+   * pino logger; the pure test contexts pass an error-only stub. CH-11 wants a
+   * warn for a refused claim without dragging in the ops-alert channel. */
+  log: AlertLogger & { warn?: (obj: Record<string, unknown>, msg?: string) => void };
   /** Absent ⇒ remember_fact cannot save (contexts with no guest identity). */
   memory?: ToolMemoryContext;
+  /** Absent ⇒ get_booking cannot answer (contexts with no guest identity). */
+  booking?: ToolBookingContext;
 }
 
 /** The Anthropic tool spec shape (a JSON-schema input_schema). */

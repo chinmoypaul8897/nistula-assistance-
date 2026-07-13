@@ -14,6 +14,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { Db } from '../db/client.js';
 import type { Conversation } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
+import { istCalendarDay } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
 import { buildTurnContext, type TranscriptOverflow } from './contextBuilder.js';
@@ -68,6 +69,12 @@ export interface TurnResult {
   /** Non-null when the guardrails require an escalation this turn: a deferred
    * price/promise, or a team-referral that must be MADE true (CH-07). */
   escalate: EscalationReason | null;
+  /** CH-11: a refused reference claim, on its OWN channel. The worker's
+   * escalation slot is single-valued (`plan.escalate ?? turn.escalate`), so a
+   * complaint riding the same turn would otherwise silently SWALLOW a security
+   * alert — and someone probing another guest's reservation number is exactly
+   * the event a person must see. Fired independently of `escalate`. */
+  securityEscalate: EscalationReason | null;
   /** What the transcript window could not show (CH-08) — the worker applies
    * the hysteresis threshold and enqueues an on-demand summarise. */
   overflow: TranscriptOverflow;
@@ -110,6 +117,10 @@ export interface TurnArgs {
    * worker (one read per turn, shared with the policy pass). Feeds block [5],
    * the block [6] stage line, and the stay-affirmation guardrail. */
   stays?: readonly StayView[];
+  /** CH-11: the guest's OWN typed words this batch — the only text a reference
+   * claim may be corroborated against (§6.4: the guest must STATE the name and
+   * date; a tool argument is written by the model, not the guest). */
+  guestText?: string;
 }
 
 /**
@@ -152,6 +163,22 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       conversationId,
       sourceMessageId: args.newestGuestMsgId ?? null,
       saves: { count: 0 },
+    },
+    // CH-11: shared across BOTH loops like `memory` — the guardrail regenerate
+    // re-runs the whole tool loop, so the claim latch must span the turn or one
+    // honest typo would burn two strikes.
+    booking: {
+      db: deps.db,
+      guestId: args.conversation.guestId,
+      guestPhone: args.guestPhone,
+      // ONLY the guest's own typed words. §6.4's verification corroborates our
+      // stored record against THIS, never against a model-supplied argument.
+      guestText: args.guestText ?? '',
+      stays: args.stays ?? [],
+      // The DB clock, not new Date() — one clock per turn, so a handler can
+      // never sort a stay differently from the prompt the model is reading.
+      today: istCalendarDay(dbNow),
+      claim: { refused: false, attempted: null, escalate: false },
     },
   };
 
@@ -199,7 +226,10 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       }),
       // Guardrail 2 (CH-07): evidence + the §6.7 must-escalate assertion.
       systemEvidence,
-      mustEscalate: args.mustEscalate ?? false,
+      // A refused reference claim escalates, so the refusal's own sentence ("a
+      // colleague is checking and will reply shortly") is a TRUE C3 referral —
+      // without this the guest would get a confusing deferral instead.
+      mustEscalate: (args.mustEscalate ?? false) || toolCtx.booking?.claim.escalate === true,
       // CH-11 stay integrity: an ASSERTION gate, not an evidence licence — the
       // truth comes from the mirror's own status enum via stayView, in the same
       // read that filled block [5], so the gate and the prompt can never
@@ -217,6 +247,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
     text: outcome.text,
     toolRuns: outcome.toolRuns,
     escalate: outcome.escalate,
+    securityEscalate: toolCtx.booking?.claim.escalate === true ? 'booking_reference' : null,
     overflow,
   };
 }

@@ -143,6 +143,13 @@ export async function processConversation(
         unviewableMedia: directive.flags.hasMedia,
         botQuestion: directive.flags.botQuestion,
         stays,
+        // §6.4: a reference claim is corroborated against the GUEST'S OWN words,
+        // never a model-supplied argument (block [5] shows the model the
+        // attacker-chosen WhatsApp profile name).
+        guestText: msgs
+          .map((m) => guestTextOf(m))
+          .filter((t): t is string => t !== null)
+          .join('\n'),
         // §6.5 #2 "since the guest's previous message" = the cursor row's
         // created_at::text — µs-exact into the SQL evidence query (CH-08).
         // A DANGLING pointer fails CLOSED (audit): null would license C3 from
@@ -212,6 +219,13 @@ export async function processConversation(
     // deferred a price still pings ops exactly once).
     const reason = plan.escalate ?? turn?.escalate ?? null;
     if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail);
+    // CH-11: a refused reference claim rides its OWN channel. The slot above is
+    // single-valued, so a complaint in the same turn would silently swallow it —
+    // and someone probing another guest's reservation number is precisely the
+    // event a person must see. Fired even when `reason` already escalated.
+    if (turn?.securityEscalate != null) {
+      await escalateToOps(deps, conversationId, turn.securityEscalate, directive.guestTextTail);
+    }
     if (intentId !== null && body !== null) {
       await deps.wa.dispatchText({ messageId: intentId, toE164: ctx.guestPhone, body, conversationId });
     }
