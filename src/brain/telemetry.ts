@@ -19,6 +19,8 @@ import { summarizeError } from '../lib/logger.js';
 export type GuardrailRule =
   | 'price_integrity'
   | 'promise_integrity'
+  // CH-11: the draft asserted a booking this guest does not hold.
+  | 'stay_integrity'
   | 'negotiation_lock'
   | 'window'
   | 'identity'

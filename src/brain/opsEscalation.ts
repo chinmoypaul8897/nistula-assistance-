@@ -28,6 +28,10 @@ const ESCALATION_SUMMARIES: Record<EscalationReason, string> = {
   leak: 'A reply was blocked by the leak scan — please review the thread.',
   promise: 'A reply was blocked by promise integrity — please review the thread.',
   referral: 'The AI told a guest the team will follow up — please pick up the thread.',
+  booking_reference:
+    'Someone quoted a booking reference the AI could not verify as theirs — the AI revealed nothing. Could be an honest typo; could be someone probing another guest’s booking. Please check before replying.',
+  booking_undescribable:
+    'This guest holds a booking the AI is not allowed to describe (a live cancellation, or a multi-room reservation whose details we only partly hold). Please pick up the thread.',
 };
 
 /**

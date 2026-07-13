@@ -22,6 +22,7 @@ import { runGuardrails } from './guardrails.js';
 import type { LoadedKnowledge } from './knowledge.js';
 import type { EscalationReason } from './policy.js';
 import { PHRASEBOOK, type SystemBlock } from './prompt.js';
+import { liveStays, type StayView } from './stayView.js';
 import { createHitRecorder } from './telemetry.js';
 import type { DegradedTracker } from './tools/degraded.js';
 import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
@@ -105,6 +106,10 @@ export interface TurnArgs {
   newestGuestMsgId?: string;
   /** Guardrail 5 trigger from the policy pass (CH-07 step 3). */
   botQuestion?: boolean;
+  /** CH-11: this guest's stays, ALREADY projected through stayView in the
+   * worker (one read per turn, shared with the policy pass). Feeds block [5],
+   * the block [6] stage line, and the stay-affirmation guardrail. */
+  stays?: readonly StayView[];
 }
 
 /**
@@ -129,6 +134,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       newestGuestMsgAt: args.newestGuestMsgAt,
       mustEscalate: args.mustEscalate ?? false,
       unviewableMedia: args.unviewableMedia ?? false,
+      stays: args.stays,
     },
   );
   const tools = deps.toolRegistry.specs();
@@ -194,6 +200,11 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       // Guardrail 2 (CH-07): evidence + the §6.7 must-escalate assertion.
       systemEvidence,
       mustEscalate: args.mustEscalate ?? false,
+      // CH-11 stay integrity: an ASSERTION gate, not an evidence licence — the
+      // truth comes from the mirror's own status enum via stayView, in the same
+      // read that filled block [5], so the gate and the prompt can never
+      // disagree. Guest-derived DATA (block [5]'s text) licenses nothing.
+      hasLiveStay: liveStays(args.stays ?? []).length > 0,
       // Guardrail 5 (CH-07): the policy pass's inbound bot-question flag.
       botQuestion: args.botQuestion ?? false,
       // Guardrail 7 (CH-07): self-exemption + the after-hours substitution.

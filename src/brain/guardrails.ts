@@ -29,6 +29,7 @@ import { applyNegotiationLock, checkPriceIntegrity } from './priceGuards.js';
 import { scanPromises, type ClaimClass } from './promises.js';
 import { PHRASEBOOK } from './prompt.js';
 import { extractRupeeAmounts, type KbFee } from './rupees.js';
+import { scanStayAffirmations, STAY_NUDGE } from './stayGuards.js';
 import type { RecordHit } from './telemetry.js';
 import type { ToolRun } from './tools/registry.js';
 
@@ -60,6 +61,12 @@ export interface GuardrailDeps {
    * is asserted at pipeline end (a must_escalate turn never leaves without
    * `escalate` set). */
   mustEscalate?: boolean;
+  /** CH-11: does this guest actually hold a LIVE booking? From the worker's
+   * projected stays — a code-normalised server enum, NOT a tool result and NOT
+   * block [5]'s text (guest-derived DATA may never license anything). Defaults
+   * TRUE so every pre-CH-11 caller and test keeps its exact behaviour; the
+   * worker always supplies the real value. */
+  hasLiveStay?: boolean;
   /** Guardrail 5 trigger: the inbound batch asked "are you a bot?". */
   botQuestion?: boolean;
   /** Guardrail 7: the guest's own E.164 — the ONLY phone a draft may contain. */
@@ -92,6 +99,7 @@ export async function runGuardrails(
   const nudge = [
     first.priceViolations.length > 0 ? PRICE_NUDGE : null,
     first.promiseViolations.length > 0 ? PROMISE_NUDGE : null,
+    first.stayViolations.length > 0 ? STAY_NUDGE : null,
     first.identityViolation ? IDENTITY_NUDGE : null,
     first.tooLong ? LENGTH_NUDGE : null,
   ]
@@ -102,6 +110,7 @@ export async function runGuardrails(
       guardrail: 'pooled',
       prices: first.priceViolations,
       promises: first.promiseViolations,
+      stays: first.stayViolations,
       identity: first.identityViolation,
       tooLong: first.tooLong,
     },
@@ -128,22 +137,34 @@ export async function runGuardrails(
     return finalize(second, deps);
   }
 
-  // Two strikes. Money/promise failures defer (§6.5 — and defer WINS over an
-  // identity substitution: the escalation carries the question to a human).
-  if (second.priceViolations.length > 0 || second.promiseViolations.length > 0) {
+  // Two strikes. Money/promise/stay failures defer (§6.5 — and defer WINS over
+  // an identity substitution: the escalation carries the question to a human).
+  if (
+    second.priceViolations.length > 0 ||
+    second.promiseViolations.length > 0 ||
+    second.stayViolations.length > 0
+  ) {
     deps.log.info(
-      { guardrail: 'pooled', prices: second.priceViolations, promises: second.promiseViolations },
+      {
+        guardrail: 'pooled',
+        prices: second.priceViolations,
+        promises: second.promiseViolations,
+        stays: second.stayViolations,
+      },
       'guardrails failed twice — deferring + escalating',
     );
     await recordViolations(deps, second, 'deferred');
     const priceFailed = second.priceViolations.length > 0;
+    const stayFailed = second.stayViolations.length > 0;
     return {
       action: 'defer',
-      // A price failure defers with the rate line; a promise-only failure with
-      // the team-referral line (both escalate, so both lines are true).
+      // A price failure defers with the rate line; a stay-affirmation or
+      // promise failure with the team-referral line (all escalate, so every
+      // line is true). A twice-asserted booking that does not exist is exactly
+      // the case a person must see.
       text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
       toolRuns: second.toolRuns,
-      escalate: priceFailed ? 'price' : 'promise',
+      escalate: priceFailed ? 'price' : stayFailed ? 'booking_undescribable' : 'promise',
     };
   }
   // Identity still missing → substitute the approved line whole (§6.5 #5).
@@ -175,6 +196,8 @@ interface Evaluation {
   toolRuns: ToolRun[];
   priceViolations: number[];
   promiseViolations: string[];
+  /** CH-11: booking-state assertions made for a guest with no live stay. */
+  stayViolations: string[];
   referral: boolean;
   identityViolation: boolean;
   tooLong: boolean;
@@ -201,14 +224,23 @@ async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evalu
     systemEvidence: deps.systemEvidence ?? new Set(),
     escalationPlanned: deps.mustEscalate === true,
   });
+  // CH-11: an assertion gate, not an evidence licence — see stayGuards.ts.
+  // Defaults to "has a live stay" so every pre-CH-11 caller keeps its behaviour.
+  const stays = scanStayAffirmations(nego.text, deps.hasLiveStay ?? true);
   const identityViolation = deps.botQuestion === true && !containsIdentityLine(nego.text);
   const tooLong = nego.text.length > MAX_REPLY_CHARS || bulletLineCount(nego.text) > 3;
   return {
-    ok: price.ok && promises.violations.length === 0 && !identityViolation && !tooLong,
+    ok:
+      price.ok &&
+      promises.violations.length === 0 &&
+      stays.violations.length === 0 &&
+      !identityViolation &&
+      !tooLong,
     text: nego.text,
     toolRuns: turn.toolRuns,
     priceViolations: price.unbacked,
     promiseViolations: promises.violations,
+    stayViolations: stays.violations,
     referral: promises.referral,
     identityViolation,
     tooLong,
@@ -303,6 +335,15 @@ async function recordViolations(
       action,
       draft: evaluation.text,
       details: { violations: evaluation.promiseViolations },
+    });
+  }
+  if (evaluation.stayViolations.length > 0) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'stay_integrity',
+      action,
+      draft: evaluation.text,
+      details: { violations: evaluation.stayViolations },
     });
   }
   if (evaluation.identityViolation) {

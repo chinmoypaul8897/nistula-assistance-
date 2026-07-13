@@ -13,6 +13,7 @@
  */
 import type { Conversation, Message } from '../db/repos.js';
 import { guestTextOf, locationTextOf, sanitiseTail } from './inbound.js';
+import type { Stage } from './stayView.js';
 import type { PolicyRule } from './telemetry.js';
 
 // §3.3: per phone, 20 messages / 5 min — module constants, not env (CH-03 D4
@@ -89,9 +90,21 @@ const HUMAN_REQUEST_RES = [
   /\brepresentatives?\b/i,
 ];
 
-// Negative-sentiment word list (§6.7 complaint heuristics). Stay-context is a
-// stubbed `unknown` — sentiment alone triggers, per CH-07 step 1's letter.
-// TODO(CH-11): AND this with the real stay-context flag once stays are linked.
+// Negative-sentiment word list (§6.7 complaint heuristics).
+//
+// CH-11 DELIBERATE DEVIATION — do NOT "finish" this by AND-ing the stay flag.
+// §6.7 words the heuristic as "negative + stay context" and the CH-07 TODO that
+// stood here told the next session to AND them. Read literally that makes an
+// existing safety guard NARROWER: a guest is only `inhouse` if their booking is
+// LINKED, and linking is phone-only — an OTA-masked number (Airbnb, Booking.com
+// — the bulk of this property's sources) can never link, and neither can a guest
+// messaging from a second handset. So an angry in-house guest whose booking we
+// cannot see would STOP being escalated, and CH-11 would make the single
+// highest-stakes conversation we handle worse than it is today.
+//
+// The rule that ships instead: stay context may only ever ADD urgency, never
+// remove it. Sentiment alone still escalates; `stayContext` rides the directive
+// so the ops card and block [6] can say WHERE the guest is. (Paul-approved.)
 const COMPLAINT_RE =
   /\b(?:dirty|filthy|broken|not\s+work\w*|doesn'?t\s+work|stopped\s+working|worst|terrible|awful|horrible|disappoint\w*|unacceptable|angry|furious|refund|complain\w*|pathetic|rude|smell(?:y|s|ing)?|stink\w*|leak(?:s|y|ing)?|no\s+(?:water|power|electricity|wifi)|ac\s+(?:is\s+)?(?:not|isn'?t|nahi)|disgusting|unhygienic|cockroach\w*|bahut\s+kharab|kharab)\b/i;
 
@@ -130,6 +143,18 @@ export interface PolicyInput {
   conversation: Pick<Conversation, 'status' | 'humanActiveUntil'>;
   now: Date;
   overLimit: boolean;
+  /** CH-11 stay context, derived ONCE in the worker and passed in — policy.ts
+   * stays a pure leaf that never touches the DB. Only ever RAISES urgency
+   * (see the COMPLAINT_RE note); defaults keep every existing caller valid. */
+  stayContext?: StayContext;
+}
+
+/** What the worker knows about this guest's bookings when policy runs. */
+export interface StayContext {
+  stage: Stage;
+  /** A booking exists that we may not describe (cancelled-but-live, multi-room)
+   * — a human must look at it. Kept apart from the stage on purpose. */
+  needsHuman: boolean;
 }
 
 /** The §6.7 pre-model pass. Pure — feed the rate window before calling. */
@@ -192,7 +217,16 @@ export type EscalationReason =
   | 'promise'
   // The model referred the guest to the team ("let me bring them in") with no
   // escalation planned — the fix is to MAKE the referral true (guardrail 2).
-  | 'referral';
+  | 'referral'
+  // CH-11: a reference claim was REFUSED (§6.4 "any partial mismatch → escalate
+  // for human approval"). Someone quoting a reservation number that is not
+  // theirs is precisely the event a human must see — it may be an honest typo,
+  // and it may be an identity probe.
+  | 'booking_reference'
+  // CH-11: the guest holds a booking the AI may not describe (a live
+  // cancellation, a multi-room reservation) — the stay view fails closed and a
+  // person picks it up.
+  | 'booking_undescribable';
 
 /** Phrasebook KEY, not text — policy.ts stays a leaf that never imports
  * prompt.ts (CH-06 cycle lesson); the worker resolves key → PHRASEBOOK. */

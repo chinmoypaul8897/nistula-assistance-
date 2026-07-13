@@ -27,7 +27,7 @@ const FULL = {
 };
 
 describe('buildGuestBlock (full profile)', () => {
-  it('renders every section: marker, framing, name, prefs, facts, stubs', () => {
+  it('renders every section: marker, framing, name, prefs, facts, stays, stub', () => {
     const block = buildGuestBlock(FULL) ?? '';
     const lines = block.split('\n');
     expect(lines[0]).toBe('[GUEST CONTEXT]');
@@ -36,8 +36,10 @@ describe('buildGuestBlock (full profile)', () => {
     expect(block).toContain('Address style: formal');
     expect(block).toContain('Language: leans Hinglish');
     expect(block).toContain('Known facts (saved from earlier conversations):');
-    // Stubs — replaced by CH-11 (stays) and CH-13 (tasks).
-    expect(block).toContain('Stays: no linked stays yet.');
+    // CH-11 replaced the stays stub: a guest with no linked booking is now told
+    // so explicitly, because block [4] must be able to say "I can't see one".
+    expect(block).toContain('Stays: no booking is linked to this number.');
+    // Still stubbed — CH-13 (tasks).
     expect(block).toContain('Open tasks: not tracked yet.');
   });
 

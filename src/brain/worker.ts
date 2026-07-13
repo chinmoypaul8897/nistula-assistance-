@@ -14,6 +14,7 @@
  * CH-13's task events reuse).
  */
 import { updateGuestPrefs } from '../db/guestMemory.js';
+import { getGuestStays } from '../db/stays.js';
 import {
   claimConversationTurn,
   findStaleConversations,
@@ -23,6 +24,7 @@ import {
   resolveMessageCursor,
 } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
+import { istCalendarDay } from '../lib/time.js';
 import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
@@ -32,6 +34,7 @@ import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
 import { decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
 import { detectLang, detectRegister } from './prefDetect.js';
 import { PHRASEBOOK } from './prompt.js';
+import { deriveStage, needsHuman, projectAll } from './stayView.js';
 import { createHitRecorder } from './telemetry.js';
 import { runClaudeTurn, type TurnDeps, type TurnLogger } from './turn.js';
 
@@ -106,11 +109,22 @@ export async function processConversation(
     msgs.map((m) => ({ id: m.id, createdAt: m.createdAt })),
     ctx.dbNow,
   );
+  // CH-11 booking awareness. ONE pre-claim read, projected ONCE, fed to BOTH
+  // consumers: decidePolicy runs BEFORE the context builder, so the stage cannot
+  // travel the other way — and two reads could disagree inside one turn.
+  // Pre-claim (CH-03 D2), so a throw here is retry-safe.
+  const stays = projectAll(await getGuestStays(deps.db, ctx.conversation.guestId));
+  const stayContext = {
+    stage: deriveStage(stays, istCalendarDay(ctx.dbNow)),
+    needsHuman: needsHuman(stays),
+  };
+
   const directive = decidePolicy({
     messages: msgs,
     conversation: ctx.conversation,
     now: ctx.dbNow,
     overLimit: deps.rateWindow.isOverLimit(ctx.guestPhone, ctx.dbNow),
+    stayContext,
   });
   const plan = settlePlanFor(directive, ctx.conversation.status);
 
@@ -128,6 +142,7 @@ export async function processConversation(
         mustEscalate: plan.mustEscalate,
         unviewableMedia: directive.flags.hasMedia,
         botQuestion: directive.flags.botQuestion,
+        stays,
         // §6.5 #2 "since the guest's previous message" = the cursor row's
         // created_at::text — µs-exact into the SQL evidence query (CH-08).
         // A DANGLING pointer fails CLOSED (audit): null would license C3 from

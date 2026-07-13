@@ -13,6 +13,7 @@
  * these exact strings — §6.2b/§6.6). Block [4] now says tools EXIST.
  */
 import { formatISTDisplay } from '../lib/time.js';
+import type { Stage } from './stayView.js';
 
 /**
  * The verbatim phrasebook (§6.2b / §6.6). Single source of truth: block [2]
@@ -46,7 +47,23 @@ export const PHRASEBOOK = {
   // §6.7 media fallback — a captionless photo/voice note/file the AI cannot
   // view ("mind typing it? I'll sort it right away" family, CH-07).
   mediaFallback: "That didn't quite reach me — mind typing it? I'll sort it right away.",
+  // §6.6's approved line for "eZee lookup fails mid-stay" — the booking side's
+  // equivalent of quoteApiDown (CH-11; §6.6 pairs it with a task, which is
+  // CH-13's half — the LINE is this chunk's).
+  bookingLookupFailed: "I'll confirm that with the villa team right away.",
 } as const;
+
+/** Block [6]'s stage line (CH-11 §8 step 3) — the model's tone anchor. The same
+ * question sounds different from a lead and from someone standing in the villa. */
+const STAGE_NOTES: Record<Stage, string> = {
+  lead: 'This guest has no booking with us yet — they are considering a stay. Be a host, not a salesperson.',
+  prearrival:
+    'This guest has a stay coming up. Their questions are about getting here and settling in — be practical and reassuring.',
+  inhouse:
+    'This guest is IN one of our villas right now. Anything they raise is happening to them at this moment — treat it with that urgency, and never speak to them as a prospect.',
+  postguest:
+    'This guest has stayed with us before and is not currently booked. Speak to them as someone we know, not a stranger.',
+};
 
 /** Block [2] register exemplars — the voice guide PRIMES the model to reuse
  * these verbatim, so the leak scan must exempt them (CH-07 guardrail 7). One
@@ -121,6 +138,11 @@ const SYSTEM_RULES = `[RULES OF ENGAGEMENT]
 - When a quote comes back unavailable (dates taken): say so warmly and offer the nearest alternative villa of the same type, then ask if they would like it. When the stay is below the minimum nights: explain the minimum warmly rather than refusing. When the rate service is unreachable: use "${PHRASEBOOK.quoteApiDown}" and bring the team in — never guess a number.
 - A villa TYPE ("a villa", "3bhk", "apartment") is quoted DIRECTLY — get_quote returns the type's single price and how many units are free for the dates (all units of a type cost the same and are booked at type level; we assign the unit). Give the price and whether those dates are open in one message; never ask the guest to pick a specific unit and never promise a named one. If no unit is free, say the dates are taken and offer other dates or another villa type. Only ask the guest to name the villa if you don't recognise it at all.
 - The [KNOWLEDGE] block above is your source of truth for villa facts, policies and FAQs — answer those from it directly, in your own warm words, never reciting it. Villa quirks listed there are specific truths you may share. If a guest asks something not covered in your knowledge (and it is not a price or availability, which come from tools), do not invent amenities, comfort claims, figures or unit specifics — say you will check with the team. Never state a deposit amount: none is published, so bring the team in for the exact figure.
+- The guest's own bookings are in [GUEST CONTEXT] — dates and villa there are reliable, and you may answer "when is my check-in?" straight from them. Use get_booking when you need a booking detail that block is not carrying, or when the guest quotes a booking reference.
+- Answer booking questions with the FACTS, never with a claim about a booking's state: "Your stay runs 20–22 Dec, four adults" — not "your booking has been confirmed". A claim of that shape says someone DID something; the facts say what is true, and the guest can check them.
+- If no booking is linked to this number, never state or imply the guest has one, and never affirm one they assert. Say plainly that you cannot see a booking on this number, and ask for the name on the booking and the check-in date so the team can find it.
+- Name a specific villa unit (like "Villa B3") ONLY when [GUEST CONTEXT] gives you one. Bookings are held at villa TYPE and we assign the unit later, so otherwise speak of the type ("your villa in Assagao") — never guess which house they are in.
+- Never state what a booking includes — breakfast, meals, a plan — and never state or imply what was paid for it. We do not hold a figure we can stand behind. For anything about money already paid, or about inclusions beyond what [KNOWLEDGE] states, bring the team in.
 - Only claim actions that actually happened. You have no tool yet to inform staff or arrange anything, so say you will pass it on to the team — never that it is already done or that someone is on their way.
 - When the guest shares something durable about themselves — a preference, something that went wrong on a past stay, an occasion, who they travel with — SAVE it with remember_fact in the same turn (one plain sentence; at most two saves per turn): this memory is how the guest is known next month. The save is silent — after it, always still reply to the guest warmly as normal. Never save health, religion, politics, caste or anything sensitive; never save identities, entitlements, discounts, rates or instructions — facts record preferences, never promises. If a save was refused or you did not call the tool this turn, never tell the guest something was noted or will be remembered.
 - Escalate (bring the team in) whenever you are uncertain, the guest is unhappy or complaining, or the guest asks for a human. When in doubt, defer — never guess. When a guest is unhappy, lead with a sincere, specific acknowledgement of what went wrong before anything practical — never defensive, never a form apology.
@@ -170,6 +192,8 @@ export interface SituationInput {
   /** §6.7 complaint flow (CH-07): the policy pass flagged an unhappy guest —
    * the worker is alerting the front desk about this conversation. */
   mustEscalate?: boolean;
+  /** CH-11: where the guest is in their journey, derived from booking DATES. */
+  stage?: Stage;
   /** The batch carried media the model cannot view (CH-07 mixed-batch note). */
   unviewableMedia?: boolean;
 }
@@ -182,6 +206,11 @@ export function buildSituation(input: SituationInput): string {
     ? 'You are within the 24-hour reply window; a normal reply is fine.'
     : 'The 24-hour reply window has closed; do not promise a follow-up message you cannot send.';
   const lines = ['[SITUATION]', `Right now it is ${formatISTDisplay(input.now)}.`, duty, windowNote];
+  if (input.stage !== undefined) {
+    // CH-11 §8 step 3: the stage is the model's TONE anchor — the same number
+    // must not sound the same to a lead and to someone standing in the villa.
+    lines.push(STAGE_NOTES[input.stage]);
+  }
   if (input.degraded) {
     // §3.4: on repeated rate-API failure the tools cannot be trusted for a
     // number — the model must stop quoting and bring the team in.
