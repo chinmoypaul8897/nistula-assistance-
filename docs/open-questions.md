@@ -138,6 +138,20 @@
 **Status:** ⬜ OPEN
 **Answer:**
 
+### OQ-15 — When does eZee assign the physical unit, and may we name it before arrival?
+**Question:** A booking is held at villa TYPE ("Nistula Villa") and eZee assigns the actual house (B3, C1…) at some later point. CH-11 renders the type and refuses to name a unit until `physical_room_label` is set (§5.4). Two things we do not know: (a) at what moment does the front desk actually assign the unit — at booking, the night before, at check-in? (b) once assigned, may the AI tell the guest which villa they are in BEFORE they arrive, or is it liable to change?
+**Why / blocks:** Product-picture scenarios 3 and 5 require the AI to say "Villa B3" to an in-house guest, and CH-13's staff task card is unactionable without a unit ("send someone to a Nistula Villa" names four different houses). CH-11 built the plumbing (`pnpm ezee:reconcile --apply` hydrates the label from BKG-03, which is the only call that returns it); what is missing is the POLICY.
+**Owner:** Paul + front desk. **Feeds:** CH-13 task cards · CH-12 pre-arrival copy · block [4]'s unit rule.
+**Status:** ⬜ OPEN
+**Answer:**
+
+### OQ-16 — The rate-plan vocabulary (which RateplanCode means breakfast?)
+**Question:** `bookings_mirror.rateplan_id` holds an opaque eZee RateplanCode. Nothing in this repo maps it to EP (room only) or CP (with breakfast), and §5.1's quote API takes `plan=ep|cp` — so the WEBSITE codebase must already know the mapping. What is it?
+**Why / blocks:** plan §8 CH-11 step 3 asks block [5] to state the stay's "plan". CH-11 deliberately SHIPPED WITHOUT IT and forbade the AI from stating what a booking includes, because eZee's own human-readable label ("European Plan") is a trap: the model would helpfully translate it into "breakfast is included", and NO guardrail checks an inclusion claim (guardrail 1 checks rupees; guardrail 2 checks actions). Overlaps OQ-07.
+**Owner:** Paul (from the nistula-website codebase). **Feeds:** block [5] stays · "is breakfast included?" · `get_quote`'s default plan.
+**Status:** ⬜ OPEN
+**Answer:**
+
 ---
 
 ## D · Planning-chat decisions (design, not just data)

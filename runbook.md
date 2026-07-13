@@ -472,6 +472,117 @@ the eZee UI (tomorrow's date) → within ~60s the deployed service logs
 `modified` + new dates → cancel → `cancelled`. The booking stops being
 redelivered after the first ACK — that silence IS the ACK-after-commit proof.
 
+## Booking awareness (CH-11)
+
+### What runs
+
+On every guest turn the worker links the guest to any mirrored booking carrying
+their phone, reads their stays ONCE, and projects them through `stayView.ts` —
+the only door from a booking row to words. Block [5] gets the stays, block [6]
+gets a stage (`lead` / `prearrival` / `inhouse` / `postguest`), and the guardrail
+layer gets a truth flag. `get_booking` answers reference questions.
+
+### THE RULE — the mirror is a change feed, not the booking book
+
+`bookings_mirror` is filled by the poller, which drains eZee's connectivity
+QUEUE. A queue reports CHANGES. It is **not** a list of all bookings. Nothing
+guarantees it holds the property's real live bookings — anything confirmed before
+connectivity was switched on, or aged out of the queue, is simply not there.
+
+A guest whose booking is missing is treated as a **lead**: the AI will try to sell
+them the villa they are standing in. Run the reconcile to find out if that is
+happening:
+
+```bash
+pnpm ezee:reconcile                 # PRINT ONLY — writes nothing
+pnpm ezee:reconcile --apply         # hydrate the missing ones
+pnpm ezee:reconcile --from 2026-07-01 --to 2026-12-31
+```
+
+Its `MISSING` count is the answer to "is our mirror complete?". Every one of those
+is a guest the AI would not recognise. It is a **read** — it never ACKs, so it
+cannot consume the shared queue, and it is safe to run locally (the binding
+`EZEE_POLLER_ENABLED=0` rule is about the ACK, not about reading).
+
+**Every production row has NO villa label.** BKG-02 poll payloads carry no RoomID
+at all, so the mirror cannot tell B3 from C1. `--apply` fixes this by fetching
+each booking via BKG-03 FetchSingleBooking, the only call that returns a room.
+CH-13's task cards need it — "send someone to a Nistula Villa" names four houses.
+
+### What the AI may and may not say about a booking
+
+A booking is DESCRIBABLE only if all four hold: status is
+`confirmed|modified|checked_in|checked_out` · both dates present · exactly one
+room · no sibling rows sharing a reference base. Anything else is announced to
+the model without detail and escalated to a person.
+
+Never, by construction: the **amount** (our figure is one room's on a multi-room
+booking, and may be the OTA net rather than what the guest paid) · the eZee
+**guest name/email** (recycled Indian mobiles make that a leak) · the **meal
+plan** (an opaque code — see OQ-16) · a **villa unit** unless eZee assigned one.
+
+### Reading the state
+
+```sql
+-- who is linked to what
+SELECT g.phone, b.ezee_reservation_no, b.status, b.check_in, b.check_out,
+       b.physical_room_label, s.matched_by
+FROM guest_stays s
+JOIN guests g ON g.id = s.guest_id
+JOIN bookings_mirror b ON b.id = s.booking_id
+ORDER BY b.check_in DESC;
+
+-- bookings we hold but cannot describe (a person must handle these)
+SELECT ezee_reservation_no, status, check_in,
+       jsonb_array_length(COALESCE(raw->'BookingTran', '[]'::jsonb)) AS rooms
+FROM bookings_mirror
+WHERE status NOT IN ('confirmed','modified','checked_in','checked_out')
+   OR check_in IS NULL OR check_out IS NULL;
+
+-- reference-claim attempts (the identity-probe trail)
+SELECT phone, claimed_reference, outcome, created_at
+FROM reference_attempts ORDER BY created_at DESC LIMIT 20;
+```
+
+Production reads need the Postgres service's `DATABASE_PUBLIC_URL`, not the
+app's internal one.
+
+### Alerts you may see
+
+- `booking_reference` — someone quoted a reservation number that could not be
+  verified as theirs. **The AI revealed nothing.** Could be an honest typo; could
+  be an identity probe. Check `reference_attempts` for the phone and the pattern.
+  Three failures in 24h and that phone is locked out of claims.
+- `booking_undescribable` — this guest holds a booking the AI is not allowed to
+  describe (a live cancellation, a multi-room reservation). Pick up the thread.
+
+### The three-strike lockout
+
+Counted in Postgres on a **rolling 24 hours** (not a calendar day, which would
+give three guesses at 23:59 and three more at 00:01). It survives redeploys, on
+purpose: an in-memory counter would hand an attacker fresh guesses on every merge
+to main, and reservation numbers on this property are short and near-sequential.
+To clear a lockout for an honest guest:
+
+```sql
+DELETE FROM reference_attempts WHERE phone = '+91XXXXXXXXXX' AND outcome = 'refused';
+```
+
+### CH-11 live probe (pre-merge demo)
+
+Verify `/health` uptime has reset FIRST — a probe against the old build proves
+nothing (the CH-07 lesson).
+
+1. `pnpm ezee:reconcile` — read the MISSING count out loud. That number is the
+   headline finding of this chunk.
+2. From the allowlisted phone, with a booking mirrored on that number: **"when is
+   my check-in?"** → the correct date, the villa TYPE (not a unit), no invented ₹.
+3. **"is my booking confirmed?"** → the facts ("your stay runs …"), not the word.
+4. A **stranger** quoting that reference → refused, nothing revealed, and a
+   `booking_reference` alert in the logs. NOTE: the test number can only send to
+   allowlisted recipients, so either add a second number to the Meta app's
+   allow-list, or assert this leg in the DB/logs rather than by delivery.
+
 ## Sections to come
 
 - Template approval pack for the real number — CH-12
