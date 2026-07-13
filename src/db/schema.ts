@@ -8,12 +8,14 @@ import {
   boolean,
   date,
   index,
+  integer,
   jsonb,
   numeric,
   pgEnum,
   pgTable,
   text,
   timestamp,
+  unique,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -73,6 +75,26 @@ export const guestFactKindEnum = pgEnum('guest_fact_kind', [
   'past_issue',
   'context',
   'celebration',
+]);
+// §4 bookings_mirror status vocabulary, exactly as listed. 'modified' is an
+// event verb stored as a state — a Modify payload flips a live booking to it;
+// CurrentStatus (when present) restores the real state. CH-11's "active stay"
+// logic must treat confirmed|modified|checked_in as live.
+export const bookingStatusEnum = pgEnum('booking_status', [
+  'confirmed',
+  'modified',
+  'cancelled',
+  'no_show',
+  'checked_in',
+  'checked_out',
+  'unknown',
+]);
+// Named guest_stay_matched_by (not a bare matched_by) — pg enum types share
+// one namespace and a generic name would collide with a later table's.
+export const guestStayMatchedByEnum = pgEnum('guest_stay_matched_by', [
+  'phone',
+  'reference_in_chat',
+  'manual',
 ]);
 
 // §4 preamble: every table gets uuid pk + created_at/updated_at timestamptz.
@@ -171,6 +193,78 @@ export const rawEvents = pgTable('raw_events', {
   error: text('error'),
   ...timestamps,
 });
+
+/**
+ * Everything eZee knows, refreshed by the 60s poller (§4, CH-10). Typed
+ * columns are TOLERANT — eZee omits/empties fields freely and the poller must
+ * never crash (§5.2), and cancel tombstones carry only a reservation number —
+ * so only the key, status, raw and synced_at are NOT NULL (recorded §4
+ * clarification). raw holds the reservation payload with CC/identity fields
+ * stripped at the client boundary: mirror rows are reservation-keyed and sit
+ * OUTSIDE CH-18's DELETE_GUEST path, so data minimisation is the only control.
+ */
+export const bookingsMirror = pgTable(
+  'bookings_mirror',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Reservation-level UniqueID verbatim — may be alphanumeric ("B4525"). */
+    ezeeReservationNo: text('ezee_reservation_no').notNull().unique(),
+    /** First BookingTran's TransactionId; multi-tran → ops note, raw has all. */
+    ezeeBookingTranId: text('ezee_booking_tran_id'),
+    guestName: text('guest_name'),
+    /** E.164 via lib/phone or null — OTA numbers can be masked (§4). */
+    guestPhone: text('guest_phone'),
+    guestEmail: text('guest_email'),
+    // eZee INT(20) ids are 19-digit strings that overflow JS numbers — text.
+    roomTypeId: text('room_type_id'),
+    roomTypeName: text('room_type_name'),
+    physicalRoomLabel: text('physical_room_label'),
+    rateplanId: text('rateplan_id'),
+    // 'yyyy-mm-dd' strings end to end (mode 'string'): a Date round-trip can
+    // shift the IST calendar day — never new Date() an eZee date.
+    checkIn: date('check_in', { mode: 'string' }),
+    checkOut: date('check_out', { mode: 'string' }),
+    adults: integer('adults'),
+    children: integer('children'),
+    status: bookingStatusEnum('status').notNull(),
+    source: text('source'),
+    // numeric WITHOUT precision preserves eZee's own scale ('976.00' round-
+    // trips untouched; (19,4) would rewrite it '976.0000'). drizzle maps
+    // numeric to string — the amount stays verbatim, never computed (§3.4).
+    amount: numeric('amount'),
+    currency: text('currency'),
+    raw: jsonb('raw').notNull(),
+    syncedAt: timestamp('synced_at', { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    // §4 index list: guest linking walks by phone, lifecycle by check-in.
+    index('bookings_mirror_guest_phone_idx').on(table.guestPhone),
+    index('bookings_mirror_check_in_idx').on(table.checkIn),
+  ],
+);
+
+/** Link table guest↔booking (§4, CH-10) — phone match now; reference_in_chat
+ * and manual arrive with CH-11/admin. Real relations, so real FKs. */
+export const guestStays = pgTable(
+  'guest_stays',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    guestId: uuid('guest_id')
+      .notNull()
+      .references(() => guests.id),
+    bookingId: uuid('booking_id')
+      .notNull()
+      .references(() => bookingsMirror.id),
+    matchedBy: guestStayMatchedByEnum('matched_by').notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    // Idempotent re-poll linking: the second phone-match insert is a no-op
+    // (§4 addition, recorded in progress.md — the plan lists no unique here).
+    unique('guest_stays_guest_booking_unique').on(table.guestId, table.bookingId),
+  ],
+);
 
 /** Long-term memory, structured (§4, CH-09) — one durable service-relevant
  * fact per row, saved sparingly via remember_fact. Content is screened at
