@@ -82,14 +82,30 @@ export interface ToolBookingContext {
    * (and one round may carry parallel calls), so without this an honest typo
    * would burn two strikes and the model could walk a range of reservation
    * numbers inside one turn. Once refused, every later call in either loop
-   * returns the same frozen value with no DB read at all. */
+   * returns the same frozen value with no DB read at all.
+   *
+   * The DB WRITES are deferred to the worker's POST-CLAIM path (pre-push audit:
+   * a pre-claim strike violates CH-03 D2 — a converse() failure later in the
+   * turn would pg-boss-retry the whole loop and double-charge an honest guest
+   * toward the lockout). The tool sets these SIGNALS; the worker records them
+   * once, on the winning claim only. */
   claim: {
     /** A claim was already refused this turn — every later one is free and mute. */
     refused: boolean;
     /** A distinct reference was already claimed this turn (cap: one). */
     attempted: string | null;
-    /** Set when a refusal must reach a human; turn.ts carries it out. */
-    escalate: boolean;
+    /** How a refusal must reach a human, or null. `booking_reference` = someone
+     * quoted a reference that could not be verified as theirs (a probe or a
+     * typo); `booking_undescribable` = a VERIFIED owner whose booking we may not
+     * describe (cancelled/multi-room). The two must NOT collapse into one — an
+     * owner asking about their own cancelled booking is not an identity probe. */
+    escalateReason: 'booking_reference' | 'booking_undescribable' | null;
+    /** The reference to record a `refused` STRIKE for (counts toward lockout).
+     * Null on a verified/owner path — those never strike. Worker writes it. */
+    strikeReference: string | null;
+    /** A reference we verified+linked this turn — the `linked` audit row the
+     * worker writes post-claim. */
+    linkedReference: string | null;
   };
 }
 

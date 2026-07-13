@@ -86,38 +86,105 @@ const MONTHS: Record<string, number> = {
   jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
 };
 
-/**
- * Every date the guest typed, as {day, month, year?}. Day-first only — "05/08"
- * is 5 August, never 8 May. Accepting both orders would let ONE typed date match
- * TWO stored dates, which halves the guess space of the thing we are protecting.
- */
-export function extractClaimDates(text: string): Array<{ day: number; month: number; year?: number }> {
-  const found: Array<{ day: number; month: number; year?: number }> = [];
-  const t = text.toLowerCase();
+type ClaimDate = { day: number; month: number; year?: number };
 
-  for (const m of t.matchAll(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g)) {
-    found.push({ year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) });
-  }
-  // 26/08/2026 · 26-8-26 · 26.08.2026 — day first, always.
-  for (const m of t.matchAll(/\b(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b/g)) {
+/** Match the whole text with `re`, collect via `emit`, and BLANK the matched
+ * span ONLY when `emit` actually consumed a date (returned true) — a match whose
+ * "month" word is not a real month ("arriving 26") must be LEFT INTACT, or it
+ * would eat the "26" that a following numeric date needs. WHY blank at all: an
+ * ISO "2026-06-08" would otherwise also match the numeric "06-08" pattern as a
+ * SECOND {6,8} date — a phantom that pushes an honest two-date message over the
+ * dictionary-attack cap and refuses it (pre-push audit). */
+function consume(text: string, re: RegExp, emit: (m: RegExpExecArray) => boolean): string {
+  return text.replace(re, (...args) => {
+    const full = String(args[0]);
+    const consumed = emit(args.slice(0, -2) as unknown as RegExpExecArray);
+    return consumed ? ' '.repeat(full.length) : full;
+  });
+}
+
+const RANGE_SEP = String.raw`\s*(?:-|–|—|to|through|till|until)\s*`;
+
+/**
+ * Every date the guest typed, as {day, month, year?}. Day-first only for numeric
+ * forms — "05/08" is 5 August, never 8 May (accepting both orders would let ONE
+ * typed date match TWO stored dates). Day RANGES ("26-28 August", "26 to 28
+ * Aug") emit BOTH endpoints against the shared month, so an honest guest stating
+ * their stay as a range verifies (pre-push audit DEFECT).
+ */
+export function extractClaimDates(text: string): ClaimDate[] {
+  const found: ClaimDate[] = [];
+  const push = (d: ClaimDate): void => {
+    found.push(d);
+  };
+  let t = text.toLowerCase();
+
+  // ISO first (and masked), so its month/day never re-enters as a numeric date.
+  t = consume(t, /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g, (m) => {
+    push({ year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) });
+    return true;
+  });
+  // Day range + month name: "26-28 August 2026", "26 to 28 Aug".
+  t = consume(
+    t,
+    new RegExp(
+      String.raw`\b(\d{1,2})(?:st|nd|rd|th)?${RANGE_SEP}(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?(?:\s+(\d{2,4}))?\b`,
+      'gi',
+    ),
+    (m) => {
+      const month = monthOf(m[3]);
+      if (month === undefined) return false;
+      const year = m[4] === undefined ? undefined : normaliseYear(Number(m[4]));
+      push({ day: Number(m[1]), month, ...(year === undefined ? {} : { year }) });
+      push({ day: Number(m[2]), month, ...(year === undefined ? {} : { year }) });
+      return true;
+    },
+  );
+  // Month name + day range: "August 26-28".
+  t = consume(
+    t,
+    new RegExp(
+      String.raw`\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?${RANGE_SEP}(\d{1,2})(?:st|nd|rd|th)?\b`,
+      'gi',
+    ),
+    (m) => {
+      const month = monthOf(m[1]);
+      if (month === undefined) return false;
+      push({ day: Number(m[2]), month });
+      push({ day: Number(m[3]), month });
+      return true;
+    },
+  );
+  // Single "26 Aug", "26th August 2026".
+  t = consume(t, /\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?(?:\s+(\d{2,4}))?\b/gi, (m) => {
+    const month = monthOf(m[2]);
+    if (month === undefined) return false;
     const year = m[3] === undefined ? undefined : normaliseYear(Number(m[3]));
-    found.push({ day: Number(m[1]), month: Number(m[2]), ...(year === undefined ? {} : { year }) });
-  }
-  // "26 Aug", "26th August 2026"
-  for (const m of t.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?(?:\s+(\d{2,4}))?\b/g)) {
-    const month = MONTHS[(m[2] ?? '').slice(0, 4)] ?? MONTHS[(m[2] ?? '').slice(0, 3)];
-    if (month === undefined) continue;
+    push({ day: Number(m[1]), month, ...(year === undefined ? {} : { year }) });
+    return true;
+  });
+  // Single "Aug 26", "August 26th".
+  t = consume(t, /\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{2,4}))?\b/gi, (m) => {
+    const month = monthOf(m[1]);
+    if (month === undefined) return false;
     const year = m[3] === undefined ? undefined : normaliseYear(Number(m[3]));
-    found.push({ day: Number(m[1]), month, ...(year === undefined ? {} : { year }) });
-  }
-  // "Aug 26", "August 26th"
-  for (const m of t.matchAll(/\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{2,4}))?\b/g)) {
-    const month = MONTHS[(m[1] ?? '').slice(0, 4)] ?? MONTHS[(m[1] ?? '').slice(0, 3)];
-    if (month === undefined) continue;
+    push({ day: Number(m[2]), month, ...(year === undefined ? {} : { year }) });
+    return true;
+  });
+  // Numeric "26/08/2026", "26-8-26" — day first, always. LAST, so month-name and
+  // ISO forms have already been consumed.
+  consume(t, /\b(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b/g, (m) => {
     const year = m[3] === undefined ? undefined : normaliseYear(Number(m[3]));
-    found.push({ day: Number(m[2]), month, ...(year === undefined ? {} : { year }) });
-  }
+    push({ day: Number(m[1]), month: Number(m[2]), ...(year === undefined ? {} : { year }) });
+    return true;
+  });
+
   return found.filter((d) => d.day >= 1 && d.day <= 31 && d.month >= 1 && d.month <= 12);
+}
+
+function monthOf(name: string | undefined): number | undefined {
+  const n = (name ?? '').toLowerCase();
+  return MONTHS[n.slice(0, 4)] ?? MONTHS[n.slice(0, 3)];
 }
 
 function normaliseYear(year: number): number {

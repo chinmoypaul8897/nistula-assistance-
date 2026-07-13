@@ -226,7 +226,11 @@ export type EscalationReason =
   // CH-11: the guest holds a booking the AI may not describe (a live
   // cancellation, a multi-room reservation) — the stay view fails closed and a
   // person picks it up.
-  | 'booking_undescribable';
+  | 'booking_undescribable'
+  // CH-11: the AI twice asserted a booking for a guest who holds NONE. Either
+  // the model is confused, or — the D1 gap — the guest has a real booking our
+  // mirror never captured. A person should check, not the AI insist.
+  | 'booking_overclaim';
 
 /** Phrasebook KEY, not text — policy.ts stays a leaf that never imports
  * prompt.ts (CH-06 cycle lesson); the worker resolves key → PHRASEBOOK. */

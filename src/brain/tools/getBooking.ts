@@ -27,7 +27,6 @@ import {
   getMirrorForClaim,
   isStayLinked,
   linkStayByReference,
-  recordReferenceAttempt,
   REFERENCE_ATTEMPT_LIMIT,
 } from '../../db/stays.js';
 import { summarizeError } from '../../lib/logger.js';
@@ -57,6 +56,27 @@ const REFUSAL: ToolResult = {
   error: 'REFUSED',
   message:
     'Booking details could not be verified. Reveal nothing: do not confirm or deny that any booking or reference exists, do not repeat any name, date, villa or reference back, and do not ask them to try again. Tell the guest a colleague is checking and will reply right here shortly.',
+};
+
+/** The MODEL invented a reference the guest never typed (or tried a second
+ * distinct one). Not a probe and not a typo — no strike, no human promise.
+ * Steers the model, never spoken verbatim. */
+const NOT_STATED: ToolResult = {
+  ok: false,
+  error: 'INVALID',
+  message:
+    'That reference did not come from the guest, so it cannot be looked up. Call get_booking with no reference to see the bookings already linked to this number, or ask the guest for the exact booking reference and the name on the booking. Do not tell the guest a colleague is following up.',
+};
+
+/** A VERIFIED owner whose booking we may NOT describe (cancelled / multi-room).
+ * Distinct from REFUSAL: this IS their booking, and a person is genuinely being
+ * brought in (the worker escalates on booking_undescribable), so the follow-up
+ * promise is true. */
+const UNDESCRIBABLE: ToolResult = {
+  ok: false,
+  error: 'REFUSED',
+  message:
+    'This is the guest’s own booking, but its details cannot be shared automatically (it may be cancelled or span several rooms). Do not state any dates, villa, amount or status. Tell the guest a colleague is looking into it and will reply right here shortly — which is true, the team is being brought in.',
 };
 
 /** What the model may see about a stay. Note what is absent: amount, currency,
@@ -109,33 +129,37 @@ export const getBookingTool: ToolDef = {
 
     try {
       // The model may not invent a reference. If the guest never typed it, this
-      // is the model being helpful — refuse, but charge the guest nothing.
+      // is the model being helpful — do NOT strike the guest and do NOT promise a
+      // human (there is no probe and no typo). Steer the model instead.
       if (!referenceWasStated(reference, booking.guestText)) {
-        ctx.log.warn?.({ tool: 'get_booking' }, 'reference not stated by the guest — refused');
+        ctx.log.warn?.({ tool: 'get_booking' }, 'reference not stated by the guest');
         booking.claim.refused = true;
-        return REFUSAL;
+        return NOT_STATED;
       }
 
-      // One distinct reference per turn. A second is the model fishing.
+      // One distinct reference per turn. A second is the model fishing — no
+      // strike, no human promise; ask the guest to confirm one reference.
       if (booking.claim.attempted !== null && booking.claim.attempted !== reference) {
         booking.claim.refused = true;
-        return REFUSAL;
+        return NOT_STATED;
       }
       booking.claim.attempted = reference;
 
       const row = await getMirrorForClaim(booking.db, reference);
 
       // Already theirs → answer, no strike. An honest guest re-stating their own
-      // reference must never be charged for it.
+      // reference must never be charged for it. If it is not describable
+      // (cancelled/multi-room) that is the OWNER's own booking — a person must
+      // tell them, but it is NOT an identity probe.
       if (row !== null && (await isStayLinked(booking.db, booking.guestId, row.id))) {
-        const view = project(row, [row]);
-        if (!view.describable) return await refuse(booking, reference);
+        const view = project(row, [row], booking.today);
+        if (!view.describable) return handOwnerToHuman(booking);
         return { ok: true, data: { stays: [payload(view)] } };
       }
 
       // Locked out? Check BEFORE reading anything into the answer.
       const failures = await countRecentFailures(booking.db, booking.guestPhone);
-      if (failures >= REFERENCE_ATTEMPT_LIMIT) return await refuse(booking, reference);
+      if (failures >= REFERENCE_ATTEMPT_LIMIT) return refuse(booking, reference);
 
       // Unknown reference and a failed claim are the SAME value. Verify anyway
       // (against an empty record it fails) so the work does not signal either.
@@ -147,28 +171,15 @@ export const getBookingTool: ToolDef = {
         },
         booking.guestText,
       );
-      if (row === null || !verdict.ok) return await refuse(booking, reference);
+      if (row === null || !verdict.ok) return refuse(booking, reference);
 
-      const view = project(row, [row]);
-      // Verified as theirs — but still not describable (cancelled, multi-room).
-      // Link it (it IS their booking) and hand the conversation to a human.
-      if (!view.describable) {
-        await linkStayByReference(booking.db, booking.guestId, row.id);
-        await recordReferenceAttempt(booking.db, {
-          phone: booking.guestPhone,
-          claimedReference: reference,
-          outcome: 'linked',
-        });
-        booking.claim.escalate = true;
-        return REFUSAL;
-      }
-
+      // Verified as theirs. Link it either way (it IS their booking).
       await linkStayByReference(booking.db, booking.guestId, row.id);
-      await recordReferenceAttempt(booking.db, {
-        phone: booking.guestPhone,
-        claimedReference: reference,
-        outcome: 'linked',
-      });
+      booking.claim.linkedReference = reference;
+      const view = project(row, [row], booking.today);
+      // …but if we may not describe it (cancelled, multi-room), a person handles
+      // it — on the benign channel, not the identity-probe one.
+      if (!view.describable) return handOwnerToHuman(booking);
       return { ok: true, data: { stays: [payload(view)] } };
     } catch (error) {
       // A DB failure must never throw into the model (registry contract) and must
@@ -179,19 +190,23 @@ export const getBookingTool: ToolDef = {
   },
 };
 
-/** Records the strike, latches the turn, and asks for a human — then returns the
- * one frozen value. Someone quoting a reservation number that is not theirs is
- * precisely the event a person must see: it may be an honest typo, and it may be
- * an identity probe. */
-async function refuse(booking: ToolBookingContext, reference: string): Promise<ToolResult> {
-  await recordReferenceAttempt(booking.db, {
-    phone: booking.guestPhone,
-    claimedReference: reference,
-    outcome: 'refused',
-  });
+/** A reference that could not be verified as theirs — a probe or a typo. Latches
+ * the turn, marks the STRIKE (the worker records it post-claim, CH-03 D2), and
+ * routes to a human on the identity channel. Returns the one frozen value. */
+function refuse(booking: ToolBookingContext, reference: string): ToolResult {
   booking.claim.refused = true;
-  booking.claim.escalate = true;
+  booking.claim.strikeReference = reference;
+  booking.claim.escalateReason = 'booking_reference';
   return REFUSAL;
+}
+
+/** A VERIFIED owner whose booking we may not describe (cancelled/multi-room). No
+ * strike — it is their booking. A person must tell them, on the BENIGN channel:
+ * an owner asking about their own cancelled booking is not an identity probe. */
+function handOwnerToHuman(booking: ToolBookingContext): ToolResult {
+  booking.claim.refused = true;
+  booking.claim.escalateReason = 'booking_undescribable';
+  return UNDESCRIBABLE;
 }
 
 export const getBookingInputSchema = toInputSchema(inputSchema);

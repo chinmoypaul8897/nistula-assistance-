@@ -52,7 +52,7 @@ function row(over: Partial<BookingMirror> = {}): BookingMirror {
   } as BookingMirror;
 }
 
-const solo = (r: BookingMirror): StayView => project(r, [r]);
+const solo = (r: BookingMirror): StayView => project(r, [r], TODAY);
 
 describe('describable — the allowlist', () => {
   it.each(DESCRIBABLE_STATUSES)('describes a %s booking with both dates', (status) => {
@@ -100,7 +100,7 @@ describe('multi-room — the mirror only holds the FIRST room', () => {
   it('refuses sibling rows sharing a reference base', () => {
     const a = row({ id: 'b0000000-0000-4000-8000-00000000000a', ezeeReservationNo: '877-1' });
     const b = row({ id: 'b0000000-0000-4000-8000-00000000000b', ezeeReservationNo: '877-2' });
-    const views = projectAll([a, b]);
+    const views = projectAll([a, b], TODAY);
     expect(views.every((v) => !v.describable)).toBe(true);
     expect(views[0]).toMatchObject({ reason: 'sibling_rows' });
   });
@@ -146,7 +146,7 @@ describe('villa naming — §5.4 never promises a unit we were not given', () =>
 
 describe('deriveStage — from DATES, never from status', () => {
   const stage = (over: Partial<BookingMirror>): string =>
-    deriveStage(projectAll([row(over)]), TODAY);
+    deriveStage(projectAll([row(over)], TODAY), TODAY);
 
   it('is lead with no stays at all', () => {
     expect(deriveStage([], TODAY)).toBe('lead');
@@ -197,17 +197,17 @@ describe('deriveStage — from DATES, never from status', () => {
   it('prefers inhouse over a coexisting future booking', () => {
     const now = row({ id: 'aaa', checkIn: '2026-07-11', checkOut: '2026-07-15' });
     const next = row({ id: 'bbb', ezeeReservationNo: '999', checkIn: '2026-09-01', checkOut: '2026-09-04' });
-    expect(deriveStage(projectAll([now, next]), TODAY)).toBe('inhouse');
+    expect(deriveStage(projectAll([now, next], TODAY), TODAY)).toBe('inhouse');
   });
 });
 
 describe('needsHuman — separate from the stage, so CH-16 cannot auto-send at a broken booking', () => {
   it('is true for a near-term booking we cannot describe (a multi-room stay)', () => {
     const r = row({ raw: { BookingTran: [{}, {}] }, checkIn: '2026-08-26' });
-    expect(needsHuman(projectAll([r]), TODAY)).toBe(true);
+    expect(needsHuman(projectAll([r], TODAY), TODAY)).toBe(true);
     // …and the stage still reads lead, which is exactly why the flag is separate:
     // CH-16 hard-wires the four stage words to its auto-send rules.
-    expect(deriveStage(projectAll([r]), TODAY)).toBe('lead');
+    expect(deriveStage(projectAll([r], TODAY), TODAY)).toBe('lead');
   });
 
   // Keyed on DATES, not on `live`. A cancellation is not "live" by status — but
@@ -215,21 +215,21 @@ describe('needsHuman — separate from the stage, so CH-16 cannot auto-send at a
   // would have missed it entirely (the worker e2e caught this).
   it('is true for a booking cancelled for next week', () => {
     const r = row({ status: 'cancelled', checkIn: '2026-07-20', checkOut: '2026-07-22' });
-    expect(needsHuman(projectAll([r]), TODAY)).toBe(true);
+    expect(needsHuman(projectAll([r], TODAY), TODAY)).toBe(true);
   });
 
   it('is false for an ancient cancellation — that guest genuinely IS a lead', () => {
     const old = row({ status: 'cancelled', checkIn: '2025-01-05', checkOut: '2025-01-07' });
-    expect(needsHuman(projectAll([old]), TODAY)).toBe(false);
+    expect(needsHuman(projectAll([old], TODAY), TODAY)).toBe(false);
   });
 
   it('is false for a dateless cancel tombstone (ancient by construction)', () => {
     const stub = row({ status: 'cancelled', checkIn: null, checkOut: null });
-    expect(needsHuman(projectAll([stub]), TODAY)).toBe(false);
+    expect(needsHuman(projectAll([stub], TODAY), TODAY)).toBe(false);
   });
 
   it('is false when every stay is describable', () => {
-    expect(needsHuman(projectAll([row()]), TODAY)).toBe(false);
+    expect(needsHuman(projectAll([row()], TODAY), TODAY)).toBe(false);
   });
 });
 
@@ -239,24 +239,24 @@ describe('selectStays — active ≥ upcoming ≥ recent past, capped', () => {
     const soon = row({ id: 'b', ezeeReservationNo: '2', checkIn: '2026-08-01', checkOut: '2026-08-03' });
     const later = row({ id: 'c', ezeeReservationNo: '3', checkIn: '2026-09-01', checkOut: '2026-09-03' });
     const past = row({ id: 'd', ezeeReservationNo: '4', status: 'checked_out', checkIn: '2026-05-01', checkOut: '2026-05-03' });
-    const picked = selectStays(projectAll([later, past, soon, active]), TODAY);
+    const picked = selectStays(projectAll([later, past, soon, active], TODAY), TODAY);
     expect(picked.map((s) => s.reservationNo)).toEqual(['1', '2', '3']);
     expect(picked).toHaveLength(STAYS_RENDER_LIMIT);
   });
 
   it('never selects an undescribable stay', () => {
     const cancelled = row({ id: 'x', status: 'cancelled' });
-    expect(selectStays(projectAll([cancelled]), TODAY)).toEqual([]);
+    expect(selectStays(projectAll([cancelled], TODAY), TODAY)).toEqual([]);
   });
 });
 
 describe('liveStays', () => {
   it('excludes a departed guest', () => {
     const past = row({ status: 'checked_out', checkIn: '2026-05-01', checkOut: '2026-05-03' });
-    expect(liveStays(projectAll([past]))).toEqual([]);
+    expect(liveStays(projectAll([past], TODAY))).toEqual([]);
   });
 
   it('includes a confirmed future stay', () => {
-    expect(liveStays(projectAll([row()]))).toHaveLength(1);
+    expect(liveStays(projectAll([row()], TODAY))).toHaveLength(1);
   });
 });

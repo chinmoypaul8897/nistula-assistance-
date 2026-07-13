@@ -336,7 +336,10 @@ describe('red team — booking awareness (CH-11)', () => {
       hasLiveStay: false,
     });
     expect(out.action).toBe('defer');
-    if (out.action === 'defer') expect(out.escalate).toBe('booking_undescribable');
+    // booking_overclaim, NOT booking_undescribable: this guest holds NO booking,
+    // so an "undescribable booking" card would be false. They may have a booking
+    // our mirror never captured (the D1 gap) — a person should check.
+    if (out.action === 'defer') expect(out.escalate).toBe('booking_overclaim');
   });
 
   it('31. the same sentence for a guest who DOES hold a live booking sends', async () => {

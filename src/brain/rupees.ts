@@ -40,8 +40,11 @@ const CLOCK_RE = /\b\d{1,2}:\d{2}\b/g; // "10:00"
 // in a sentence of its own, next to the cue (the CH-07 colon lesson, one
 // abbreviation over). Only the reference phrase is removed — any real figure
 // elsewhere in the sentence still extracts.
+// The introducer set covers the synonyms this system and eZee actually use
+// (eZee's payload calls the id a VoucherNo). Broadened past {booking,reservation,
+// reference,ref,res} on the pre-push audit's note — narrower than the concept.
 const REFERENCE_NUMBER_RE =
-  /\b(?:booking|reservation|reference|ref|res)\b\.?\s*(?:nos?\.?|number|#)?\s*#?\s*\d{3,7}\b/gi;
+  /\b(?:booking|reservation|reference|ref|res|confirmation|conf|voucher|pnr)\b\.?\s*(?:nos?\.?|number|#)?\s*#?\s*\d{3,7}\b/gi;
 
 function maskNonMoney(text: string): string {
   return text
@@ -111,7 +114,8 @@ const MONTH_NEAR =
 // awareness is the chunk that first puts these numbers into drafts.
 // PRICE_CUE already refuses bare "booking" as a CUE; this refuses the NUMBER
 // that a reference word introduces, even when another cue shares the sentence.
-const REFERENCE_BEFORE = /\b(?:booking|reservation|reference|ref|res\.?\s?no\.?|no\.?|#)\s*$/i;
+const REFERENCE_BEFORE =
+  /\b(?:booking|reservation|reference|ref|res\.?\s?no\.?|confirmation|conf|voucher|pnr|no\.?|#)\s*$/i;
 const BARE_INT_FLOOR = 200; // no villa-adjacent fee or rate sits below this
 const YEAR_MIN = 1900;
 const YEAR_MAX = 2099;

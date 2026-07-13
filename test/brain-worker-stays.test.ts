@@ -9,7 +9,7 @@
  * Phone decade 5xx is CH-11's claim in the test-number ledger.
  */
 import { randomUUID } from 'node:crypto';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -77,6 +77,29 @@ function rig(reply = 'Your stay runs 26-28 Aug.') {
     enqueue: async () => {},
   };
   return { deps, converseCalls, log };
+}
+
+/** A rig whose model calls get_booking with the guest's quoted reference (round
+ * 1), then proses (round 2) — the real tool loop, so the reference-claim path
+ * and the post-claim strike write actually run. */
+function rigWithToolLoop() {
+  const base = rig('Let me check that with the team.');
+  let round = 0;
+  const converse: ConverseFn = async () => {
+    round += 1;
+    if (round === 1) {
+      const use = { id: 'tu_1', name: 'get_booking', input: { reference: '953' } };
+      return {
+        text: '',
+        toolUses: [use],
+        stopReason: 'tool_use' as const,
+        assistantContent: [{ type: 'tool_use' as const, id: use.id, name: use.name, input: use.input }],
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      };
+    }
+    return textResult('A colleague is checking on that and will be right back to you.');
+  };
+  return { ...base, deps: { ...base.deps, converse } };
 }
 
 /** The system prompt the model actually received. */
@@ -200,5 +223,74 @@ describe('a mirrored booking reaches the model', () => {
     await processConversation(deps, conversation.id);
 
     expect(systemText(converseCalls)).toContain('IN one of our villas right now');
+  });
+
+  // Pre-push audit: no production row is ever `checked_out`, so a completed stay
+  // stays `confirmed`. `live` keyed on status would read it as upcoming; keyed on
+  // DATES it is past — block [5] must mark it so, and the stay guard stays armed.
+  it('marks a completed stay (still confirmed) as past, from its DATES', async () => {
+    await upsertMirrorRow(
+      db,
+      mirrorInput({ status: 'confirmed', checkIn: '2026-03-10', checkOut: '2026-03-14' }),
+    );
+    const { conversation } = await seedConversation(db, GUEST);
+    await seedGuestMessage(db, conversation.id, 'hello again', 60_000);
+
+    const { deps, converseCalls } = rig();
+    await processConversation(deps, conversation.id);
+
+    const prompt = systemText(converseCalls);
+    expect(prompt).toContain('(a past stay)');
+    // A returning guest with no upcoming stay is postguest, never a lead.
+    expect(prompt).toContain('stayed with us before');
+  });
+});
+
+describe('the audit fixes, end to end', () => {
+  // Block [5] tells the model "the team is being brought in" for an undescribable
+  // booking. The worker MUST make that true — deterministically, whether or not
+  // the model used a referral phrase (pre-push audit BLOCKER).
+  it('escalates deterministically when the guest holds an undescribable booking', async () => {
+    // A cancellation for next week: needsHuman, not describable.
+    const soon = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+    await upsertMirrorRow(db, mirrorInput({ status: 'cancelled', checkIn: soon, checkOut: '2099-01-01' }));
+    const { conversation } = await seedConversation(db, GUEST);
+    await seedGuestMessage(db, conversation.id, 'looking forward to my stay', 60_000);
+
+    // The model replies with NO referral phrase — the deterministic path must
+    // still page ops, or block [5]'s promise is unbacked.
+    const { deps } = rig('Lovely to hear from you.');
+    await processConversation(deps, conversation.id);
+
+    const opsRows = await db
+      .select({ body: schema.messages.body })
+      .from(schema.messages)
+      .where(sql`${schema.messages.sender} = 'system'`);
+    expect(opsRows.some((r) => (r.body ?? '').includes('ops escalated: booking_undescribable'))).toBe(
+      true,
+    );
+  });
+
+  // The reference-claim strike is written POST-CLAIM (CH-03 D2): the tool leaves
+  // a signal, the worker records it once on the winning claim.
+  it('records a refused strike exactly once, post-claim, for a bad reference', async () => {
+    await upsertMirrorRow(db, mirrorInput({ guestPhone: null, ezeeReservationNo: '953' }));
+    const { conversation } = await seedConversation(db, GUEST);
+    await seedGuestMessage(
+      db,
+      conversation.id,
+      'checking booking 953, this is Priya Sharma, 26 Aug',
+      60_000,
+    );
+
+    // The model, adversarially, calls get_booking with the quoted reference.
+    const { deps } = rigWithToolLoop();
+    await processConversation(deps, conversation.id);
+
+    const strikes = await db
+      .select({ outcome: schema.referenceAttempts.outcome })
+      .from(schema.referenceAttempts)
+      .where(eq(schema.referenceAttempts.phone, GUEST));
+    expect(strikes.filter((s) => s.outcome === 'refused')).toHaveLength(1);
   });
 });

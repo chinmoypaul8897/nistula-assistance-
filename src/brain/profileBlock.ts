@@ -128,7 +128,7 @@ function stayLines(stays: readonly DescribedStay[], needsHuman: boolean): string
             : `${sanitiseInline(stay.villa, VILLA_MAX)} (villa type — the specific unit is not assigned yet, do not name one)`;
       const party = partyOf(stay);
       lines.push(
-        `- ${villa}, ${stay.checkIn} to ${stay.checkOut}${party}${statusNote(stay.status)}`,
+        `- ${villa}, ${stay.checkIn} to ${stay.checkOut}${party}${pastNote(stay)}`,
       );
     }
   } else if (!needsHuman) {
@@ -150,10 +150,12 @@ function partyOf(stay: DescribedStay): string {
   return `, ${stay.adults} adults${children}`;
 }
 
-/** Only a DEPARTED stay is annotated — a live one needs no adjective, and
- * `modified` is an internal event verb no guest should ever hear. */
-function statusNote(status: DescribedStay['status']): string {
-  return status === 'checked_out' ? ' (a past stay)' : '';
+/** A departed stay is annotated so the model never greets a past guest as
+ * arriving. Keyed on `live` (DATE-derived), NOT status: no production row is
+ * ever `checked_out`, so a completed stay stays `confirmed` and only its dates
+ * reveal it is behind us (pre-push audit). */
+function pastNote(stay: DescribedStay): string {
+  return stay.live ? '' : ' (a past stay)';
 }
 
 /** Newest 15 overall, then grouped by kind salience, newest first in-group —

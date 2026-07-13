@@ -134,7 +134,7 @@ describe('fail-closed on a record with nothing to verify against', () => {
 
 describe('the dictionary attack — a claim is a sentence, not a corpus', () => {
   it('refuses a message stuffed with many dates', () => {
-    const dates = ['24 Aug', '25 Aug', '26 Aug', '27 Aug'].join(' ');
+    const dates = ['2026-01-01', '2026-02-02', '2026-03-03'].join(' ');
     expect(verifyClaim(RECORD, `Rahul Mehta booking 953 ${dates}`)).toMatchObject({
       ok: false,
       reason: 'text_unbounded',

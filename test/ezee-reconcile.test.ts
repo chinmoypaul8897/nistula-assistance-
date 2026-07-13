@@ -209,9 +209,9 @@ describe('the safety invariants', () => {
 });
 
 describe('argument parsing', () => {
-  it('defaults to 30 days back and 120 forward — back catches guests already in-house', () => {
+  it('defaults to 90 days back and 120 forward — back catches long in-house stays', () => {
     const a = parseArgs([], '2026-07-13');
-    expect(a).toEqual({ fromDate: '2026-06-13', toDate: '2026-11-10', apply: false });
+    expect(a).toEqual({ fromDate: '2026-04-14', toDate: '2026-11-10', apply: false });
   });
 
   it('honours explicit dates and the apply flag', () => {

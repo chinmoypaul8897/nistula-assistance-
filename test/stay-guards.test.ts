@@ -50,15 +50,56 @@ describe('a guest with NO live booking cannot be told they have one', () => {
   });
 });
 
+// The pre-push audit BLOCKER: the first lexicon was a denylist far narrower than
+// its "broad" contract. Every one of these is the register a model slips into
+// once it (wrongly) believes the guest has a stay — and every one shipped before
+// the widening. This set IS the regression guard (the "drives to Assagao" family).
+describe('the widened lexicon catches the register block [4] teaches', () => {
+  it.each([
+    'Your stay runs 20-22 Dec, four adults.',
+    'I can see your reservation here.',
+    'I have your booking in front of me.',
+    'I have found your booking.',
+    'Your villa is ready for the 20th.',
+    'Your dates are held.',
+    'The villa is yours from the 20th.',
+    'The room is held for you.',
+    'You are checking in on the 20th of December.',
+    'Your stay starts on the 20th.',
+    'Your check-in is on the 20th.',
+    'Your reservation shows the 20th to the 22nd.',
+    'We have you staying with us from the 20th.',
+    'Yes — check-in on the 20th, check-out on the 22nd. Two adults.',
+    'See you on the 20th.',
+  ])('blocks %j for a guest with no live stay', (draft) => {
+    expect(scanStayAffirmations(draft, false).violations.length).toBeGreaterThan(0);
+  });
+
+  // The over-fire guard the audit ALSO flagged: a lead's warm pre-sales close has
+  // no booking subject and must never trip (it would defer a legitimate reply).
+  it.each([
+    'We would love to welcome you in December.',
+    'Hope to see you soon.',
+    'C3 is a lovely pick — it wraps around its own pool. Here is the link.',
+    'The villa sleeps up to seven, with a private pool.',
+    'Our rate for those dates is all-inclusive.',
+  ])('allows the pre-sales line %j', (draft) => {
+    expect(scanStayAffirmations(draft, false).violations).toEqual([]);
+  });
+});
+
 describe('a guest who DOES hold a live booking may state its facts', () => {
   it.each(AFFIRMATIONS)('allows %j', (draft) => {
     expect(scanStayAffirmations(draft, true).violations).toEqual([]);
   });
 
-  it('allows the fact-framed answer block [4] actually asks for', () => {
+  it('allows the fact-framed answer block [4] asks for ONLY when the stay is live', () => {
     const draft = 'Your stay runs 20-22 Dec, four adults, in one of our Assagao villas.';
+    // With a live stay it is the correct answer.
     expect(scanStayAffirmations(draft, true).violations).toEqual([]);
-    expect(scanStayAffirmations(draft, false).violations).toEqual([]);
+    // With NO live stay it is a fabricated booking — the exact catastrophic case
+    // (a guest told their stay runs those dates when they hold none). MUST fire.
+    expect(scanStayAffirmations(draft, false).violations.length).toBeGreaterThan(0);
   });
 });
 

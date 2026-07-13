@@ -32,6 +32,8 @@ const ESCALATION_SUMMARIES: Record<EscalationReason, string> = {
     'Someone quoted a booking reference the AI could not verify as theirs — the AI revealed nothing. Could be an honest typo; could be someone probing another guest’s booking. Please check before replying.',
   booking_undescribable:
     'This guest holds a booking the AI is not allowed to describe (a live cancellation, or a multi-room reservation whose details we only partly hold). Please pick up the thread.',
+  booking_overclaim:
+    'The AI kept trying to tell this guest they have a booking, but our system shows none on this number. They may genuinely have a booking we never captured — please check eZee and reply.',
 };
 
 /**

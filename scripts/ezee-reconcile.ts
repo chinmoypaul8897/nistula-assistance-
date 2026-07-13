@@ -44,7 +44,13 @@ import { bookingsMirror } from '../src/db/schema.js';
 import type { EzeeClient } from '../src/ezee/client.js';
 import { normalizeReservation } from '../src/ezee/normalize.js';
 
-const DEFAULT_DAYS_BACK = 30;
+// 90 days back, not 30 (pre-push audit): ArrivalList filters by ARRIVAL date, so
+// to catch a guest who is IN-HOUSE today their arrival must be inside the
+// window — and a long stay can begin well over a month ago. 90d covers a
+// generous maximum stay; a guest whose arrival predates even that is a rare
+// tail the reconcile misses (recorded — a departures cross-check is the future
+// fix). Forward covers the booking horizon.
+const DEFAULT_DAYS_BACK = 90;
 const DEFAULT_DAYS_FORWARD = 120;
 
 export interface ReconcileResult {

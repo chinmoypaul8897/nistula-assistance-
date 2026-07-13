@@ -160,11 +160,13 @@ export async function runGuardrails(
       action: 'defer',
       // A price failure defers with the rate line; a stay-affirmation or
       // promise failure with the team-referral line (all escalate, so every
-      // line is true). A twice-asserted booking that does not exist is exactly
-      // the case a person must see.
+      // line is true). A twice-asserted booking for a guest who holds none is
+      // exactly the case a person must see — and NOT `booking_undescribable`
+      // (that reason's card says "holds a booking", which is false here); this
+      // guest may in fact have a booking our mirror cannot see (the D1 gap).
       text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
       toolRuns: second.toolRuns,
-      escalate: priceFailed ? 'price' : stayFailed ? 'booking_undescribable' : 'promise',
+      escalate: priceFailed ? 'price' : stayFailed ? 'booking_overclaim' : 'promise',
     };
   }
   // Identity still missing → substitute the approved line whole (§6.5 #5).
@@ -273,20 +275,28 @@ async function finalize(
   if (clamp.changed || preMutated) {
     text = clamp.text;
     // Re-run the pure checks on the mutated text — a clamp must never be able
-    // to smuggle a violation past the pool (review decision).
+    // to smuggle a violation past the pool (review decision). Stay integrity is
+    // re-run too, for symmetry (pre-push audit NIT): today applyFormatClamp only
+    // removes characters and the lexicon spans newlines, so it is belt-and-
+    // braces, but it stays armed if a future clamp gains a line-joining rewrite.
     const price = checkPriceIntegrity(text, evaluation.toolRuns, deps.whitelist ?? []);
     const promises = scanPromises(text, {
       toolRuns: evaluation.toolRuns,
       systemEvidence: deps.systemEvidence ?? new Set(),
       escalationPlanned: deps.mustEscalate === true,
     });
-    if (!price.ok || promises.violations.length > 0) {
-      const priceFailed = !price.ok;
+    const stays = scanStayAffirmations(text, deps.hasLiveStay ?? true);
+    if (!price.ok || promises.violations.length > 0 || stays.violations.length > 0) {
+      const reason: EscalationReason = !price.ok
+        ? 'price'
+        : promises.violations.length > 0
+          ? 'promise'
+          : 'booking_overclaim';
       return {
         action: 'defer',
-        text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
+        text: reason === 'price' ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
         toolRuns: evaluation.toolRuns,
-        escalate: priceFailed ? 'price' : 'promise',
+        escalate: reason,
       };
     }
     if (deps.botQuestion === true && !containsIdentityLine(text)) text = PHRASEBOOK.isBot;

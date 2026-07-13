@@ -69,12 +69,23 @@ export interface TurnResult {
   /** Non-null when the guardrails require an escalation this turn: a deferred
    * price/promise, or a team-referral that must be MADE true (CH-07). */
   escalate: EscalationReason | null;
-  /** CH-11: a refused reference claim, on its OWN channel. The worker's
+  /** CH-11: a booking-claim escalation, on its OWN channel. The worker's
    * escalation slot is single-valued (`plan.escalate ?? turn.escalate`), so a
-   * complaint riding the same turn would otherwise silently SWALLOW a security
-   * alert — and someone probing another guest's reservation number is exactly
-   * the event a person must see. Fired independently of `escalate`. */
+   * complaint riding the same turn would otherwise silently SWALLOW it. The
+   * reason distinguishes an identity probe (booking_reference) from a verified
+   * owner whose booking we may not describe (booking_undescribable). */
   securityEscalate: EscalationReason | null;
+  /** CH-11: a reference to record a `refused` STRIKE for, POST-CLAIM. Deferred
+   * out of the pre-claim tool loop so a converse() failure + pg-boss retry
+   * cannot double-charge an honest guest toward the lockout (CH-03 D2). */
+  strikeReference: string | null;
+  /** CH-11: a reference we verified+linked this turn — the `linked` audit row,
+   * also written post-claim. */
+  linkedReference: string | null;
+  /** The claimant's phone + guest id — so the worker can write the strike/link
+   * rows without re-deriving them. */
+  guestPhone: string;
+  guestId: string;
   /** What the transcript window could not show (CH-08) — the worker applies
    * the hysteresis threshold and enqueues an on-demand summarise. */
   overflow: TranscriptOverflow;
@@ -178,7 +189,13 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       // The DB clock, not new Date() — one clock per turn, so a handler can
       // never sort a stay differently from the prompt the model is reading.
       today: istCalendarDay(dbNow),
-      claim: { refused: false, attempted: null, escalate: false },
+      claim: {
+        refused: false,
+        attempted: null,
+        escalateReason: null,
+        strikeReference: null,
+        linkedReference: null,
+      },
     },
   };
 
@@ -226,10 +243,11 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       }),
       // Guardrail 2 (CH-07): evidence + the §6.7 must-escalate assertion.
       systemEvidence,
-      // A refused reference claim escalates, so the refusal's own sentence ("a
-      // colleague is checking and will reply shortly") is a TRUE C3 referral —
-      // without this the guest would get a confusing deferral instead.
-      mustEscalate: (args.mustEscalate ?? false) || toolCtx.booking?.claim.escalate === true,
+      // A refused or undescribable claim escalates, so the tool message's own
+      // "a colleague is looking into it" is a TRUE C3 referral — without this the
+      // guest would get a confusing deferral instead.
+      mustEscalate:
+        (args.mustEscalate ?? false) || toolCtx.booking?.claim.escalateReason != null,
       // CH-11 stay integrity: an ASSERTION gate, not an evidence licence — the
       // truth comes from the mirror's own status enum via stayView, in the same
       // read that filled block [5], so the gate and the prompt can never
@@ -247,7 +265,16 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
     text: outcome.text,
     toolRuns: outcome.toolRuns,
     escalate: outcome.escalate,
-    securityEscalate: toolCtx.booking?.claim.escalate === true ? 'booking_reference' : null,
+    // The reason passes THROUGH, never hard-coded: an owner asking about their
+    // own cancelled booking (booking_undescribable) must not page ops as an
+    // identity probe (booking_reference).
+    securityEscalate: toolCtx.booking?.claim.escalateReason ?? null,
+    // The worker records these post-claim (CH-03 D2: the tool must leave no DB
+    // side effect a retry could double-apply).
+    strikeReference: toolCtx.booking?.claim.strikeReference ?? null,
+    linkedReference: toolCtx.booking?.claim.linkedReference ?? null,
+    guestId: args.conversation.guestId,
+    guestPhone: args.guestPhone,
     overflow,
   };
 }

@@ -125,10 +125,26 @@ function isLiveStatus(status: BookingMirror['status']): boolean {
 /**
  * Projects ONE row, given every row linked to the same guest (needed for the
  * sibling check: a multi-room booking may also arrive as several rows whose
- * reference numbers share a base, and each of those looks complete on its own).
+ * reference numbers share a base, and each of those looks complete on its own)
+ * and today's IST day (needed for `live`).
+ *
+ * `today` is the DB-clock IST day (the SAME clock the stage and block [6] use).
+ * WHY `live` is DATE-derived, not status-derived (pre-push audit BLOCKER, the
+ * recurring failure class caught a 4th time): no production row is ever marked
+ * `checked_out` — a front-desk check-out never comes down the connectivity
+ * queue, so a completed past stay stays `confirmed`. Keyed on status alone, that
+ * stay reads `live`, so get_booking would label it "upcoming", block [5] would
+ * drop the "past stay" note, AND the stay-affirmation guard would be DISARMED
+ * for a guest whose only stay is months behind them. A booking is live only if
+ * its status is a live one AND it has not already ended.
  */
-export function project(row: BookingMirror, siblings: readonly BookingMirror[]): StayView {
-  const live = isLiveStatus(row.status);
+export function project(
+  row: BookingMirror,
+  siblings: readonly BookingMirror[],
+  today: string,
+): StayView {
+  const live =
+    isLiveStatus(row.status) && (row.checkOut === null || row.checkOut >= today);
   const base = {
     bookingId: row.id,
     reservationNo: row.ezeeReservationNo,
@@ -168,8 +184,8 @@ export function project(row: BookingMirror, siblings: readonly BookingMirror[]):
 }
 
 /** Projects a guest's whole set of linked rows. */
-export function projectAll(rows: readonly BookingMirror[]): StayView[] {
-  return rows.map((row) => project(row, rows));
+export function projectAll(rows: readonly BookingMirror[], today: string): StayView[] {
+  return rows.map((row) => project(row, rows, today));
 }
 
 /**

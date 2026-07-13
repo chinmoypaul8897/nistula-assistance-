@@ -14,7 +14,7 @@
  * CH-13's task events reuse).
  */
 import { updateGuestPrefs } from '../db/guestMemory.js';
-import { getGuestStays, linkStaysByPhone } from '../db/stays.js';
+import { getGuestStays, linkStaysByPhone, recordReferenceAttempt } from '../db/stays.js';
 import {
   claimConversationTurn,
   findStaleConversations,
@@ -125,10 +125,11 @@ export async function processConversation(
   // ONE read, projected ONCE, fed to BOTH consumers: decidePolicy runs BEFORE
   // the context builder, so the stage cannot travel the other way — and two
   // reads could disagree inside one turn.
-  const stays = projectAll(await getGuestStays(deps.db, ctx.conversation.guestId));
+  const today = istCalendarDay(ctx.dbNow);
+  const stays = projectAll(await getGuestStays(deps.db, ctx.conversation.guestId), today);
   const stayContext = {
-    stage: deriveStage(stays, istCalendarDay(ctx.dbNow)),
-    needsHuman: needsHuman(stays, istCalendarDay(ctx.dbNow)),
+    stage: deriveStage(stays, today),
+    needsHuman: needsHuman(stays, today),
   };
 
   const directive = decidePolicy({
@@ -231,12 +232,40 @@ export async function processConversation(
     // deferred a price still pings ops exactly once).
     const reason = plan.escalate ?? turn?.escalate ?? null;
     if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail);
-    // CH-11: a refused reference claim rides its OWN channel. The slot above is
+    // CH-11: a booking claim rides its OWN channel. The slot above is
     // single-valued, so a complaint in the same turn would silently swallow it —
-    // and someone probing another guest's reservation number is precisely the
-    // event a person must see. Fired even when `reason` already escalated.
+    // and a booking a human must see is precisely the event to surface. Fired
+    // even when `reason` already escalated.
     if (turn?.securityEscalate != null) {
       await escalateToOps(deps, conversationId, turn.securityEscalate, directive.guestTextTail);
+    }
+    // CH-11: block [5] tells the model "the team is being brought in" for a
+    // guest holding an undescribable booking (a live cancellation, a multi-room
+    // stay). Nothing else escalates on that path, so the worker MUST — or the
+    // model's line is an unbacked promise (pre-push audit BLOCKER). Only when the
+    // model actually ran (block [5] is shown to no one otherwise) and no other
+    // escalation already covered the turn — one ops ping, deterministic,
+    // independent of whether the model used a referral phrase.
+    if (turn !== null && stayContext.needsHuman && reason === null && turn.securityEscalate === null) {
+      await escalateToOps(deps, conversationId, 'booking_undescribable', directive.guestTextTail);
+    }
+    // CH-11: record the reference-claim STRIKE and link audit rows POST-CLAIM
+    // (CH-03 D2: the tool leaves no DB side effect a pre-claim retry could
+    // double-apply — a double strike would falsely lock out an honest guest).
+    // Winning-claim path only.
+    if (turn?.strikeReference != null) {
+      await recordReferenceAttempt(deps.db, {
+        phone: turn.guestPhone,
+        claimedReference: turn.strikeReference,
+        outcome: 'refused',
+      });
+    }
+    if (turn?.linkedReference != null) {
+      await recordReferenceAttempt(deps.db, {
+        phone: turn.guestPhone,
+        claimedReference: turn.linkedReference,
+        outcome: 'linked',
+      });
     }
     if (intentId !== null && body !== null) {
       await deps.wa.dispatchText({ messageId: intentId, toE164: ctx.guestPhone, body, conversationId });

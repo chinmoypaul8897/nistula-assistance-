@@ -15,6 +15,7 @@ import type { Db } from '../db/client.js';
 import { getAllGuestFacts, getGuestByPhone } from '../db/guestMemory.js';
 import { getGuestStays } from '../db/stays.js';
 import { projectAll } from '../brain/stayView.js';
+import { istCalendarDay } from '../lib/time.js';
 import { summarizeError } from '../lib/logger.js';
 import { normalizePhone } from '../lib/phone.js';
 import { timingSafeStringEqual } from '../wa/signature.js';
@@ -85,7 +86,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, op
         // only card and identity-document fields), so handing rows out whole
         // would newly expose them on an admin surface. The stay view is the only
         // door, here as everywhere.
-        stays: projectAll(await getGuestStays(opts.db, guest.id)),
+        stays: projectAll(await getGuestStays(opts.db, guest.id), istCalendarDay(new Date())),
       });
     } catch (error) {
       request.log.error({ err: summarizeError(error) }, 'admin guest-lookup failed');

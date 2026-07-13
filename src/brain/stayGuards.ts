@@ -43,33 +43,76 @@
  */
 
 /**
- * Subject-anchored: the thing being affirmed must be the BOOKING, not an
- * arbitrary request. "Your late checkout is confirmed" is a request-fulfilment
- * claim and stays C1's business (it needs CH-13's staff task) — this guard must
- * not silently bless it just because the guest happens to have a stay.
+ * Subject-anchored. Everything here requires a BOOKING SUBJECT — the thing
+ * asserted must be the guest's booking/stay/villa, not a request. "Your late
+ * checkout is confirmed" is request-fulfilment (it needs CH-13's staff task)
+ * and stays C1's business — this guard must never bless it, and a lead's warm
+ * pre-sales close ("we would love to welcome you in December") has no booking
+ * subject and must never trip it.
+ *
+ * The design (pre-push audit BLOCKER — the recurring "enumerated rule narrower
+ * than its contract" class, caught a 4th time): a guest with NO live booking
+ * has no true booking facts to state, so a false positive here costs nothing.
+ * The gate therefore fires on RECOGNITION of a booking subject paired with ANY
+ * of: an affirmation/possession verb, a date/period, a party count, or an
+ * "I can see/found it" awareness claim — the whole register a model slips into
+ * once it (wrongly) believes the guest has a stay. Broad on purpose, and pinned
+ * against the exact fact-framing sentences block [4] teaches (which are correct
+ * ONLY when the guest genuinely holds a live stay — see scanStayAffirmations).
  */
-const BOOKING_SUBJECT = String.raw`(?:booking|reservation|stay|check[-\s]?in|villa|room)`;
+const BOOKING_SUBJECT = String.raw`(?:booking|reservation|stay|check[-\s]?in|villa|room|dates?)`;
+// An affirmation/possession/readiness the subject can carry. Deliberately NOT
+// tense-scoped: present-state framing is exactly what guardrail 2 missed.
+const AFFIRM = String.raw`(?:is|are|has\s+been|have\s+been|'s|was|were)\s+(?:confirmed|secured|reserved|booked|all\s+set|locked\s+in|in\s+place|sorted|good\s+to\s+go|ready|held|yours|set|on|arranged)`;
+const DATE_TOKEN = String.raw`(?:\d{1,2}(?:st|nd|rd|th)?|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)`;
+// A stricter date for BARE (subjectless) patterns: an ordinal day or a month
+// name, never a plain number — so a clock time ("3 pm") is not read as a date.
+const STRICT_DATE = String.raw`(?:(?:the\s+)?\d{1,2}(?:st|nd|rd|th)|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)`;
 
 const STAY_AFFIRMATIONS: readonly RegExp[] = [
-  // "your booking is/has been confirmed | secured | all set | locked in | in place"
+  // "your booking is/has been/was confirmed | ready | held | yours | on the 20th"
+  new RegExp(String.raw`\b(?:your|the)\s+${BOOKING_SUBJECT}\b[^.!?]{0,40}?\b${AFFIRM}\b`, 'i'),
+  // "your stay runs 20-22 Dec" / "your booking is for the 20th" — a booking
+  // subject tied to a DATE or a period is an assertion the booking exists.
   new RegExp(
-    String.raw`\b(?:your|the)\s+${BOOKING_SUBJECT}\b[^.!?]{0,40}?\b(?:is|are|has\s+been|have\s+been|'s)\s+(?:confirmed|secured|reserved|booked|all\s+set|locked\s+in|in\s+place|sorted|good\s+to\s+go)\b`,
+    String.raw`\b(?:your|the)\s+${BOOKING_SUBJECT}\b[^.!?]{0,30}?\b(?:runs?|starts?|begins?|is\s+for|are\s+for|from|on)\b[^.!?]{0,15}?${DATE_TOKEN}`,
     'i',
   ),
-  // "you're all set / you are booked in / you're confirmed for …"
+  // "your stay, 20-22 Dec, four adults" — subject + a party count.
   new RegExp(
-    String.raw`\byou(?:'re|\s+are)\s+(?:all\s+set|confirmed|booked\s+in|checked\s+in)\b`,
+    String.raw`\b(?:your|the)\s+${BOOKING_SUBJECT}\b[^.!?]{0,40}?\b\d+\s+(?:adults?|guests?|people)\b`,
+    'i',
+  ),
+  // "I can see / I have / I found your booking" — an awareness claim asserts one
+  // exists at all. "I have your booking in front of me", "your reservation shows".
+  new RegExp(
+    String.raw`\b(?:i|we)\s+(?:can\s+see|see|have|found|have\s+got|'ve\s+got)\b[^.!?]{0,20}?\byour\s+${BOOKING_SUBJECT}\b`,
+    'i',
+  ),
+  new RegExp(String.raw`\byour\s+${BOOKING_SUBJECT}\s+shows\b`, 'i'),
+  // "you're all set / you are booked in / you're checking in on the 20th"
+  new RegExp(
+    String.raw`\byou(?:'re|\s+are)\s+(?:all\s+set|confirmed|booked\s+in|checked\s+in|checking\s+in|with\s+us|staying\s+with\s+us|booked\s+(?:from|for|in))\b`,
     'i',
   ),
   // "we have you down / booked / in for the 20th"
-  new RegExp(String.raw`\bwe\s+have\s+you\s+(?:down|booked|in)\b`, 'i'),
-  // "your booking with us" / "your stay with us" — asserts one exists at all.
+  new RegExp(String.raw`\bwe\s+have\s+you\s+(?:down|booked|in|staying)\b`, 'i'),
+  // "your booking/stay with us" — asserts one exists.
   new RegExp(String.raw`\byour\s+${BOOKING_SUBJECT}\s+with\s+us\b`, 'i'),
-  // "everything is confirmed at our end" — subjectless but unmistakably a
-  // booking-state affirmation in this product's context.
-  new RegExp(String.raw`\beverything\s+(?:is|'s)\s+(?:confirmed|set|sorted)\b`, 'i'),
-  // "see you on the 20th" / "we'll see you then" — an arrival assertion.
-  new RegExp(String.raw`\b(?:see|welcome)\s+you\s+(?:on|this|next|in|then)\b`, 'i'),
+  // "everything is confirmed/set at our end" — this product's booking-state idiom.
+  new RegExp(String.raw`\beverything\s+(?:is|'s)\s+(?:confirmed|set|sorted|in\s+place)\b`, 'i'),
+  // "the villa is yours from the 20th" / "the room is held for you".
+  new RegExp(String.raw`\bthe\s+(?:villa|room|house)\s+is\s+(?:yours|held|ready|booked)\b`, 'i'),
+  // "see you on the 20th" — an arrival assertion ONLY when it names a date, so a
+  // lead's "hope to see you soon" does not trip (audit: bare greeting over-fired).
+  new RegExp(String.raw`\bsee\s+you\s+(?:on|this|next)?\s*(?:the\s+)?${DATE_TOKEN}`, 'i'),
+  // Bare "check-in on the 20th" / "check-out is the 22nd" — the subject leads the
+  // sentence with no "your". Uses STRICT_DATE so "check-in is from 3 pm" (a policy
+  // answer about the TIME) is not read as a booking assertion (audit false pos).
+  new RegExp(
+    String.raw`\bcheck[-\s]?(?:in|out)\b[^.!?]{0,12}?\b(?:on|is|are|from|for)\b[^.!?]{0,10}?${STRICT_DATE}`,
+    'i',
+  ),
 ];
 
 export interface StayAffirmationScan {
