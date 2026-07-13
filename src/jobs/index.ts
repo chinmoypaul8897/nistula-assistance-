@@ -34,6 +34,17 @@ export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
 export const CONVERSATION_SWEEP_QUEUE = 'conversation.sweep';
 export const CONVERSATION_SUMMARISE_QUEUE = 'conversation.summarise';
 export const SUMMARISER_NIGHTLY_QUEUE = 'summariser.nightly';
+export const EZEE_POLL_QUEUE = 'ezee.poll';
+// One queue per §5.2 event kind (plan CH-10 step 4's letter). No workers
+// until CH-12 — see the retention note in ensureQueues.
+export const BOOKING_CREATED_QUEUE = 'booking.created';
+export const BOOKING_MODIFIED_QUEUE = 'booking.modified';
+export const BOOKING_CANCELLED_QUEUE = 'booking.cancelled';
+export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
+  created: BOOKING_CREATED_QUEUE,
+  modified: BOOKING_MODIFIED_QUEUE,
+  cancelled: BOOKING_CANCELLED_QUEUE,
+};
 
 let bossInstance: PgBoss | null = null;
 let bossUrl: string | null = null;
@@ -113,6 +124,30 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryLimit: 0, // tomorrow's cron IS the retry
     expireInSeconds: 110, // the selector only queries + enqueues
   });
+  await boss.createQueue(EZEE_POLL_QUEUE, {
+    // stately + the constant singletonKey on the schedule send = the CH-10
+    // overlap protection (≤1 created AND ≤1 active poll, DB-enforced).
+    policy: 'stately',
+    retryLimit: 0, // the next 60s cron tick IS the retry
+    // Worst case ≈ two eZee calls (3 tries × 15s + backoff each ≈ 47s) plus
+    // per-reservation txs + the ACK — 180s gives headroom; an expired hung
+    // run is discarded (retryLimit 0) and ACK-after-commit makes the
+    // redelivery safe. Changing this later needs updateQueue (CH-03 lesson).
+    expireInSeconds: 180,
+  });
+  // The booking.* event queues MUST exist before the poller's first in-tx
+  // send: boss.send throws on a missing queue, which would roll back the
+  // mirror upsert and poison every poll cycle (never-ACKed redelivery loop).
+  // retentionSeconds is the pg-boss default, stated so the CH-12 wait is a
+  // visible bound: events queued before CH-12's workers exist survive 14
+  // days; beyond that CH-12's reconciliation sweep re-derives from
+  // bookings_mirror (§3.4) — the queues are wake-ups, not the truth.
+  for (const queue of Object.values(BOOKING_EVENT_QUEUES)) {
+    await boss.createQueue(queue, {
+      policy: 'standard',
+      retentionSeconds: 14 * 24 * 3600,
+    });
+  }
 }
 
 /**
