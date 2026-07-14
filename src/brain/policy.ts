@@ -235,7 +235,12 @@ export type EscalationReason =
   // CH-11: the AI twice asserted a booking for a guest who holds NONE. Either
   // the model is confused, or — the D1 gap — the guest has a real booking our
   // mirror never captured. A person should check, not the AI insist.
-  | 'booking_overclaim';
+  | 'booking_overclaim'
+  // CH-11 (§5.4): the AI twice named a specific villa unit we were never given.
+  // The website SHOWS guests a named villa while booking only a TYPE, so the
+  // guest may have named it themselves, in good faith — and be wrong. A human
+  // can look up the real assignment; the AI must not guess it.
+  | 'booking_unit_unknown';
 
 /** Phrasebook KEY, not text — policy.ts stays a leaf that never imports
  * prompt.ts (CH-06 cycle lesson); the worker resolves key → PHRASEBOOK. */

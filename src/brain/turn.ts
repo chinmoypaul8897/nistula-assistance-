@@ -254,6 +254,10 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       // disagree. Guest-derived DATA (block [5]'s text) licenses nothing.
       hasLiveStay: liveStays(args.stays ?? []).length > 0,
       hasUndescribableBooking: needsHuman(args.stays ?? [], istCalendarDay(args.dbNow)),
+      // §5.4 as code: the ONLY units the AI may name are the ones eZee assigned.
+      assignedUnits: liveStays(args.stays ?? [])
+        .filter((s) => s.isUnit && s.villa !== null)
+        .map((s) => s.villa as string),
       // Guardrail 5 (CH-07): the policy pass's inbound bot-question flag.
       botQuestion: args.botQuestion ?? false,
       // Guardrail 7 (CH-07): self-exemption + the after-hours substitution.

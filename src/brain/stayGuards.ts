@@ -1,3 +1,5 @@
+import { VILLAS } from '../lib/villas.js';
+
 /**
  * Stay-affirmation integrity (CH-11 — the D2 decision).
  *
@@ -136,6 +138,97 @@ export function scanStayAffirmations(draft: string, hasLiveStay: boolean): StayA
   }
   return { violations };
 }
+
+/**
+ * UNIT ASSERTIONS (§5.4 as CODE, not just a block-[4] instruction).
+ *
+ * WHY this needs a deterministic guard, verified in the website codebase
+ * (2026-07-13, read-only audit):
+ *   - The booking engine sends eZee a ROOM TYPE and **never a physical RoomID**
+ *     (bkg-31-create-booking: `Roomtype_Id`, no RoomID field exists). eZee picks
+ *     the actual house.
+ *   - But the website SHOWS the guest a named individual villa — "Villa C3" —
+ *     from its own editorial overlay, and stamps individual villas "Booked".
+ *     Its own auditor's words: *"the site promises a specific unit, but the
+ *     booking reserves only a TYPE… the villa name is a DISPLAY fact, not a
+ *     RESERVED fact."*
+ *
+ * So a guest WILL tell us "my Villa C3 booking" — in good faith, because we told
+ * them that — while eZee may have put them in C1. If the model echoes it back,
+ * we lend our authority to an error the guest cannot check, and CH-13 sends
+ * housekeeping to the wrong house. Block [4] alone cannot hold that line: the
+ * guest's own words are the strongest possible prompt to echo.
+ *
+ * The rule: the AI may name a unit ONLY when the MIRROR assigned one (and only
+ * THAT one). Naming any other — including one the guest themselves named — is a
+ * violation. Scoped to ASSIGNMENT framing, so pre-sales prose is untouched:
+ * "C3 wraps around its own pool" is a description and stays legal (it is a voice
+ * -guide exemplar); "your stay is in C3" is a claim about who sleeps where.
+ */
+const UNIT_TOKEN = String.raw`(?:villa\s+)?(?:B1|B3|C1|C3)\b|apartment\s+(?:06|09|11)\b|siolim(?:\s+4bhk)?\b`;
+
+const UNIT_ASSERTIONS: readonly RegExp[] = [
+  // "your Villa C3", "your stay at C3", "your villa, B3"
+  new RegExp(String.raw`\byour\s+(?:stay\s+(?:at|in)\s+)?(?:${UNIT_TOKEN})`, 'i'),
+  // "you're in C3", "you are staying in Villa B3", "you're booked into C1"
+  new RegExp(
+    String.raw`\byou(?:'re|\s+are|'ll|\s+will\s+be)\s+(?:in|staying\s+in|booked\s+into?|checked\s+into?)\s+(?:${UNIT_TOKEN})`,
+    'i',
+  ),
+  // "C3 is ready for you", "Villa B3 is yours"
+  new RegExp(String.raw`(?:${UNIT_TOKEN})\s+is\s+(?:ready|yours|all\s+set|waiting)`, 'i'),
+  // "we've put you in C3", "we have assigned you Villa B1"
+  new RegExp(
+    String.raw`\b(?:we(?:'ve|\s+have)?\s+)?(?:put|placed|assigned|allocated)\s+you\s+(?:in(?:to)?\s+)?(?:${UNIT_TOKEN})`,
+    'i',
+  ),
+];
+
+/** The canonical label a matched span refers to — so we can tell "the unit we
+ * were actually given" from "some other house". */
+function unitLabelOf(span: string): string | null {
+  const s = span.toLowerCase();
+  for (const villa of VILLAS) {
+    const label = villa.label.toLowerCase();
+    // "Villa B3" → also matches a bare "b3"; "Apartment 09" needs the word.
+    const short = label.replace(/^villa\s+/, '');
+    if (s.includes(label)) return villa.label;
+    if (/^villa /.test(label) && new RegExp(String.raw`\b${short}\b`).test(s)) return villa.label;
+    if (label.startsWith('siolim') && s.includes('siolim')) return villa.label;
+  }
+  return null;
+}
+
+/**
+ * Units the draft claims the guest is in. `assigned` = the labels the MIRROR
+ * actually gave us (stayView's `isUnit` stays). Naming any unit not in that set
+ * — including the right villa when we were told none — is a violation.
+ *
+ * `assigned` undefined ⇒ the check is SKIPPED (pre-CH-11 callers and pure suites
+ * keep their exact behaviour; the worker always supplies it).
+ */
+export function scanUnitAssertions(
+  draft: string,
+  assigned: readonly string[] | undefined,
+): StayAffirmationScan {
+  if (assigned === undefined) return { violations: [] };
+  // Deduped by the UNIT, not the span: several patterns legitimately match the
+  // same sentence ("your Villa C3" and "Villa C3 is ready"), and one wrong house
+  // is one violation — not two rows in the weekly review.
+  const byUnit = new Map<string, string>();
+  for (const re of UNIT_ASSERTIONS) {
+    const match = re.exec(draft);
+    if (match === null) continue;
+    const span = match[0].trim();
+    const label = unitLabelOf(span);
+    if (label !== null && assigned.includes(label)) continue; // it IS their villa
+    byUnit.set(label ?? span, span);
+  }
+  return { violations: [...byUnit.values()] };
+}
+
+export const UNIT_NUDGE =
+  'You named a specific villa unit. Our booking system has not told us which house this guest is in — bookings are held at villa TYPE and the unit is assigned later, so naming one (even one the guest named themselves) may be wrong. Speak of the villa type instead ("your villa in Assagao"), and never confirm a specific house.';
 
 /** The regenerate hint. Kept SEPARATE from PROMISE_NUDGE: this is not a false
  * promise, it is a false FACT, and the correction is different. */

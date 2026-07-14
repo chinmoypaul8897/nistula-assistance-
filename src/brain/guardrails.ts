@@ -29,7 +29,7 @@ import { applyNegotiationLock, checkPriceIntegrity } from './priceGuards.js';
 import { scanPromises, type ClaimClass } from './promises.js';
 import { PHRASEBOOK } from './prompt.js';
 import { extractRupeeAmounts, type KbFee } from './rupees.js';
-import { scanStayAffirmations, STAY_NUDGE } from './stayGuards.js';
+import { scanStayAffirmations, scanUnitAssertions, STAY_NUDGE, UNIT_NUDGE } from './stayGuards.js';
 import type { RecordHit } from './telemetry.js';
 import type { ToolRun } from './tools/registry.js';
 
@@ -73,6 +73,11 @@ export interface GuardrailDeps {
    * versus "they hold a booking a person must handle". Telling ops the first
    * when the second is true is a card that LIES (pre-merge review). */
   hasUndescribableBooking?: boolean;
+  /** CH-11 §5.4 as CODE: the villa units the MIRROR actually assigned this guest.
+   * The AI may name a unit only when eZee gave us one, and only THAT one — the
+   * website shows guests a named villa while booking only a TYPE, so a guest may
+   * name a house they are not in, in good faith. undefined ⇒ check SKIPPED. */
+  assignedUnits?: readonly string[];
   /** Guardrail 5 trigger: the inbound batch asked "are you a bot?". */
   botQuestion?: boolean;
   /** Guardrail 7: the guest's own E.164 — the ONLY phone a draft may contain. */
@@ -120,6 +125,7 @@ export async function runGuardrails(
     first.priceViolations.length > 0 ? PRICE_NUDGE : null,
     first.promiseViolations.length > 0 ? PROMISE_NUDGE : null,
     first.stayViolations.length > 0 ? STAY_NUDGE : null,
+    first.unitViolations.length > 0 ? UNIT_NUDGE : null,
     first.identityViolation ? IDENTITY_NUDGE : null,
     first.tooLong ? LENGTH_NUDGE : null,
   ]
@@ -131,6 +137,7 @@ export async function runGuardrails(
       prices: first.priceViolations,
       promises: first.promiseViolations,
       stays: first.stayViolations,
+      units: first.unitViolations,
       identity: first.identityViolation,
       tooLong: first.tooLong,
     },
@@ -162,7 +169,8 @@ export async function runGuardrails(
   if (
     second.priceViolations.length > 0 ||
     second.promiseViolations.length > 0 ||
-    second.stayViolations.length > 0
+    second.stayViolations.length > 0 ||
+    second.unitViolations.length > 0
   ) {
     deps.log.info(
       {
@@ -170,6 +178,7 @@ export async function runGuardrails(
         prices: second.priceViolations,
         promises: second.promiseViolations,
         stays: second.stayViolations,
+        units: second.unitViolations,
       },
       'guardrails failed twice — deferring + escalating',
     );
@@ -186,7 +195,13 @@ export async function runGuardrails(
       // guest may in fact have a booking our mirror cannot see (the D1 gap).
       text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
       toolRuns: second.toolRuns,
-      escalate: priceFailed ? 'price' : stayFailed ? stayEscalation(deps) : 'promise',
+      escalate: priceFailed
+        ? 'price'
+        : stayFailed
+          ? stayEscalation(deps)
+          : second.unitViolations.length > 0
+            ? 'booking_unit_unknown'
+            : 'promise',
     };
   }
   // Identity still missing → substitute the approved line whole (§6.5 #5).
@@ -220,6 +235,7 @@ interface Evaluation {
   promiseViolations: string[];
   /** CH-11: booking-state assertions made for a guest with no live stay. */
   stayViolations: string[];
+  unitViolations: string[];
   referral: boolean;
   identityViolation: boolean;
   tooLong: boolean;
@@ -249,6 +265,7 @@ async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evalu
   // CH-11: an assertion gate, not an evidence licence — see stayGuards.ts.
   // Defaults to "has a live stay" so every pre-CH-11 caller keeps its behaviour.
   const stays = scanStayAffirmations(nego.text, deps.hasLiveStay ?? true);
+  const units = scanUnitAssertions(nego.text, deps.assignedUnits);
   const identityViolation = deps.botQuestion === true && !containsIdentityLine(nego.text);
   const tooLong = nego.text.length > MAX_REPLY_CHARS || bulletLineCount(nego.text) > 3;
   return {
@@ -256,6 +273,7 @@ async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evalu
       price.ok &&
       promises.violations.length === 0 &&
       stays.violations.length === 0 &&
+      units.violations.length === 0 &&
       !identityViolation &&
       !tooLong,
     text: nego.text,
@@ -263,6 +281,7 @@ async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evalu
     priceViolations: price.unbacked,
     promiseViolations: promises.violations,
     stayViolations: stays.violations,
+    unitViolations: units.violations,
     referral: promises.referral,
     identityViolation,
     tooLong,
@@ -306,7 +325,13 @@ async function finalize(
       escalationPlanned: deps.mustEscalate === true,
     });
     const stays = scanStayAffirmations(text, deps.hasLiveStay ?? true);
-    if (!price.ok || promises.violations.length > 0 || stays.violations.length > 0) {
+    const units = scanUnitAssertions(text, deps.assignedUnits);
+    if (
+      !price.ok ||
+      promises.violations.length > 0 ||
+      stays.violations.length > 0 ||
+      units.violations.length > 0
+    ) {
       const reason: EscalationReason = !price.ok
         ? 'price'
         : promises.violations.length > 0

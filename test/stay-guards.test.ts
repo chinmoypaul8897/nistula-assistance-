@@ -8,7 +8,7 @@
  * these tests pin the gap closed, and pin that closing it did not weaken C1.
  */
 import { describe, expect, it } from 'vitest';
-import { scanStayAffirmations } from '../src/brain/stayGuards.js';
+import { scanStayAffirmations, scanUnitAssertions } from '../src/brain/stayGuards.js';
 import { scanPromises } from '../src/brain/promises.js';
 import type { ToolRun } from '../src/brain/tools/registry.js';
 
@@ -85,6 +85,53 @@ describe('the widened lexicon catches the register block [4] teaches', () => {
     'Our rate for those dates is all-inclusive.',
   ])('allows the pre-sales line %j', (draft) => {
     expect(scanStayAffirmations(draft, false).violations).toEqual([]);
+  });
+});
+
+// §5.4 as CODE. Verified in the website codebase (read-only audit, 2026-07-13):
+// its booking engine sends eZee a ROOM TYPE and never a physical RoomID — yet the
+// site SHOWS the guest a named villa ("Villa C3") and marks individual houses
+// "Booked". Its own auditor: "the villa name is a DISPLAY fact, not a RESERVED
+// fact." So a guest will tell us "my Villa C3 booking" in good faith and may be
+// in C1. If the AI echoes it, we lend our authority to an error the guest cannot
+// check — and CH-13 sends housekeeping to the wrong house.
+describe('unit assertions — the AI may name a house only when eZee gave us one', () => {
+  it.each([
+    'Your Villa C3 is ready for you.',
+    'You are in Villa B3 for those dates.',
+    "You're booked into C1.",
+    'We have put you in Apartment 09.',
+    'Your stay at Villa B1 starts on the 20th.',
+    'Villa C3 is yours from the 20th.',
+  ])('blocks %j when the mirror assigned no unit', (draft) => {
+    expect(scanUnitAssertions(draft, []).violations.length).toBeGreaterThan(0);
+  });
+
+  it('blocks a unit the GUEST named when we were given a different one', () => {
+    // The guest says "my Villa C3 booking"; eZee actually put them in C1.
+    expect(scanUnitAssertions('Your Villa C3 is ready.', ['Villa C1']).violations.length).toBe(1);
+  });
+
+  it('allows the unit eZee actually assigned', () => {
+    expect(scanUnitAssertions('Your Villa B3 is ready for you.', ['Villa B3']).violations).toEqual(
+      [],
+    );
+  });
+
+  // The over-fire guard. Pre-sales names villas constantly — the voice guide's
+  // own exemplar does. Describing a villa is not claiming the guest sleeps in it.
+  it.each([
+    "C3's a good pick — it wraps around its own pool. Here's the link.",
+    'Villa B3 has a private pool and sleeps up to seven.',
+    'The Siolim house is our only 4BHK.',
+    'Apartment 09 is the quietest of the three.',
+    'B1 and C1 are both free those nights.',
+  ])('allows the pre-sales description %j', (draft) => {
+    expect(scanUnitAssertions(draft, []).violations).toEqual([]);
+  });
+
+  it('is SKIPPED entirely when the caller supplies nothing (pre-CH-11 behaviour)', () => {
+    expect(scanUnitAssertions('Your Villa C3 is ready.', undefined).violations).toEqual([]);
   });
 });
 

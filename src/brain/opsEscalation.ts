@@ -35,6 +35,8 @@ const ESCALATION_SUMMARIES: Record<EscalationReason, string> = {
     'This guest holds a booking the AI is not allowed to describe (a live cancellation, or a multi-room reservation whose details we only partly hold). Please pick up the thread.',
   booking_overclaim:
     'The AI kept trying to tell this guest they have a booking, but our system shows none on this number. They may genuinely have a booking we never captured — please check eZee and reply.',
+  booking_unit_unknown:
+    'The AI kept naming a specific villa for this guest, but eZee has not told us which house they are in (bookings are held at villa TYPE). The guest may have named it themselves — the website shows them a villa name — and may be wrong. Please confirm the real unit in eZee before replying.',
 };
 
 /**
