@@ -11,6 +11,23 @@
 - **Standing dev workflow (CH-02 decision D8):** Meta's callback points permanently at the Railway domain — no tunnels, ever. Daily iteration = fixtures + signed local POSTs; end-of-chunk live demo = `railway up` the chunk working tree PRE-merge (doubles as env-completeness check); merge → auto-deploy ships identical content. Binding topology rule (D2): EVERY outbound anywhere goes through `wa/client.ts` `sendText`.
 - **How to run:** `docker compose up -d postgres` → `pnpm dev` (migrations apply at boot) → `GET http://localhost:3100/health`. Gate: `pnpm check` (typecheck + lint + tests incl. DB suite). CI runs the same on Node 22 + 24 with a postgres service container.
 - **Open-questions register:** all human-answerable inputs (villa-team quirks, missing fees, the deposit-model decision, facts to confirm) live in [`docs/open-questions.md`](docs/open-questions.md) as **OQ-01…OQ-14** — Paul fills answers there; the KB export they feed is `nistula-kb-export/`.
+- **⚑⚑ STANDING DECISION (Paul, 2026-07-13) — BUILD THE TECH FIRST; ASK THE BUSINESS ONCE, AT THE END.**
+  Paul named the root cause of a pattern that has bitten repeatedly: **the tech side does not have
+  transparency into the business**, so questions about how Nistula actually operates (a fee nobody
+  published, a process nobody wrote down, a villa fact only the team knows) keep surfacing mid-build.
+  It is structural, it will keep happening, and guessing harder will not fix it. **The rule:** (1) a
+  missing BUSINESS answer NEVER stops a chunk — ship a **fail-closed default** (the AI refuses, defers,
+  or brings the team in; it never invents); (2) log the question in [`docs/open-questions.md`](docs/open-questions.md)
+  IMMEDIATELY, with the four things that make it answerable — *what we need to know · why it matters to
+  a real guest · what we shipped meanwhile · what changes once they answer*; (3) when the engineering is
+  done, that register becomes **ONE properly-framed document** for the villa team / front desk / owner —
+  not a trickle of half-questions over months; (4) then the content pass: answers land, the KB rebuilds,
+  the fail-closed defaults become real rules, and content-dependent acceptance re-runs before go-live.
+  **Unchanged (plan §0):** a missing ENGINEERING decision or EXTERNAL API CONTRACT still stops the
+  session — those are ours to resolve (read the authoritative reference, probe, or ask Paul). That is a
+  different animal from "what does the business actually do?". **Why this is safe:** every unknown in
+  the register is already sitting behind a guard in the code. The system is HONEST today; the answers
+  make it BETTER, not CORRECT — so we are never blocked, and the team is never rushed.
 - **⚑ STANDING DECISION (Paul, 2026-07-11) — content inputs are NOT chunk blockers.** The OQ register (`docs/open-questions.md`) is deferred to a **FINAL CONTENT PASS after the last engineering chunk**. Those items (quirks, real villa copy, missing fees, facts to confirm) depend on slow external processes — the villa team and website-content finalisation — so **every chunk session builds its engineering with the content available NOW** (real policies/FAQ/occupancy + placeholder villa copy + stubbed/empty quirks), wires the seam so real content drops in later, and records what's stubbed. **Do NOT stop or defer a chunk because an OQ is unanswered.** This overrides §0's "stop on a missing decision" **only for these content/data inputs** — a genuine missing ENGINEERING decision or external API contract still stops per §0. In the final pass the OQ answers are loaded, the website export re-run, and the content-dependent acceptance (CH-06's quirk-aware demo, CH-19's six scenarios) validated — before go-live. Concretely: CH-06 ships the `kb-build` pipeline + block [3] wiring + the guardrail-1 whitelist seam against current content; it is DONE when the machinery + real policy/FAQ answers work, not when every villa's prose/quirks are final.
 
 ## Table of contents (chunk ledger)

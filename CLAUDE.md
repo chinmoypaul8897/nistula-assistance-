@@ -19,6 +19,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 5. Finish by appending a progress.md entry using the §9 template, updating the chunk ledger table, then commit and stop.
 6. If anything is ambiguous or a decision is missing: **do not improvise.** Write it under "Open questions" in progress.md and stop — Paul takes it back to the planning chat.
 
+## ⚑⚑ Standing decision (Paul, 2026-07-13) — build the tech first, ask the business ONCE
+
+Questions about **how the business actually works** keep surfacing mid-build (a fee nobody
+published, a process nobody wrote down, a villa fact only the team knows). Paul has named the root
+cause: **the tech side does not have transparency into the business.** It is structural, it will
+keep happening, and guessing harder will not fix it.
+
+**The rule:**
+1. **Build the tech first.** A missing *business* answer NEVER stops a chunk. Ship a **fail-closed
+   default** — the AI refuses, defers, or brings the team in. Never invent, never guess into a
+   guest's face.
+2. **Log the question in [`docs/open-questions.md`](docs/open-questions.md) immediately**, with the
+   four things that make it answerable: *what we need to know · why it matters to a real guest ·
+   what we shipped meanwhile · what changes once they answer.*
+3. **Ask once, at the end.** When engineering is complete, that register becomes ONE properly-framed
+   document for the villa team / front desk / owner — not a trickle of half-questions.
+4. Then the content pass: answers land, the KB rebuilds, fail-closed defaults become real rules,
+   content-dependent acceptance re-runs before go-live.
+
+**Still stops a session (plan §0, unchanged):** a missing *engineering* decision or *external API
+contract*. Those are ours — read the authoritative reference, probe, or ask Paul. Different animal
+from "what does the business actually do?".
+
 ## Hard rules (non-negotiable)
 
 - **Secrets:** `credentials-local/` and `.env*` are gitignored and must NEVER be committed, copied into `docs/`, or quoted in code, tests, fixtures, or commit messages. If a secret ever lands in a commit, it is leaked: rotate it and purge history. `.env.example` carries names only.

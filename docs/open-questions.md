@@ -1,25 +1,60 @@
 # Open Questions & Pending Inputs — Nistula Assistance
 
-> ## ⚑ TIMING — dealt with in a FINAL CONTENT PASS, after the last engineering chunk
-> **Standing decision (Paul, 2026-07-11):** none of the questions below block any build
-> chunk. They are content/data inputs (quirks, real copy, missing fees, facts to confirm)
-> that depend on the villa team and the website content being finalised — slow external
-> processes. **Every chunk is built with the content available now** (real policies / FAQ /
-> occupancy + placeholder villa copy + stubbed quirks), wiring the seam so real answers drop
-> in later. The answers here are loaded, the website export re-run, and content-dependent
-> acceptance validated in one final pass **before go-live** — NOT as a prerequisite to any
-> chunk. (A genuine missing *engineering* decision still stops a session per plan §0; that is
-> a different thing from these content inputs.)
-
-> A living register of questions that need a **human answer** — Paul, the villa team,
-> or a **planning-chat decision**. Engineering proceeds around these; this file is where
-> the answers land so nothing is lost, to be resolved in the final content pass above.
+> ## ⚑⚑ THE STANDING DECISION — build the tech first, ask the business ONCE, properly
+> **Paul, 2026-07-13. This supersedes and widens the 2026-07-11 decision below, and it is the
+> governing rule for this file.**
 >
-> **How to use:** fill the `**Answer:**` line and flip **Status** to ✅ when resolved;
-> the relevant chunk then consumes it. The exhaustive raw-gap list from the website
-> mine lives in [`nistula-kb-export/GAPS.md`](../nistula-kb-export/GAPS.md) — this file
-> holds only the **actionable** decisions/inputs. Pure-engineering deferrals (no human
-> input needed) stay in `progress.md`, not here.
+> **The root cause, named:** questions about how the business actually works keep surfacing
+> mid-build — a fee nobody published, a process nobody wrote down, a villa fact only the team
+> knows. This has happened repeatedly and it will keep happening, **because the tech side does
+> not have transparency into the business.** That is a structural gap, not a series of
+> accidents, and it will not be fixed by guessing harder.
+>
+> **So the rule is:**
+> 1. **BUILD THE TECH FIRST.** A missing *business* answer never stops a chunk. Ship a
+>    **fail-closed default** — the AI refuses, defers, or brings the team in, rather than
+>    inventing. Nothing is ever guessed into a guest's face.
+> 2. **LOG EVERY QUESTION HERE, as it arises**, with the four things that make it answerable:
+>    *what we need to know · why it matters to a real guest · what we shipped meanwhile · what
+>    changes once they answer.* A question the team cannot answer without a follow-up is a
+>    question we wrote badly.
+> 3. **ASK ONCE, AT THE END.** When the engineering is complete, this register is turned into
+>    **one properly-framed document** and taken to the villa team / front desk / owner in a
+>    single pass. Not a trickle of half-questions over months — one conversation, with the
+>    context they need to answer well.
+> 4. **THEN the content pass:** answers land here, the KB is rebuilt, the fail-closed defaults
+>    are replaced by real rules, and the content-dependent acceptance is re-validated before
+>    go-live.
+>
+> **The one thing that still STOPS a session (plan §0, unchanged):** a missing *engineering*
+> decision or a missing *external API contract*. Those are ours to resolve — by reading the
+> authoritative reference, by probing, or by asking Paul directly. They are a different animal
+> from "what does the business actually do?", which is what this file is for.
+>
+> **Why this works:** every unknown in this file is already sitting behind a guard in the code.
+> The system is honest today. The answers make it *better*, not *correct* — so we are never
+> blocked, and the team is never rushed.
+
+> ### ⚑ (2026-07-11, still true — now a special case of the above)
+> Content/data inputs (quirks, real villa copy, missing fees, facts to confirm) depend on slow
+> external processes and do not block any chunk. Every chunk is built with the content
+> available now, wiring the seam so real answers drop in later.
+
+> **How to use:** fill the `**Answer:**` line and flip **Status** to ✅ when resolved; the
+> relevant chunk then consumes it. The exhaustive raw-gap list from the website mine lives in
+> [`nistula-kb-export/GAPS.md`](../nistula-kb-export/GAPS.md). Pure-*engineering* deferrals (no
+> human input needed) stay in `progress.md`, not here — this file is for the BUSINESS.
+
+> ### 📄 THE COMPILED ASK LIVES IN [`docs/team-questions.md`](team-questions.md)
+> That file is the artifact rule 3 above describes: **78 questions, 31 of them go-live blockers**,
+> swept out of the whole codebase, plan, KB and build log on 2026-07-13 — grouped by who can
+> actually answer them (Paul 33 · front desk 25 · villa team 14 · website 6), each with *what we
+> need to know · why it matters to a real guest · what we shipped meanwhile · what changes when
+> they answer.* **That is the document Paul sends the team.**
+>
+> This file (`open-questions.md`) remains the **live register** — where new questions get logged
+> as they arise mid-build, and where answers land. Regenerate `team-questions.md` from it (plus a
+> fresh repo sweep) when the engineering is done.
 
 **Status legend:** ⬜ OPEN · 🕐 IN PROGRESS · ✅ ANSWERED
 
