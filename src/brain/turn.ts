@@ -14,6 +14,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { Db } from '../db/client.js';
 import type { Conversation } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
+import { istCalendarDay } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { ConverseFn } from './claude.js';
 import { buildTurnContext, type TranscriptOverflow } from './contextBuilder.js';
@@ -22,6 +23,7 @@ import { runGuardrails } from './guardrails.js';
 import type { LoadedKnowledge } from './knowledge.js';
 import type { EscalationReason } from './policy.js';
 import { PHRASEBOOK, type SystemBlock } from './prompt.js';
+import { liveStays, needsHuman, type StayView } from './stayView.js';
 import { createHitRecorder } from './telemetry.js';
 import type { DegradedTracker } from './tools/degraded.js';
 import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
@@ -67,6 +69,23 @@ export interface TurnResult {
   /** Non-null when the guardrails require an escalation this turn: a deferred
    * price/promise, or a team-referral that must be MADE true (CH-07). */
   escalate: EscalationReason | null;
+  /** CH-11: a booking-claim escalation, on its OWN channel. The worker's
+   * escalation slot is single-valued (`plan.escalate ?? turn.escalate`), so a
+   * complaint riding the same turn would otherwise silently SWALLOW it. The
+   * reason distinguishes an identity probe (booking_reference) from a verified
+   * owner whose booking we may not describe (booking_undescribable). */
+  securityEscalate: EscalationReason | null;
+  /** CH-11: a reference to record a `refused` STRIKE for, POST-CLAIM. Deferred
+   * out of the pre-claim tool loop so a converse() failure + pg-boss retry
+   * cannot double-charge an honest guest toward the lockout (CH-03 D2). */
+  strikeReference: string | null;
+  /** CH-11: a reference we verified+linked this turn — the `linked` audit row,
+   * also written post-claim. */
+  linkedReference: string | null;
+  /** The claimant's phone + guest id — so the worker can write the strike/link
+   * rows without re-deriving them. */
+  guestPhone: string;
+  guestId: string;
   /** What the transcript window could not show (CH-08) — the worker applies
    * the hysteresis threshold and enqueues an on-demand summarise. */
   overflow: TranscriptOverflow;
@@ -105,6 +124,14 @@ export interface TurnArgs {
   newestGuestMsgId?: string;
   /** Guardrail 5 trigger from the policy pass (CH-07 step 3). */
   botQuestion?: boolean;
+  /** CH-11: this guest's stays, ALREADY projected through stayView in the
+   * worker (one read per turn, shared with the policy pass). Feeds block [5],
+   * the block [6] stage line, and the stay-affirmation guardrail. */
+  stays?: readonly StayView[];
+  /** CH-11: the guest's OWN typed words this batch — the only text a reference
+   * claim may be corroborated against (§6.4: the guest must STATE the name and
+   * date; a tool argument is written by the model, not the guest). */
+  guestText?: string;
 }
 
 /**
@@ -129,6 +156,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       newestGuestMsgAt: args.newestGuestMsgAt,
       mustEscalate: args.mustEscalate ?? false,
       unviewableMedia: args.unviewableMedia ?? false,
+      stays: args.stays,
     },
   );
   const tools = deps.toolRegistry.specs();
@@ -146,6 +174,28 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       conversationId,
       sourceMessageId: args.newestGuestMsgId ?? null,
       saves: { count: 0 },
+    },
+    // CH-11: shared across BOTH loops like `memory` — the guardrail regenerate
+    // re-runs the whole tool loop, so the claim latch must span the turn or one
+    // honest typo would burn two strikes.
+    booking: {
+      db: deps.db,
+      guestId: args.conversation.guestId,
+      guestPhone: args.guestPhone,
+      // ONLY the guest's own typed words. §6.4's verification corroborates our
+      // stored record against THIS, never against a model-supplied argument.
+      guestText: args.guestText ?? '',
+      stays: args.stays ?? [],
+      // The DB clock, not new Date() — one clock per turn, so a handler can
+      // never sort a stay differently from the prompt the model is reading.
+      today: istCalendarDay(dbNow),
+      claim: {
+        refused: false,
+        attempted: null,
+        escalateReason: null,
+        strikeReference: null,
+        linkedReference: null,
+      },
     },
   };
 
@@ -193,7 +243,21 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       }),
       // Guardrail 2 (CH-07): evidence + the §6.7 must-escalate assertion.
       systemEvidence,
-      mustEscalate: args.mustEscalate ?? false,
+      // A refused or undescribable claim escalates, so the tool message's own
+      // "a colleague is looking into it" is a TRUE C3 referral — without this the
+      // guest would get a confusing deferral instead.
+      mustEscalate:
+        (args.mustEscalate ?? false) || toolCtx.booking?.claim.escalateReason != null,
+      // CH-11 stay integrity: an ASSERTION gate, not an evidence licence — the
+      // truth comes from the mirror's own status enum via stayView, in the same
+      // read that filled block [5], so the gate and the prompt can never
+      // disagree. Guest-derived DATA (block [5]'s text) licenses nothing.
+      hasLiveStay: liveStays(args.stays ?? []).length > 0,
+      hasUndescribableBooking: needsHuman(args.stays ?? [], istCalendarDay(args.dbNow)),
+      // §5.4 as code: the ONLY units the AI may name are the ones eZee assigned.
+      assignedUnits: liveStays(args.stays ?? [])
+        .filter((s) => s.isUnit && s.villa !== null)
+        .map((s) => s.villa as string),
       // Guardrail 5 (CH-07): the policy pass's inbound bot-question flag.
       botQuestion: args.botQuestion ?? false,
       // Guardrail 7 (CH-07): self-exemption + the after-hours substitution.
@@ -206,6 +270,16 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
     text: outcome.text,
     toolRuns: outcome.toolRuns,
     escalate: outcome.escalate,
+    // The reason passes THROUGH, never hard-coded: an owner asking about their
+    // own cancelled booking (booking_undescribable) must not page ops as an
+    // identity probe (booking_reference).
+    securityEscalate: toolCtx.booking?.claim.escalateReason ?? null,
+    // The worker records these post-claim (CH-03 D2: the tool must leave no DB
+    // side effect a retry could double-apply).
+    strikeReference: toolCtx.booking?.claim.strikeReference ?? null,
+    linkedReference: toolCtx.booking?.claim.linkedReference ?? null,
+    guestId: args.conversation.guestId,
+    guestPhone: args.guestPhone,
     overflow,
   };
 }

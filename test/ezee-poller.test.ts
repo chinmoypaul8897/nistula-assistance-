@@ -111,6 +111,9 @@ function fakeEzeeClient(script: EzeePollOutcome[]) {
     },
     fetchSingleBooking: () =>
       Promise.resolve({ status: 'ok', reservations: [], cancels: [], raw: {} } as EzeePollOutcome),
+    // CH-11 (BKG-05): the poller must never reach for the arrivals list — that
+    // is the reconcile script's job, and it is deliberately not wired here.
+    fetchArrivals: () => Promise.reject(new Error('poller must never list arrivals')),
   };
   return { fake, ackCalls, setAckResult: (r: EzeeAckOutcome) => (ackResult = r) };
 }

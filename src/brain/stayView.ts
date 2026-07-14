@@ -1,0 +1,321 @@
+/**
+ * The stay VIEW (CH-11) — the ONLY door from a `bookings_mirror` row to words.
+ *
+ * A faithful copy of eZee is not a sentence you can say to a paying guest, so
+ * nothing may read a mirror row straight into the prompt, a tool result or a
+ * staff card. Block [5], get_booking, the admin route — and later CH-12/13/16 —
+ * all project through here, and this module decides what may be SAID.
+ *
+ * WHY a narrow allowlist rather than a "skip the bad ones" filter: three times
+ * already this repo has shipped an enumerated rule quietly narrower than its
+ * own contract (CH-06's flat price whitelist, CH-09's entitlement screen,
+ * CH-10's resurrection denylist). The standing rule from that third finding —
+ * enumerate what is ALLOWED, never what is forbidden — is why `describable`
+ * fails closed on every row it does not positively recognise.
+ *
+ * What this module NEVER emits, by construction:
+ * - the amount. On a multi-room reservation the mirror's typed columns carry
+ *   the FIRST tran only (normalize.ts) — the figure is one room's, and for OTA
+ *   bookings possibly what the channel pays us rather than what the guest paid.
+ *   Summing it ourselves is banned outright (§3.4 money rule). Booking-money
+ *   questions go to a human.
+ * - the eZee/OTA guest name and email. Indian mobile numbers get recycled and
+ *   shared; a stranger's name in the prompt is the §6.5 #7 leak CH-11 exists to
+ *   prevent.
+ * - the meal plan. The mirror stores an opaque RateplanCode and nothing in this
+ *   repo maps it to EP/CP (OQ-16). eZee's own label ("European Plan") is not
+ *   safe to pass through either: the model would helpfully translate it into
+ *   "breakfast is included", and NO guardrail checks an inclusion claim.
+ * - a unit label unless `physical_room_label` is set (§5.4: bookings are held
+ *   at TYPE level and eZee assigns the unit, so we say "your Nistula Villa",
+ *   never "Villa B3", until the mirror actually holds a unit).
+ */
+import type { BookingMirror } from '../db/bookings.js';
+import { toArray, type EzeeBookingTran } from '../ezee/types.js';
+
+/**
+ * Statuses a stay may be DESCRIBED in. `modified` is an event verb stored as a
+ * state (schema.ts) and is live; `checked_out` is describable because a past
+ * guest is the whole point of the win-back path (§2.4 scenario 6).
+ *
+ * Deliberately absent, and each for its own reason:
+ * - `cancelled`  — 40 of production's 62 rows. Describing one puts a family on
+ *                  a plane to a villa that is not theirs.
+ * - `no_show`    — not a stay that happened.
+ * - `unknown`    — what an UNCONFIRMED HOLD maps to (normalize.ts: New/Modify
+ *                  with IsConfirmed != 1). Speaking of it as a booking is the
+ *                  exact lie CH-10's confirmation gate was hardened to prevent.
+ */
+export const DESCRIBABLE_STATUSES = [
+  'confirmed',
+  'modified',
+  'checked_in',
+  'checked_out',
+] as const;
+
+/** Statuses that count as a LIVE booking — one the guest still has ahead of or
+ * around them. `checked_out` is describable but no longer live. */
+export const LIVE_STATUSES = ['confirmed', 'modified', 'checked_in'] as const;
+
+export type Stage = 'lead' | 'prearrival' | 'inhouse' | 'postguest';
+
+/**
+ * 🚨 OQ-19 — MAY THE AI NAME THE HOUSE eZee HAS A BOOKING AGAINST?
+ *
+ * **FALSE, deliberately, until the property is re-modelled in eZee.**
+ *
+ * eZee holds 8 houses inside 3 room TYPES, so a booking cannot name a house —
+ * its create API has no field for one. eZee auto-assigns instead, and the guest's
+ * actual choice is dropped before it ever arrives. Proven live: two type-level
+ * bookings (953, 957) were BOTH parked in Apartment 06.
+ *
+ * So `physical_room_label` is not "the guest's house". It is eZee's guess. Acting
+ * on it would let the AI tell a guest, with total confidence, that they are in a
+ * house they did not book and may not be given.
+ *
+ * With this false the AI speaks the villa TYPE — exactly what it did before the
+ * labels were hydrated, and what §5.4's *intent* has always been.
+ *
+ * FLIP TO TRUE only when a house is genuinely the thing that was booked (one
+ * house = one bookable product in eZee, as Siolim already is). The unit tests
+ * around this constant spell out precisely what changes when you do.
+ */
+export const TRUST_EZEE_ROOM_ASSIGNMENT = false;
+
+/** Why a row could not be described — ops/telemetry only, never guest-facing. */
+export type UndescribableReason =
+  | 'status_not_describable'
+  | 'missing_dates'
+  | 'multi_room'
+  | 'sibling_rows';
+
+export interface DescribedStay {
+  describable: true;
+  bookingId: string;
+  reservationNo: string;
+  /** What we may CALL the villa: the unit label only when eZee has assigned one
+   * (§5.4), else the room-type name as eZee worded it. Null when neither. */
+  villa: string | null;
+  /** True only when `villa` is a real assigned unit — block [4]'s unit rule. */
+  isUnit: boolean;
+  checkIn: string;
+  checkOut: string;
+  adults: number | null;
+  children: number | null;
+  status: (typeof DESCRIBABLE_STATUSES)[number];
+  live: boolean;
+}
+
+export interface UndescribableStay {
+  describable: false;
+  bookingId: string;
+  reservationNo: string;
+  reason: UndescribableReason;
+  live: boolean;
+  /** Internal only — NEVER rendered. It is how `needsHuman` tells an ancient
+   * cancellation (that guest really is a lead) from one for next week (a person
+   * must call them). Null on a tombstone, which is ancient by construction. */
+  checkIn: string | null;
+}
+
+export type StayView = DescribedStay | UndescribableStay;
+
+/** Rooms on this reservation. The typed columns carry the FIRST tran only, so a
+ * count > 1 means the row is a partial truth and must never be described. */
+export function roomCount(row: Pick<BookingMirror, 'raw'>): number {
+  const raw = row.raw;
+  if (raw === null || typeof raw !== 'object') return 1;
+  const trans = toArray((raw as { BookingTran?: EzeeBookingTran | EzeeBookingTran[] }).BookingTran);
+  return trans.length === 0 ? 1 : trans.length;
+}
+
+/** The base a suffixed cancel/room id hangs off ("877-2" → "877"). Siblings of
+ * one reservation share it — see `project`'s sibling guard. */
+export function referenceBase(reservationNo: string): string {
+  return reservationNo.replace(/-\d+$/, '');
+}
+
+function isDescribableStatus(
+  status: BookingMirror['status'],
+): status is (typeof DESCRIBABLE_STATUSES)[number] {
+  return (DESCRIBABLE_STATUSES as readonly string[]).includes(status);
+}
+
+function isLiveStatus(status: BookingMirror['status']): boolean {
+  return (LIVE_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * Projects ONE row, given every row linked to the same guest (needed for the
+ * sibling check: a multi-room booking may also arrive as several rows whose
+ * reference numbers share a base, and each of those looks complete on its own)
+ * and today's IST day (needed for `live`).
+ *
+ * `today` is the DB-clock IST day (the SAME clock the stage and block [6] use).
+ * WHY `live` is DATE-derived, not status-derived (pre-push audit BLOCKER, the
+ * recurring failure class caught a 4th time): no production row is ever marked
+ * `checked_out` — a front-desk check-out never comes down the connectivity
+ * queue, so a completed past stay stays `confirmed`. Keyed on status alone, that
+ * stay reads `live`, so get_booking would label it "upcoming", block [5] would
+ * drop the "past stay" note, AND the stay-affirmation guard would be DISARMED
+ * for a guest whose only stay is months behind them. A booking is live only if
+ * its status is a live one AND it has not already ended.
+ */
+export function project(
+  row: BookingMirror,
+  siblings: readonly BookingMirror[],
+  today: string,
+): StayView {
+  const live =
+    isLiveStatus(row.status) && (row.checkOut === null || row.checkOut >= today);
+  const base = {
+    bookingId: row.id,
+    reservationNo: row.ezeeReservationNo,
+    live,
+    checkIn: row.checkIn,
+  };
+
+  if (!isDescribableStatus(row.status)) {
+    return { describable: false, ...base, reason: 'status_not_describable' };
+  }
+  if (row.checkIn === null || row.checkOut === null) {
+    return { describable: false, ...base, reason: 'missing_dates' };
+  }
+  if (roomCount(row) > 1) {
+    return { describable: false, ...base, reason: 'multi_room' };
+  }
+  const myBase = referenceBase(row.ezeeReservationNo);
+  const hasSibling = siblings.some(
+    (other) => other.id !== row.id && referenceBase(other.ezeeReservationNo) === myBase,
+  );
+  if (hasSibling) {
+    return { describable: false, ...base, reason: 'sibling_rows' };
+  }
+
+  // OQ-19 (2026-07-14) — THE GROUND TRUTH OF §5.4 TURNED OUT TO BE FALSE.
+  //
+  // §5.4 says: name a unit only when `physical_room_label` is assigned. That rule
+  // was written believing the label meant "the house this booking IS for". It does
+  // not. It means "the house eZee happened to PICK".
+  //
+  // eZee is configured with 3 room TYPES holding 8 houses, so a booking cannot
+  // carry a house at all — InsertBooking has no field for one. eZee therefore
+  // auto-assigns, lowest-numbered-first: reservations 953 AND 957, both booked as
+  // "Nistula Apartment", were both parked in Apartment 06. The guest's actual
+  // choice is dropped at the boundary and never reaches eZee.
+  //
+  // So a label is NOT evidence that the guest is in that house — it is eZee's
+  // guess, it may contradict what they booked and paid for, and it can be changed
+  // by the front desk without the poll ever telling us (BKG-02 carries no room).
+  //
+  // Until the property is re-modelled (one house = one bookable product, the way
+  // Siolim already is), the AI names NO house. It says "your Nistula Villa", which
+  // is what it did before the labels landed, and which was accidentally safe.
+  // Saying less is free. Saying the wrong house is not.
+  //
+  // The labels STAY in the mirror — ops and a future task card still want to know
+  // which door eZee has this booking against. Only the AI's licence to SPEAK one
+  // is withdrawn. Flip this back the day OQ-19 is answered, and the tests below
+  // will tell you exactly what starts working again.
+  const unitLabel = TRUST_EZEE_ROOM_ASSIGNMENT ? row.physicalRoomLabel : null;
+
+  return {
+    describable: true,
+    ...base,
+    villa: unitLabel ?? row.roomTypeName,
+    isUnit: unitLabel !== null,
+    checkIn: row.checkIn,
+    checkOut: row.checkOut,
+    adults: row.adults,
+    children: row.children,
+    status: row.status,
+  };
+}
+
+/** Projects a guest's whole set of linked rows. */
+export function projectAll(rows: readonly BookingMirror[], today: string): StayView[] {
+  return rows.map((row) => project(row, rows, today));
+}
+
+/**
+ * The guest's stage — derived from DATES, never from status.
+ *
+ * WHY: no production row is ever marked `checked_in`. A front-desk check-in
+ * does not come down the connectivity queue (CH-10: 22 confirmed rows, zero
+ * checked_in), so keying "in-house" on the status would mean NO guest is ever
+ * in-house — the chunk would pass every test and silently fail in production.
+ *
+ * `today` is the IST calendar day of the DB clock (istCalendarDay(dbNow)) — the
+ * same clock block [6] prints, so the stage can never contradict the date the
+ * model is reading. Dates are zero-padded YYYY-MM-DD, so a lexicographic
+ * compare IS a chronological one: no Date parsing, no timezone risk.
+ *
+ * Check-out day still counts as in-house: they are in the villa until they go.
+ */
+export function deriveStage(views: readonly StayView[], today: string): Stage {
+  const describable = views.filter((v): v is DescribedStay => v.describable);
+  const live = describable.filter((v) => v.live);
+
+  if (live.some((v) => v.checkIn <= today && today <= v.checkOut)) return 'inhouse';
+  if (live.some((v) => v.checkIn > today)) return 'prearrival';
+  // A departed guest: any describable stay whose check-out is behind us.
+  if (describable.some((v) => v.checkOut < today)) return 'postguest';
+  return 'lead';
+}
+
+/** How near a booking must be for a problem with it to need a person now.
+ * A cancellation from last year is history; one for next week is a phone call. */
+const RELEVANCE_DAYS_BACK = 7;
+const RELEVANCE_DAYS_FORWARD = 180;
+
+/**
+ * Does this guest hold a booking a human must look at? Kept SEPARATE from the
+ * stage on purpose: CH-16 hard-wires the four stage words to its AUTO_SEND_TYPES
+ * (plan.md §8 CH-16), so a cancelled-next-week or multi-room guest must never be
+ * folded into `lead` — that would auto-send pre-sales copy to someone with a
+ * booking problem.
+ *
+ * Keyed on DATES, not on `live`. A cancelled booking is not "live" by status —
+ * yet a cancellation for NEXT WEEK is precisely the case a person must handle,
+ * and an ancient one is not a problem at all (that guest genuinely IS a lead).
+ * Tombstones carry no dates and are ancient by construction, so they never fire.
+ */
+export function needsHuman(views: readonly StayView[], today: string): boolean {
+  const from = shiftDay(today, -RELEVANCE_DAYS_BACK);
+  const to = shiftDay(today, RELEVANCE_DAYS_FORWARD);
+  return views.some(
+    (v) => !v.describable && v.checkIn !== null && v.checkIn >= from && v.checkIn <= to,
+  );
+}
+
+/** Calendar-day arithmetic on a YYYY-MM-DD string. Constructed at UTC midnight
+ * on both sides, so it is pure day maths — no timezone can shift it. */
+function shiftDay(day: string, days: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Live stays, for the guardrail gate and block [5]. */
+export function liveStays(views: readonly StayView[]): DescribedStay[] {
+  return views.filter((v): v is DescribedStay => v.describable && v.live);
+}
+
+/**
+ * The stays worth putting in front of the model, most relevant first (§6.4's
+ * own precedence: active ≥ upcoming ≥ recent past). Capped so block [5]'s token
+ * budget stays bounded by construction.
+ */
+export const STAYS_RENDER_LIMIT = 3;
+
+export function selectStays(views: readonly StayView[], today: string): DescribedStay[] {
+  const describable = views.filter((v): v is DescribedStay => v.describable);
+  const active = describable.filter((v) => v.live && v.checkIn <= today && today <= v.checkOut);
+  const upcoming = describable
+    .filter((v) => v.live && v.checkIn > today)
+    .sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+  const past = describable
+    .filter((v) => v.checkOut < today)
+    .sort((a, b) => b.checkOut.localeCompare(a.checkOut));
+  return [...active, ...upcoming, ...past].slice(0, STAYS_RENDER_LIMIT);
+}

@@ -14,6 +14,7 @@
  * CH-13's task events reuse).
  */
 import { updateGuestPrefs } from '../db/guestMemory.js';
+import { getGuestStays, linkStaysByPhone, recordReferenceAttempt } from '../db/stays.js';
 import {
   claimConversationTurn,
   findStaleConversations,
@@ -23,6 +24,7 @@ import {
   resolveMessageCursor,
 } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
+import { istCalendarDay } from '../lib/time.js';
 import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
@@ -32,6 +34,7 @@ import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
 import { decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
 import { detectLang, detectRegister } from './prefDetect.js';
 import { PHRASEBOOK } from './prompt.js';
+import { deriveStage, needsHuman, projectAll } from './stayView.js';
 import { createHitRecorder } from './telemetry.js';
 import { runClaudeTurn, type TurnDeps, type TurnLogger } from './turn.js';
 
@@ -106,6 +109,29 @@ export async function processConversation(
     msgs.map((m) => ({ id: m.id, createdAt: m.createdAt })),
     ctx.dbNow,
   );
+  // CH-11 booking awareness. Link first, then read: a guest is usually mirrored
+  // BEFORE they ever message us, so their bookings are found on their first
+  // inbound turn. Idempotent (the guest_stays unique), so every turn re-links
+  // for free and a new booking is picked up on the guest's next message.
+  //
+  // WHY here and not in the webhook (§8 CH-11 step 1 says "on any inbound
+  // MESSAGE" — recorded deviation): the webhook's storage runs AFTER the 200 ack
+  // on a path Meta never redelivers, so a throw there is unrecoverable and would
+  // sit upstream of the message insert that the stale-conversation sweeper keys
+  // off. Here it is pre-claim (CH-03 D2) — a throw is retried by pg-boss, and the
+  // turn is the true unit anyway (a 3-message burst needs one link pass).
+  await linkStaysByPhone(deps.db, ctx.conversation.guestId, ctx.guestPhone);
+
+  // ONE read, projected ONCE, fed to BOTH consumers: decidePolicy runs BEFORE
+  // the context builder, so the stage cannot travel the other way — and two
+  // reads could disagree inside one turn.
+  const today = istCalendarDay(ctx.dbNow);
+  const stays = projectAll(await getGuestStays(deps.db, ctx.conversation.guestId), today);
+  const stayContext = {
+    stage: deriveStage(stays, today),
+    needsHuman: needsHuman(stays, today),
+  };
+
   const directive = decidePolicy({
     messages: msgs,
     conversation: ctx.conversation,
@@ -128,6 +154,14 @@ export async function processConversation(
         mustEscalate: plan.mustEscalate,
         unviewableMedia: directive.flags.hasMedia,
         botQuestion: directive.flags.botQuestion,
+        stays,
+        // §6.4: a reference claim is corroborated against the GUEST'S OWN words,
+        // never a model-supplied argument (block [5] shows the model the
+        // attacker-chosen WhatsApp profile name).
+        guestText: msgs
+          .map((m) => guestTextOf(m))
+          .filter((t): t is string => t !== null)
+          .join('\n'),
         // §6.5 #2 "since the guest's previous message" = the cursor row's
         // created_at::text — µs-exact into the SQL evidence query (CH-08).
         // A DANGLING pointer fails CLOSED (audit): null would license C3 from
@@ -196,7 +230,49 @@ export async function processConversation(
     // policy plan's reason wins over the guardrails' (a complaint that also
     // deferred a price still pings ops exactly once).
     const reason = plan.escalate ?? turn?.escalate ?? null;
-    if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail);
+    if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail, stayContext);
+    // CH-11: a booking claim rides its OWN channel. The slot above is
+    // single-valued, so a complaint in the same turn would silently swallow it —
+    // and a booking a human must see is precisely the event to surface. Fired
+    // even when `reason` already escalated.
+    if (turn?.securityEscalate != null) {
+      await escalateToOps(deps, conversationId, turn.securityEscalate, directive.guestTextTail, stayContext);
+    }
+    // CH-11: block [5] tells the model "the team is being brought in" for a
+    // guest holding an undescribable booking (a live cancellation, a multi-room
+    // stay). Nothing else escalates on that path, so the worker MUST — or the
+    // model's line is an unbacked promise (pre-push audit BLOCKER). Only when the
+    // model actually ran (block [5] is shown to no one otherwise) and no other
+    // escalation already covered the turn — one ops ping, deterministic,
+    // independent of whether the model used a referral phrase.
+    // Suppressed only when THIS booking is already what someone was paged about
+    // — never merely because some other reason (a price defer, a complaint) also
+    // escalated, which would drop the booking card entirely. The guardrails now
+    // pick `booking_undescribable` themselves when they know (stayEscalation), so
+    // the two paths agree rather than race.
+    const bookingAlreadyPaged =
+      reason === 'booking_undescribable' || turn?.securityEscalate === 'booking_undescribable';
+    if (turn !== null && stayContext.needsHuman && !bookingAlreadyPaged) {
+      await escalateToOps(deps, conversationId, 'booking_undescribable', directive.guestTextTail, stayContext);
+    }
+    // CH-11: record the reference-claim STRIKE and link audit rows POST-CLAIM
+    // (CH-03 D2: the tool leaves no DB side effect a pre-claim retry could
+    // double-apply — a double strike would falsely lock out an honest guest).
+    // Winning-claim path only.
+    if (turn?.strikeReference != null) {
+      await recordReferenceAttempt(deps.db, {
+        phone: turn.guestPhone,
+        claimedReference: turn.strikeReference,
+        outcome: 'refused',
+      });
+    }
+    if (turn?.linkedReference != null) {
+      await recordReferenceAttempt(deps.db, {
+        phone: turn.guestPhone,
+        claimedReference: turn.linkedReference,
+        outcome: 'linked',
+      });
+    }
     if (intentId !== null && body !== null) {
       await deps.wa.dispatchText({ messageId: intentId, toE164: ctx.guestPhone, body, conversationId });
     }

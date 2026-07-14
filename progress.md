@@ -4,13 +4,30 @@
 
 ## Status
 
-- **Current chunk pointer:** CH-11 (Booking awareness) — next up. **CH-10 (eZee mirror) DONE 2026-07-13 — merged via PR #30, tagged `vCH-10`, CI green on main, LIVE on Railway; a close-out audit then fixed 2 more DEFECTs (PR #32).** `pnpm check` green at **763 tests** (667→752 build, →761 pre-push audit, →763 close-out audit). The poller drained the property's entire un-ACKed backlog in three polls — **62 real items mirrored and ACKed, 0 errors, 0 ops alerts** (22 confirmed stays across Airbnb/Booking.com/makemytrip/go-mmt/Walk-in + 40 cancel tombstones). **Website (Internet Booking Engine) bookings DO reach the queue** — verified end to end on booking `953` (create → mirror → cancel → mirror, dates/amount verbatim); an earlier "they don't" reading was a queue-BATCHING artifact and is retracted. **The pre-push audit's BLOCKER was real and waiting in production:** two genuine multi-room full-cancellations (`877-1/-2/-3`, `894-1/-2/-3`) arrive as suffixed entries with no bare entry. **Env (Railway):** `EZEE_HOTEL_CODE`/`EZEE_AUTH_CODE` + `EZEE_POLLER_ENABLED=1` are SET (byte-exact — a PowerShell BOM corruption was caught by the length check; move secrets with **Node**, never a PS pipe). **The split-brain rule is BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — a dev poller would ACK-consume real bookings the production mirror never sees (runbook §CH-10).
-- **🚨 CH-12 HARD PRECONDITION (do this FIRST, before mounting any `booking.*` worker):** production's `pgboss.job` already holds **62 un-consumed `booking.created`/`booking.cancelled` jobs** from CH-10's backfill of historical bookings (14-day pg-boss retention). The moment CH-12 registers workers on those queues they ALL fire — which would schedule confirmation/pre-arrival messages for bookings that are months old or already cancelled. **CH-12 must purge or date-filter the pre-existing jobs before its workers go live** (`DELETE FROM pgboss.job WHERE name LIKE 'booking.%' AND state='created'`, or gate the handler on `check_in >= today`). The mirror — not the event stream — is CH-12's source of truth (§3.4); the events are only wake-ups. **CH-09 (Long-term memory) DONE 2026-07-13 — merged via PR #27 (`eecbe35`), tagged `vCH-09`, CI green on main, live demo PASSED on the test line** (deployed branch saved two real facts — early-check-in preference + a 21 Aug anniversary; recall worked; the diabetic probe stored NOTHING, `sensitive_rows: 0` verified in the production DB; `guest prefs updated langPref="en"` in prod logs is the CH-09 detection fingerprint; close-out addendum in the entry). `pnpm check` green at **667 tests** (492→630 build, →667 after the pre-push audit fixes — a 24-agent workflow whose 6 serious findings, incl. a money BLOCKER in the entitlement screen, were ALL confirmed and ALL fixed; see the audit addendum). The brain now has §6.4 long-term memory: `remember_fact` saves durable guest facts into `guest_facts` (migration 0004) behind DETERMINISTIC save-time screens (sensitive / instruction-shaped / entitlement — code-side per the CH-07 red-team principle, Paul-approved; any ₹ figure inside a fact is refused outright), naive dedupe and a 50-cap eviction (expired → context → preference → celebration → past_issue, oldest first); block [5] GUEST CONTEXT is the FULL profile (name + register/lang prefs + newest 15 facts grouped by salience, DATA + non-evidence framed, framing in the leak-scan corpus, `remember_fact` a tripwire); cheap post-turn heuristics are the FIRST writers of `guests.register_pref`/`lang_pref`; memory PROMISES ("I've made a note") need a real successful save — the new guardrail-2 class **C4**, the first `TOOL_CLAIMS` registration, licensing C4 ONLY; and the repo's first admin surface `POST /admin/guest-lookup` (phone in the BODY, timing-safe bearer, counted `admin_auth_failed` alerts) mounts only when `ADMIN_ROUTES_ENABLED=1`, with a boot guard refusing the flag without a ≥16-char token. **Local real-model demo PASSED end to end** (fact saved with message provenance + a warm in-voice reply — after two demo-found fixes, see the entry; recall probe answered from memory; the diabetic probe REFUSED with zero rows and an honest no-store reply; admin 401/200; a live register_pref flip). **CH-08 (Short-term memory) BUILT 2026-07-12** on `chunk/CH-08-short-term-memory` — `pnpm check` green at **492 tests** (453→492) after the Paul-requested 27-agent post-build audit (5 lenses + skeptics + critic — all confirmed findings fixed pre-merge; see the audit addendum). The brain now has §6.3 short-term memory: a token-budgeted transcript window (≤30 msgs / ~6k tokens NET of the summary block), block [5]-lite GUEST CONTEXT + the `[EARLIER CONTEXT]` rolling summary (both untrusted-DATA framed, non-evidence for guardrail 2), a nightly 04:00 IST summariser (idle >6h, >20 unsummarised → `MODEL_ID_LIGHT ?? MODEL_ID`, append-compacted under an advance-once CAS) plus the on-demand overflow path with hysteresis, and the CH-06/07 forward pointer closed (`knowledge` threaded through `TurnDeps` — the loadKnowledge() singleton is gone from the turn path). Guardrail-2 evidence got its own indexed query (fixes the CH-07 burst-horizon gap, Paul-approved). **Local 40-message demo PASSED with the real model** (summary carried "tenth wedding anniversary"; the probe recalled it from OUTSIDE the live window). **Merged via PR #24 (`a7d6327`), tagged `vCH-08`, auto-deploy verified (/health uptime reset), and the light live probe PASSED on the test line (Paul, 2026-07-12) — Definition of done fully met.** **CH-07 (Policy engine + full guardrails) DONE** on `chunk/CH-07-policy-guardrails` — `pnpm check` green at **441 tests** (289→441). §6.7 is now deterministic CODE (`brain/policy.ts`: human-request skip-model, complaint must-escalate, the §3.3 cool-off with an id-keyed rate window, caption-aware media fallback, human-active silence), and the §6.5 pipeline is COMPLETE: guardrails 2 (class-based promise integrity — completed-action/dispatch claims need real evidence; a team-referral ESCALATES to make itself true), 4 (24h window derived from the newest batch message — the conversation column is stale pre-claim), 5 (strict full-line identity), 6 (length/format clamps) and 7 (leak scan over the instruction blocks — NOT the KB — plus phone/id patterns) joined 1+3, with every hit persisted to `raw_events` (`source='system'`, Paul-approved §4 deviation; full draft + guestPhone in the payload, `processed=true`). Three latent bugs found and fixed on the way: a LIVE money hole (`₹1.4 lakh` extracted as `1` and matched loose backed integers — a fabricated lakh price would have been sent), the stale-window operand that would block every returning guest once sends were gated, and captioned media being told "mind typing it?". The interim ops escalation now writes claimable `contextKind:'ops_escalation'` evidence rows (the CH-13 convention) and fires BEFORE guest dispatch. Local signed-POST demo verified end to end (human request → exact phrasebook line + evidence row + policy telemetry). A four-agent **post-build audit** (Paul-requested) then attacked every decision against the committed code — 7 fixes landed (see the audit addendum in the CH-07 entry), `pnpm check` green at **453 tests**. **Live three-probe demo PASSED against the deployed CH-07 build (2026-07-12) — Definition of done fully met** (deploy + demo details in the entry's post-deploy addendum). **CH-06 (Knowledge base) DONE** on `chunk/CH-06-knowledge-base` — `pnpm check` green at **289 tests**; `pnpm kb:build` compiles `kb/villas.md`/`policies.md`/`faq.md` from curated `kb/source/*` (+ the RoomTypeList occupancy snapshot), block **[3] KNOWLEDGE now ships inside the cached prompt head** (~**2573 tokens**, budget 6000, version `cb4f0950`), and the guardrail-1 fee exemption is wired — **context-BOUND**: each published fee carries the fee terms of its own sentence, so "an extra adult is ₹1,500" may be sent with no tool call while "Villa B3 is ₹1,500 per night" is still BLOCKED (§6.5's second clause). The AI now answers villa/policy/FAQ questions from the KB; stay prices still come only from `get_quote`. Quirks ship as a template + **labelled placeholder** B3/Apartment-11 notes (real villa-team content = OQ-01, final content pass). **A 7-lens adversarial review ran pre-push and found a real money-guardrail hole (a flat `number[]` whitelist let a fabricated nightly rate through) plus two invented KB claims — all fixed before merge; see the review addendum in the CH-06 entry.** **Paul's live phone demo PASSED (2026-07-12) — Definition of done fully met.** **CH-05 (Price tools) DONE** on `chunk/CH-05-price-tools` — `pnpm check` green at **260 tests**; the brain now has `get_quote`/`get_availability`/`get_booking_link` behind a ≤5-round tool loop, price-integrity + negotiation guardrails, and degraded-mode; the live `/api/quote` shape was cross-checked against the vercel preview (EXACT match, incl. the live `available:false`-on-200 case) and `WEBSITE_BASE_URL` is now boot-required (dev value in local `.env`). Remaining acceptance: Paul's live phone demo (price question → exact preview quote) as the post-merge confirmation. **CH-04 (Brain v1 — voice) DONE — merged to `main` (merge commit `901c04e`, PR #9, CI green Node 22 + 24), tagged `vCH-04`, and deployed live to the test service (`/health` ok).** `pnpm check` green at 188 tests; a live Anthropic integration smoke passed (voice on-target, price deferred with no invented ₹, static prompt head caches — 1655 tokens written on msg 1, read back on msg 2). The service now REPLIES in Nistula's voice instead of echoing; no tools yet, so every factual/price/availability question is deferred (correct until CH-05). **`ANTHROPIC_API_KEY` is required at boot from CH-04** (set in local `.env` + Railway, live-validated). **Remaining acceptance: Paul's live 10-message phone demo on the test line as the post-merge confirmation** (runbook has the red-team probe). CH-00/CH-00b/CH-01/CH-02/CH-03 also merged and tagged (`vCH-00`…`vCH-03`).
+- **Current chunk pointer:** CH-12 (Lifecycle engine) — next up. **CH-11 (Booking awareness) DONE 2026-07-14 — merged to `main`, tagged `vCH-11`, live demo PASSED.** `pnpm check` green at **998 tests** (763→934 build, →957 pre-push audit, →963 pre-merge review, →977 website audit, →982 OQ-19 fix, →998 close-out audit). The brain now sees a guest's bookings: they link on the first inbound turn, project through `stayView.ts` (the ONE door from a booking row to words), and reach the model as block [5] stays + a block [6] stage. `get_booking` takes ONE argument and verifies a reference claim against the guest's OWN typed words. **🚨 THE HEADLINE FINDING: `bookings_mirror` is a CHANGE FEED, not the property's booking book** — it holds only what eZee's queue happened to contain on 13 Jul, so a real in-house guest whose booking predates the poller is staged a LEAD and gets sold the villa they are standing in. `pnpm ezee:reconcile` (BKG-05 ArrivalList, print-only unless `--apply`) measures the gap and hydrates it. Run in production it found **21 of 144** bookings held — but the SHAPE was the point: **future arrivals 18/18 present (0 missing), recent arrivals 15/18 MISSING.** The poller is not losing bookings; the mirror captures them by when they were CREATED, not when the guest ARRIVES. `--apply` recovered 123. **🚨 THE SECOND FINDING — OQ-19, and it blocks the website launch: a guest cannot book a specific HOUSE. eZee holds 8 houses inside 3 room TYPES, so `InsertBooking` has no field for a house at all; eZee auto-assigns lowest-number-first (bookings 953 AND 957 both landed in Apartment 06), and the website's confirmation page then reads eZee's pick back and prints it. A guest can pay for Apartment 09 and be told on their own receipt they have Apartment 06.** So `physical_room_label` is **eZee's GUESS, not the guest's house**: `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`, the AI speaks the villa TYPE and names no house, and **CH-13's task cards are BLOCKED on the OQ-19 re-model, not on hydration**. (I hydrated the 143 labels and briefly armed the AI with them before OQ-19 was understood — see the retraction and the OQ-19 addendum in the entry.) **Live demo PASSED** (runbook §CH-11): three probes on the test line, plus a real eZee booking created → mirrored → cancelled → mirrored, and the OQ-19 fix proven live (the production DB held "Apartment 06"; the AI still refused to name it). **⚠️ ONE LEG WAS NOT RUN LIVE, and is NOT claimed as passed: the stranger-refusal probe** (a DIFFERENT phone claiming someone else's booking reference → the byte-identical refusal + a strike). Meta test numbers can only message allowlisted recipients, so it needs a second allowlisted number Paul does not currently have. It is covered in CI (all six failure paths return the same constant) and asserted in the DB, but **it has never been exercised over the real WhatsApp path** — the one place a leak would actually land. Carry it into the next live-demo window. **CH-10 (eZee mirror) DONE 2026-07-13 — merged via PR #30, tagged `vCH-10`, CI green on main, LIVE on Railway; a close-out audit then fixed 2 more DEFECTs (PR #32).** `pnpm check` green at **763 tests** (667→752 build, →761 pre-push audit, →763 close-out audit). The poller drained the property's entire un-ACKed backlog in three polls — **62 real items mirrored and ACKed, 0 errors, 0 ops alerts** (22 confirmed stays across Airbnb/Booking.com/makemytrip/go-mmt/Walk-in + 40 cancel tombstones). **Website (Internet Booking Engine) bookings DO reach the queue** — verified end to end on booking `953` (create → mirror → cancel → mirror, dates/amount verbatim); an earlier "they don't" reading was a queue-BATCHING artifact and is retracted. **The pre-push audit's BLOCKER was real and waiting in production:** two genuine multi-room full-cancellations (`877-1/-2/-3`, `894-1/-2/-3`) arrive as suffixed entries with no bare entry. **Env (Railway):** `EZEE_HOTEL_CODE`/`EZEE_AUTH_CODE` + `EZEE_POLLER_ENABLED=1` are SET (byte-exact — a PowerShell BOM corruption was caught by the length check; move secrets with **Node**, never a PS pipe). **The split-brain rule is BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — a dev poller would ACK-consume real bookings the production mirror never sees (runbook §CH-10).
+- **🚨 CH-12 HARD PRECONDITION (do this FIRST, before mounting any `booking.*` worker):** production's `pgboss.job` holds **~70 un-consumed `booking.*` jobs and the number GROWS EVERY DAY the poller runs — do NOT trust a figure written here; MEASURE it when CH-12 starts.** (62 at CH-10's close-out → 67 → 70 on 2026-07-14.) — **25 `booking.created` + 42 `booking.cancelled`**, measured 2026-07-14. (Was 62 at CH-10's close-out; the poller kept running and mirrored more. **The CH-11 `--apply` reconcile added 123 mirror rows and left the count at exactly 67** — the "hydration emits no events" invariant, verified in production, not just in tests.) The moment CH-12 registers workers on those queues they ALL fire — which would schedule confirmation/pre-arrival messages for bookings that are months old or already cancelled. **CH-12 must purge or date-filter the pre-existing jobs before its workers go live** (`DELETE FROM pgboss.job WHERE name LIKE 'booking.%' AND state='created'`, or gate the handler on `check_in >= today`). **🚨 AND PURGING THE JOBS IS NOT SUFFICIENT — CH-11's reconcile added 123 HISTORICAL bookings to `bookings_mirror` (arrivals going back months).** The mirror — not the event stream — is CH-12's source of truth (§3.4); the events are only wake-ups. So CH-12's **hourly sweep reads those 123 rows straight out of the mirror and re-creates the work you just deleted**: a purge alone would be undone within the hour, and guests whose stay ended in March would get a pre-arrival message. **The date gate on BOTH the handler and the sweep (`check_in >= today`) is therefore mandatory, not an optimisation** — it is the only defence that survives the sweep. **CH-09 (Long-term memory) DONE 2026-07-13 — merged via PR #27 (`eecbe35`), tagged `vCH-09`, CI green on main, live demo PASSED on the test line** (deployed branch saved two real facts — early-check-in preference + a 21 Aug anniversary; recall worked; the diabetic probe stored NOTHING, `sensitive_rows: 0` verified in the production DB; `guest prefs updated langPref="en"` in prod logs is the CH-09 detection fingerprint; close-out addendum in the entry). `pnpm check` green at **667 tests** (492→630 build, →667 after the pre-push audit fixes — a 24-agent workflow whose 6 serious findings, incl. a money BLOCKER in the entitlement screen, were ALL confirmed and ALL fixed; see the audit addendum). The brain now has §6.4 long-term memory: `remember_fact` saves durable guest facts into `guest_facts` (migration 0004) behind DETERMINISTIC save-time screens (sensitive / instruction-shaped / entitlement — code-side per the CH-07 red-team principle, Paul-approved; any ₹ figure inside a fact is refused outright), naive dedupe and a 50-cap eviction (expired → context → preference → celebration → past_issue, oldest first); block [5] GUEST CONTEXT is the FULL profile (name + register/lang prefs + newest 15 facts grouped by salience, DATA + non-evidence framed, framing in the leak-scan corpus, `remember_fact` a tripwire); cheap post-turn heuristics are the FIRST writers of `guests.register_pref`/`lang_pref`; memory PROMISES ("I've made a note") need a real successful save — the new guardrail-2 class **C4**, the first `TOOL_CLAIMS` registration, licensing C4 ONLY; and the repo's first admin surface `POST /admin/guest-lookup` (phone in the BODY, timing-safe bearer, counted `admin_auth_failed` alerts) mounts only when `ADMIN_ROUTES_ENABLED=1`, with a boot guard refusing the flag without a ≥16-char token. **Local real-model demo PASSED end to end** (fact saved with message provenance + a warm in-voice reply — after two demo-found fixes, see the entry; recall probe answered from memory; the diabetic probe REFUSED with zero rows and an honest no-store reply; admin 401/200; a live register_pref flip). **CH-08 (Short-term memory) BUILT 2026-07-12** on `chunk/CH-08-short-term-memory` — `pnpm check` green at **492 tests** (453→492) after the Paul-requested 27-agent post-build audit (5 lenses + skeptics + critic — all confirmed findings fixed pre-merge; see the audit addendum). The brain now has §6.3 short-term memory: a token-budgeted transcript window (≤30 msgs / ~6k tokens NET of the summary block), block [5]-lite GUEST CONTEXT + the `[EARLIER CONTEXT]` rolling summary (both untrusted-DATA framed, non-evidence for guardrail 2), a nightly 04:00 IST summariser (idle >6h, >20 unsummarised → `MODEL_ID_LIGHT ?? MODEL_ID`, append-compacted under an advance-once CAS) plus the on-demand overflow path with hysteresis, and the CH-06/07 forward pointer closed (`knowledge` threaded through `TurnDeps` — the loadKnowledge() singleton is gone from the turn path). Guardrail-2 evidence got its own indexed query (fixes the CH-07 burst-horizon gap, Paul-approved). **Local 40-message demo PASSED with the real model** (summary carried "tenth wedding anniversary"; the probe recalled it from OUTSIDE the live window). **Merged via PR #24 (`a7d6327`), tagged `vCH-08`, auto-deploy verified (/health uptime reset), and the light live probe PASSED on the test line (Paul, 2026-07-12) — Definition of done fully met.** **CH-07 (Policy engine + full guardrails) DONE** on `chunk/CH-07-policy-guardrails` — `pnpm check` green at **441 tests** (289→441). §6.7 is now deterministic CODE (`brain/policy.ts`: human-request skip-model, complaint must-escalate, the §3.3 cool-off with an id-keyed rate window, caption-aware media fallback, human-active silence), and the §6.5 pipeline is COMPLETE: guardrails 2 (class-based promise integrity — completed-action/dispatch claims need real evidence; a team-referral ESCALATES to make itself true), 4 (24h window derived from the newest batch message — the conversation column is stale pre-claim), 5 (strict full-line identity), 6 (length/format clamps) and 7 (leak scan over the instruction blocks — NOT the KB — plus phone/id patterns) joined 1+3, with every hit persisted to `raw_events` (`source='system'`, Paul-approved §4 deviation; full draft + guestPhone in the payload, `processed=true`). Three latent bugs found and fixed on the way: a LIVE money hole (`₹1.4 lakh` extracted as `1` and matched loose backed integers — a fabricated lakh price would have been sent), the stale-window operand that would block every returning guest once sends were gated, and captioned media being told "mind typing it?". The interim ops escalation now writes claimable `contextKind:'ops_escalation'` evidence rows (the CH-13 convention) and fires BEFORE guest dispatch. Local signed-POST demo verified end to end (human request → exact phrasebook line + evidence row + policy telemetry). A four-agent **post-build audit** (Paul-requested) then attacked every decision against the committed code — 7 fixes landed (see the audit addendum in the CH-07 entry), `pnpm check` green at **453 tests**. **Live three-probe demo PASSED against the deployed CH-07 build (2026-07-12) — Definition of done fully met** (deploy + demo details in the entry's post-deploy addendum). **CH-06 (Knowledge base) DONE** on `chunk/CH-06-knowledge-base` — `pnpm check` green at **289 tests**; `pnpm kb:build` compiles `kb/villas.md`/`policies.md`/`faq.md` from curated `kb/source/*` (+ the RoomTypeList occupancy snapshot), block **[3] KNOWLEDGE now ships inside the cached prompt head** (~**2573 tokens**, budget 6000, version `cb4f0950`), and the guardrail-1 fee exemption is wired — **context-BOUND**: each published fee carries the fee terms of its own sentence, so "an extra adult is ₹1,500" may be sent with no tool call while "Villa B3 is ₹1,500 per night" is still BLOCKED (§6.5's second clause). The AI now answers villa/policy/FAQ questions from the KB; stay prices still come only from `get_quote`. Quirks ship as a template + **labelled placeholder** B3/Apartment-11 notes (real villa-team content = OQ-01, final content pass). **A 7-lens adversarial review ran pre-push and found a real money-guardrail hole (a flat `number[]` whitelist let a fabricated nightly rate through) plus two invented KB claims — all fixed before merge; see the review addendum in the CH-06 entry.** **Paul's live phone demo PASSED (2026-07-12) — Definition of done fully met.** **CH-05 (Price tools) DONE** on `chunk/CH-05-price-tools` — `pnpm check` green at **260 tests**; the brain now has `get_quote`/`get_availability`/`get_booking_link` behind a ≤5-round tool loop, price-integrity + negotiation guardrails, and degraded-mode; the live `/api/quote` shape was cross-checked against the vercel preview (EXACT match, incl. the live `available:false`-on-200 case) and `WEBSITE_BASE_URL` is now boot-required (dev value in local `.env`). Remaining acceptance: Paul's live phone demo (price question → exact preview quote) as the post-merge confirmation. **CH-04 (Brain v1 — voice) DONE — merged to `main` (merge commit `901c04e`, PR #9, CI green Node 22 + 24), tagged `vCH-04`, and deployed live to the test service (`/health` ok).** `pnpm check` green at 188 tests; a live Anthropic integration smoke passed (voice on-target, price deferred with no invented ₹, static prompt head caches — 1655 tokens written on msg 1, read back on msg 2). The service now REPLIES in Nistula's voice instead of echoing; no tools yet, so every factual/price/availability question is deferred (correct until CH-05). **`ANTHROPIC_API_KEY` is required at boot from CH-04** (set in local `.env` + Railway, live-validated). **Remaining acceptance: Paul's live 10-message phone demo on the test line as the post-merge confirmation** (runbook has the red-team probe). CH-00/CH-00b/CH-01/CH-02/CH-03 also merged and tagged (`vCH-00`…`vCH-03`).
 - **LIVE on Railway (2026-07-10):** service `nistula-assistance-` (trailing hyphen is the real service name) at **`https://nistula-assistance-production.up.railway.app`**, `/health` healthcheck gate via committed `railway.json`. Meta webhook wired end-to-end: callback verified, `messages` field subscribed, and the **WABA-level `subscribed_apps` link created via API** (the dashboard never creates it — see CH-02 entry). Live round trip proven: guest message → DB → `sendText` reply → phone; statuses walked the rank lattice; dedupe replay was a no-op. **Auto-deploy from main: ON and PROVEN (2026-07-11, Paul-authorized, done via CLI):** the repo had simply been DISCONNECTED from the service (research vs Railway docs: `railway up` never pauses triggers; old deployments' branch metadata is "from the last build, not proof of active connection"). Reconnected with `railway service source connect --repo chinmoypaul8897/nistula-assistance- --branch main --service nistula-assistance-` — connecting immediately auto-built and shipped main head (`eec8b0f`) to SUCCESS, which IS the live verification; every merge to main now ships itself behind the `/health` gate, no more post-merge `railway up`. Railway CLI service link persisted in-repo 2026-07-11 (`railway service` — without it, service-less CLI calls hang on an interactive picker). Stray project `fantastic-motivation`: DELETED via `railway delete` 2026-07-11 (Paul-authorized); Railway grants a 48h grace window (`deletedAt: 2026-07-13`) so it lingers in project lists until then — nothing left to do.
 - **Env values (2026-07-11):** local `.env` holds `NODE_ENV=development`, `PORT=3100` (3000 is owned by another local project), `DATABASE_URL` → local docker Postgres, all four WA values + `ANTHROPIC_API_KEY`. Railway service variables hold the four WA values + `NODE_ENV=production` + `TZ` + `ANTHROPIC_API_KEY` (set via the CH-02 stdin-script pattern — values never transit chat/shell history; token rotation reuses it; the key travelled clipboard → in-process script → both stores, validated 200 against `GET https://api.anthropic.com/v1/models`, Railway value VERIFIED, clipboard cleared, script deleted). `WA_VERIFY_TOKEN` ROTATED 2026-07-10 after Meta's handshake wrote it into pre-fix request logs (logging fixed same session; Meta still holds the OLD token and only needs the new one at the next webhook-config edit — paste from `.env` then). Test number `+1 555-179-8672`; WABA ID `1377084767847948`. **CH-09 addition (local `.env` ONLY):** `ADMIN_ROUTES_ENABLED=1` + a generated `ADMIN_BEARER_TOKEN` for dev poking — Railway does NOT carry them; production admin stays disabled unless actively debugging (runbook §CH-09).
 - **Standing dev workflow (CH-02 decision D8):** Meta's callback points permanently at the Railway domain — no tunnels, ever. Daily iteration = fixtures + signed local POSTs; end-of-chunk live demo = `railway up` the chunk working tree PRE-merge (doubles as env-completeness check); merge → auto-deploy ships identical content. Binding topology rule (D2): EVERY outbound anywhere goes through `wa/client.ts` `sendText`.
 - **How to run:** `docker compose up -d postgres` → `pnpm dev` (migrations apply at boot) → `GET http://localhost:3100/health`. Gate: `pnpm check` (typecheck + lint + tests incl. DB suite). CI runs the same on Node 22 + 24 with a postgres service container.
 - **Open-questions register:** all human-answerable inputs (villa-team quirks, missing fees, the deposit-model decision, facts to confirm) live in [`docs/open-questions.md`](docs/open-questions.md) as **OQ-01…OQ-14** — Paul fills answers there; the KB export they feed is `nistula-kb-export/`.
+- **⚑⚑ STANDING DECISION (Paul, 2026-07-13) — BUILD THE TECH FIRST; ASK THE BUSINESS ONCE, AT THE END.**
+  Paul named the root cause of a pattern that has bitten repeatedly: **the tech side does not have
+  transparency into the business**, so questions about how Nistula actually operates (a fee nobody
+  published, a process nobody wrote down, a villa fact only the team knows) keep surfacing mid-build.
+  It is structural, it will keep happening, and guessing harder will not fix it. **The rule:** (1) a
+  missing BUSINESS answer NEVER stops a chunk — ship a **fail-closed default** (the AI refuses, defers,
+  or brings the team in; it never invents); (2) log the question in [`docs/open-questions.md`](docs/open-questions.md)
+  IMMEDIATELY, with the four things that make it answerable — *what we need to know · why it matters to
+  a real guest · what we shipped meanwhile · what changes once they answer*; (3) when the engineering is
+  done, that register becomes **ONE properly-framed document** for the villa team / front desk / owner —
+  not a trickle of half-questions over months; (4) then the content pass: answers land, the KB rebuilds,
+  the fail-closed defaults become real rules, and content-dependent acceptance re-runs before go-live.
+  **Unchanged (plan §0):** a missing ENGINEERING decision or EXTERNAL API CONTRACT still stops the
+  session — those are ours to resolve (read the authoritative reference, probe, or ask Paul). That is a
+  different animal from "what does the business actually do?". **Why this is safe:** every unknown in
+  the register is already sitting behind a guard in the code. The system is HONEST today; the answers
+  make it BETTER, not CORRECT — so we are never blocked, and the team is never rushed.
 - **⚑ STANDING DECISION (Paul, 2026-07-11) — content inputs are NOT chunk blockers.** The OQ register (`docs/open-questions.md`) is deferred to a **FINAL CONTENT PASS after the last engineering chunk**. Those items (quirks, real villa copy, missing fees, facts to confirm) depend on slow external processes — the villa team and website-content finalisation — so **every chunk session builds its engineering with the content available NOW** (real policies/FAQ/occupancy + placeholder villa copy + stubbed/empty quirks), wires the seam so real content drops in later, and records what's stubbed. **Do NOT stop or defer a chunk because an OQ is unanswered.** This overrides §0's "stop on a missing decision" **only for these content/data inputs** — a genuine missing ENGINEERING decision or external API contract still stops per §0. In the final pass the OQ answers are loaded, the website export re-run, and the content-dependent acceptance (CH-06's quirk-aware demo, CH-19's six scenarios) validated — before go-live. Concretely: CH-06 ships the `kb-build` pipeline + block [3] wiring + the guardrail-1 whitelist seam against current content; it is DONE when the machinery + real policy/FAQ answers work, not when every villa's prose/quirks are final.
 
 ## Table of contents (chunk ledger)
@@ -30,7 +47,7 @@
 | CH-08 | Short-term memory | ✅ DONE 2026-07-12 (PR #24, vCH-08; audit + live probe passed) | [↓](#ch-08--short-term-memory-transcript--rolling-summary--built-2026-07-12) |
 | CH-09 | Long-term memory | ✅ DONE 2026-07-13 (PR #27, vCH-09; audit + live demo passed) | [↓](#ch-09--long-term-memory-guest-facts--profile-block--built-2026-07-12) |
 | CH-10 | eZee mirror | ✅ DONE 2026-07-13 (audit + live run: 62 real items mirrored) | [↓](#ch-10--ezee-mirror-poller--normalisation--built-2026-07-13) |
-| CH-11 | Booking awareness | ⬜ pending | |
+| CH-11 | Booking awareness | ✅ DONE 2026-07-14 — merged, tagged `vCH-11` (998 tests; live demo PASSED; §5.4 **INVERTED** — the AI names NO house at all, see 🚨 OQ-19) | [↓](#ch-11--booking-awareness-the-guest--booking-bridge--built-2026-07-13) |
 | CH-12 | Lifecycle engine | ⬜ pending | |
 | CH-13 | Staff tasks | ⬜ pending | |
 | CH-14a | Takeover + escalation SLA | ⬜ pending | |
@@ -825,3 +842,440 @@ Paul asked for a full checkup before closing the session: "is it all BUILT prope
 **Recorded, NOT fixed (deliberate):** `bookings_mirror.raw` keeps real guests' `Address`/`City`/`State`/`Zipcode`/`Gender` (only card + identity-document fields are stripped) and `bookings_mirror` is **absent from CH-18's DELETE_GUEST list** — an erasure gap CH-18 must close · a malformed `amount` from eZee would fail the numeric column and become an un-ACKable poison pill (no validation today; would alert and retry forever) · true-partial cancels, and full cancels split across two polls, are ACKed but never flipped (alert-only; dormant until CH-12) · `turn.ts`/`worker.ts` and now `poller.ts` breach the ~300-line soft cap · commit `c6598d3` (a one-line CLAUDE.md fix) was pushed **directly to main without a PR** — a §3.6 deviation, recorded rather than hidden · the `vCH-10` tag predates the IBE correction, so `git show vCH-10:progress.md` still yields the retracted claim (main is correct; the tag is a snapshot).
 
 **Trap for future sessions:** **never run two `vitest` processes at once** — the DB suites share one `nistula_test` database and TRUNCATE each other's tables, producing ~30 phantom failures across unrelated files. If the suite fails locally but CI is green, suspect this first.
+
+---
+
+### CH-11 · Booking awareness (the guest ↔ booking bridge) — BUILT 2026-07-13
+
+*(`pnpm check` green at **957 tests** (763→934 build, →957 pre-push audit) on `chunk/CH-11-booking-awareness`, 9 commits. The chunk plan was adversarially reviewed BEFORE building by a **105-agent workflow** (5 senior lenses → 3 skeptics per serious finding → completeness critic): 33 BLOCKER/DEFECT findings raised, **16 survived skepticism**, and the critic found the one thing nobody had questioned — CH-11's own premise. A **28-agent decision panel** (pragmatist / safety engineer / systems architect + a judge per question) then settled the four load-bearing decisions, **all Paul-approved 2026-07-13**. Remaining acceptance: Paul's live demo (runbook §CH-11).)*
+
+**Built:**
+- **`src/brain/stayView.ts`** — THE only door from a `bookings_mirror` row to words. Block [5], `get_booking`, the admin route and (later) CH-12/13/16 all project through it. A row is **describable** only if ALL hold: status ∈ `confirmed|modified|checked_in|checked_out` · both dates present · exactly one room (counted from `raw.BookingTran`) · no sibling rows sharing a reference base. It NEVER emits the amount, the eZee guest name/email, the meal plan, or a unit label unless `physical_room_label` is set (§5.4). `deriveStage` (`lead|prearrival|inhouse|postguest`) reads **DATES, not status**; `needsHuman` is a SEPARATE flag (CH-16 hard-wires the four stage words to `AUTO_SEND_TYPES`, so a broken booking must never fold into `lead`).
+- **`src/db/stays.ts` + migration `0006_reference-attempts`** — `getGuestStays`, `linkStaysByPhone` (the INBOUND direction CH-10 lacked; most guests are mirrored before they ever message), `getMirrorForClaim`, `linkStayByReference`, and the 3-strike log. A row with `guest_phone IS NULL` links to NOBODY — reachable only through a verified claim.
+- **`src/brain/referenceClaim.ts` + `src/brain/tools/getBooking.ts`** — §6.4's tool with **ONE argument** (`reference?`) and **one frozen refusal**. See Decisions.
+- **`src/brain/stayGuards.ts`** — the stay-affirmation gate (Decision 2), wired into the §6.5 pooled regenerate → defer path with its own `stay_integrity` telemetry rule and `STAY_NUDGE`.
+- **`scripts/ezee-reconcile.ts` (`pnpm ezee:reconcile`)** + `client.fetchArrivals` (BKG-05 `ArrivalList`, verbatim per 04_bookings.md:1854) — the answer to "is our mirror complete?".
+- **Wiring:** the worker does ONE pre-claim link+read+project, fed to BOTH the policy pass and the turn; block [4] gains five booking rules; block [6] gains the stage line; `PHRASEBOOK.bookingLookupFailed` lands §6.6's missing line; `EscalationReason` gains `booking_reference` (its own channel) + `booking_undescribable`; admin's `stays: []` stub becomes the real PROJECTED join.
+- **Tests 763→957:** stay-view (40) · db-stays (11) · reference-claim (26) · tools-get-booking (16) · stay-guards (57) · ezee-reconcile (11) · ch11-defect-fixes (7) · brain-worker-stays (9, the real worker end to end) · red-team 30–37.
+
+**Decisions made while building** (the four Paul-approved via AskUserQuestion after the decision panel; the rest builder-recorded):
+- **D1 · The mirror is a CHANGE FEED, not the booking book (Paul).** It holds only what eZee's queue contained on 13 Jul. Nothing establishes those are the property's live bookings. → `pnpm ezee:reconcile` (BKG-05 diff, print-only unless `--apply`, hydrating via BKG-03 — the only call that returns a room). It never ACKs, so it cannot consume the shared queue and is safe to run locally; it takes no boss in its dependency set BY CONSTRUCTION, so it cannot touch CH-12's 62 un-consumed jobs. Both pinned by tests.
+- **D2 · An ASSERTION gate, not an evidence licence (Paul; I resolved a split panel).** Registering `get_booking → C1` would cross-license **"the team has been informed"** — `covered()` licenses by CLASS and C1's regex packs `confirmed` in with `informed`/`arranged`. With CH-13 unbuilt that is a pure lie, on the commonest in-stay path. And a 5th class would have needed object-anchored span masking to separate "your BOOKING is confirmed" from "your LATE CHECKOUT is confirmed" — a denylist, the exact failure class this repo has shipped three times. So `get_booking` is registered in **NO claim class**, C1 is UNTOUCHED, and a separate deterministic check asks *is it TRUE?* rather than *did a tool run?* — reading the mirror's own status enum in the same pass that fills block [5], so the gate and the prompt can never disagree.
+- **D3 · The tool takes ONE argument (Paul).** §6.4 says the GUEST must state the name and check-in date and that the WhatsApp profile name is NEVER used — but tool arguments are authored by the MODEL, and block [5] prints the (attacker-chosen) pushname into the same prompt. A four-argument tool would let the model fill `name` from the line we just showed it, and no code could tell the difference. So the check runs the other way: we take the name/date **we** hold and look for them in the words the **guest** typed. Pinned by a test that sets the attacker's pushname to the real booking name and still gets a refusal.
+- **D4 · Drop the meal plan; fail closed on cancelled and multi-room (Paul).** eZee's own label ("European Plan") is a trap — the model would translate it into "breakfast is included", and NO guardrail checks an inclusion claim (guardrail 1 checks rupees; guardrail 2 checks actions). OQ-16 filed. Cancelled/multi-room rows are announced to the model WITHOUT detail and escalated: silence would make the AI treat a guest with a booking problem as a fresh sales lead.
+- **The complaint heuristic is deliberately NOT narrowed** (recorded deviation from §8 step 1 + the `TODO(CH-11)` in policy.ts, which is rewritten so a future session cannot follow it off the cliff). §6.7 says "negative + stay context"; read literally that makes an existing safety guard NARROWER, because linking is phone-only and an OTA-masked guest (Airbnb/Booking.com — the bulk of this property's sources) can never link. An angry in-house guest we cannot see would STOP being escalated. **Stay context may only ever ADD urgency, never remove it.**
+- **Linking runs in the WORKER, not the webhook** (deviation from step 1's "on any inbound MESSAGE"): the webhook stores AFTER the 200 ack, on a path Meta never redelivers, so a throw there is unrecoverable AND would sit upstream of the message insert the stale-conversation sweeper keys off. The worker's pre-claim region is retry-safe, and the turn is the true unit anyway.
+- Refusals escalate on their OWN channel: the worker's escalation slot is single-valued (`plan.escalate ?? turn.escalate`), so a complaint in the same turn would silently swallow a security alert.
+- The 3-strike counter lives in **Postgres**, rolling 24h — not the in-memory window CH-07's cool-off uses. That one guards politeness; this one guards another guest's booking, we redeploy on every merge to main, and a restart would hand an attacker three fresh guesses at numbers that are short and near-sequential.
+
+**Observed reality:**
+- **`physical_room_label` is null on ALL 62 production rows and always will be from the poller** (BKG-02 carries no RoomID — CH-10 confirmed on all 22 reservations). So the mirror **cannot tell B3 from C1 today.** §5.4 makes type-phrasing correct and honest, so CH-11 ships it — but product-picture S3/S5 and CH-13's task card need the unit ("send someone to a Nistula Villa" names four different houses). `--apply` hydrates it via BKG-03. The POLICY question (when does eZee assign a unit; may we name it pre-arrival?) is **OQ-15**.
+- **Guardrail 2 never caught STATE framing.** Verified against the real lexicon: "Your booking is confirmed", "You're all set for 20–22 Dec", "We have you down for the 20th" ALL passed with zero evidence. Only the perfect passive was caught. State framing is exactly the register the model speaks in once it has booking data — and 40 of 62 mirror rows are cancellations. This was a live hole before CH-11 existed; CH-11 opened the door to it and closes it.
+- **A reservation number extracted as a ₹ amount.** eZee's ids here are 3-digit (953, 877) — inside the bare-integer band, above the floor. "Your booking 953 is confirmed and the balance is payable at check-in" deferred with the RATE line and raised a bogus 'price' escalation. Masked globally (a within-sentence lookbehind fails: the splitter breaks on the period in "ref no." — the CH-07 colon lesson, one abbreviation over).
+- **The enrichment was self-erasing.** `physicalRoomLabel` is a diff field and polls carry none, so the next 60s poll would wipe every hydrated label AND emit a phantom `booking.modified` into the queue CH-12 must purge. A null from a poll now means "no room information", never "unassigned".
+- **The worker e2e caught a bug in my own code:** `needsHuman` keyed on the status-derived `live` flag, so a booking **cancelled for next week** needed no human — because a cancellation is not "live". Exactly backwards. It now keys on DATES (a week back to six months forward); an ancient cancellation is not a problem, and a dateless tombstone never fires.
+- The escaping trap struck again (the 4th chunk running): a raw combining-diacritic char class landed in `referenceClaim.ts`. Caught by a byte-sweep before commit and rewritten as `\u` escapes. **The sweep is not optional.**
+- BKG-03 stars `BookingId` as REQUIRED (04_bookings.md:1456), so a GuestMobileNo-only lookup is not a documented shape — the CH-10 TODO asking to "probe whether BookingId can be omitted" is hereby answered: we never send one. BKG-05 `ArrivalList` (date range) and BKG-19 `BookingList` (`ArrivalFrom`/`ArrivalTo`) both exist and are reads.
+
+**Deviations from plan.md:** the four Paul-approved decisions above · **§8 CH-11's mandated test "masked-phone OTA guest links on first message" is deliberately INVERTED** — a mirror row with `guest_phone IS NULL` links to NOBODY, and the test asserts exactly that. WHY: the only keys that could match such a row to a first-time WhatsApp message are the eZee name (matched against the **attacker-chosen WhatsApp profile name**, which §6.4 bans outright) or an email WhatsApp never gives us. Auto-linking it would BE the mechanism §6.4 forbids. The satisfiable case — a mirror row carrying the guest's REAL phone but no `guests` row at poll time — does link on first inbound, and is tested. Masked rows are reachable only through the verified reference claim. (Pre-merge review named this; it was in the prose and not in this field, where a planning chat would look.) · linking in the worker, not the webhook · the complaint heuristic NOT narrowed (§8 step 1) · block [5] carries no "plan" and no "countdown" (§8 step 3 — OQ-16; the countdown is derivable by the model from the dates it already has) · `get_booking` returns no ₹ (the plan never asked it to; recorded because guardrail 1 would have BACKED any figure it returned) · new leaf files `stayView/stayGuards/referenceClaim.ts` + `db/stays.ts` (§3.2 lists none; the rupees/summaries precedent) · `reference_attempts` table (§4 lists none) · `EscalationReason` +2 values · `GuardrailRule` +`stay_integrity` · `ToolContext` gains `booking` + an optional `warn` on its logger · `TurnResult` gains `securityEscalate` · `PolicyInput` gains `stayContext` · `client.fetchArrivals` (BKG-05, new).
+
+**Open questions:** none blocking. **OQ-15** (unit assignment: when does eZee assign one, and may the AI name it pre-arrival?) and **OQ-16** (the RateplanCode → ep/cp map, which the website codebase must already hold) are filed rather than improvised — both are POLICY/CONTRACT questions, not content inputs.
+
+**Carried forward from CH-10 (recorded, NOT built in CH-11):** the FetchSingleBooking re-sync for `ezee_partial_cancel_suspect`/`ezee_cancel_conflict` rows — CH-11's reconcile hydrates MISSING and UNLABELLED bookings, it does not re-verify a suspect cancel. Those stay a hand job (runbook §CH-10 corrected accordingly; a re-sync is a CH-17 candidate). The eZee degraded tracker also stays deferred, and the deferral still holds for the same reason: `get_booking` reads the MIRROR, not eZee live, so nothing guest-facing depends on eZee being up.
+
+**Forward pointers (do not lose):** **CH-12** — the 🚨 `booking.*` job precondition still stands, but **MEASURE the count, do not trust a number written here** (62 → 67 → ~70; it grows every day the poller runs). **The reconcile also put 123 HISTORICAL bookings into the mirror**, so purging the jobs is NOT sufficient on its own: CH-12's hourly sweep reads the MIRROR, and would happily schedule a pre-arrival message for a stay that ended in March. **Date-gate the sweep AND the handler (`check_in >= today`) — treat that as mandatory, not an optimisation.** The scheduler creates guests from mirror rows (superseding CH-10's no-auto-creation) and MUST consume through `stayView` — never a raw row. **CH-13** — register `create_staff_task → {C1,C2}` in TOOL_CLAIMS; block [5]'s `Open tasks:` stub is the last one left. **🚨 The task card CANNOT be built on `physical_room_label` — it is eZee's arbitrary auto-assignment, NOT the house the guest booked (OQ-19).** A card routed on it sends housekeeping to the wrong door. CH-13's villa routing is **BLOCKED on the OQ-19 PMS re-model**, not on hydration — an earlier version of this very line told you to run `--apply` so the card "can name a villa", and that instruction was wrong. **CH-14** — `escalate_to_human → {C3}`; `booking_reference` and `booking_unit_unknown` are already EscalationReasons. **CH-16** — the stage→reply_type map (lead→presales, prearrival→arrival, inhouse→instay, postguest→poststay); `needsHuman` is the separate flag that keeps a broken booking out of auto-send. **CH-18** — DELETE_GUEST must erase `guest_stays` AND `reference_attempts` (both guest-keyed; `deleteReferenceAttempts` exists).
+
+**How to verify:** `pnpm check` (998 tests: the status×dates×rooms matrix, the byte-identical-refusal invariant across all six failure paths, the pushname attack, the cross-licensing regression, both stage boundary days, and the never-ACK/no-event reconcile invariants) · local: `docker compose up -d postgres` → `pnpm dev` (migration 0006 applies) → seed a mirror row on a fixture phone → signed POST "when is my check-in?" → correct date, villa TYPE, no invented ₹ · **live (Paul, pre-merge `railway up`, /health uptime reset FIRST):** the runbook §CH-11 probe — starting with `pnpm ezee:reconcile`, whose MISSING count is this chunk's headline finding.
+
+---
+
+#### CH-11 pre-push adversarial audit (2026-07-13) — the recurring failure class, caught a FOURTH time
+
+Paul's standing recipe, run against the COMMITTED code (not the plan): senior lenses over the full
+diff, every BLOCKER/DEFECT attacked by independent skeptics, then a completeness critic. **2 BLOCKERs
++ 4 DEFECTs confirmed, ALL fixed** (`pnpm check` 934 → **957**). Worth remembering:
+
+1. **BLOCKER — `live` was keyed on STATUS, so a PAST stay read as upcoming.** The build already knew
+   that no production row is ever `checked_in` (a front-desk check-in never comes down the queue) and
+   derived the STAGE from dates because of it. But the per-row `live` flag — which gates the
+   stay-affirmation guard, block [5]'s "(a past stay)" note, and `get_booking`'s status label — was
+   still `LIVE_STATUSES.includes(status)`. A guest whose stay ended in March is still `confirmed`
+   (no check-out event ever arrives either), so they counted as LIVE: the guard that stops the AI
+   inventing a booking was **DISARMED for every past guest**, which is precisely the win-back
+   population CH-15 exists to message. **The same failure class as CH-06's flat whitelist, CH-09's
+   entitlement screen and CH-10's resurrection denylist — an enumerated rule quietly narrower than
+   its own contract. Fourth time. The lesson did not transfer because the FIRST derivation (the
+   stage) got it right and the SECOND (the flag) was written from the status enum.** Fix: `live` =
+   a live status AND not already ended.
+2. **BLOCKER — block [5] promised a human who was never called.** For an undescribable booking the
+   block tells the model "the team is being brought in", and `get_booking`'s refusal says a colleague
+   is looking into it. But **nothing escalated** unless the model happened to use a C3 referral
+   phrase that guardrail 2 then made true. A guest with a cancelled booking for next week could be
+   told a person was on it while no person ever heard. Fix: the worker escalates deterministically on
+   `needsHuman`, on its own reason, whatever the model writes.
+3. **DEFECT — the stay-affirmation lexicon was a denylist narrower than its "broad" contract.**
+   Fifteen phrasings **block [4] itself teaches** ("Your stay runs 20–22 Dec", "I can see your
+   reservation", "Your villa is ready", "check-in on the 20th") sailed straight through for a guest
+   with no booking — the module's own docblock claimed a broad lexicon. Widened and pinned by the
+   exact register that exploited it, while keeping a lead's pre-sales prose and the "check-in is from
+   3 pm" policy answer un-tripped (the over-fire is as real a bug as the under-fire).
+4. **DEFECT — the 3-strike counter could double-charge an honest guest.** The strike was written
+   PRE-CLAIM inside the tool, so a `converse()` failure and a pg-boss retry would run the tool loop
+   twice and bank two strikes for one typo. Fix: the tool SIGNALS; the worker records once,
+   post-claim (CH-03 D2 — the same rule the whole worker is built on, missed inside a tool).
+5. **DEFECT — an owner was punished for asking about their own cancelled booking**, and a date RANGE
+   ("26–28 August" — how people actually state a stay) never verified, because only single dates
+   parsed. Also an ISO date was double-counted as a phantom second date, pushing honest two-date
+   messages over the dictionary-attack cap.
+6. **Escalation reasons split** so no ops card lies: `booking_reference` (an identity probe),
+   `booking_undescribable` (a real booking a human must handle), `booking_overclaim` (the AI insisted
+   on a booking the guest does not hold — which may mean **our mirror is missing it**, the D1 gap).
+
+**The meta-lesson, recorded because it is now a pattern:** every one of the four recurrences was a
+rule written from an ENUM rather than from the CONTRACT the enum was standing in for. `status` is not
+`live`. A whitelist of figures is not "fees published in policies.md". A list of forbidden statuses is
+not "proof of life". When the next chunk guards something, write the predicate from the SENTENCE that
+states the rule, and let the enum be an implementation detail underneath it.
+
+---
+
+#### CH-11 pre-merge review (2026-07-13) — 3 senior reviewers; 3 more real bugs, one live in production data
+
+After the pre-push audit, three independent senior engineers were put on the remaining open
+questions (the villa-unit path, completeness vs plan §8's DoD, and the mirror gap). Two returned
+"merge: NOT BLOCKED". The completeness reviewer returned **NOT MERGE-READY** and was right.
+`pnpm check` 957 → **963**. What it found:
+
+1. **A reservation is a FAMILY of rows, not one exact id — and the exact-match read punished the
+   OWNER.** `get_booking` resolved a claimed reference with an equality match on
+   `ezee_reservation_no`. But eZee delivered bookings **877 and 894 to this property as
+   `877-1/-2/-3` with NO bare entry** (the CH-10 audit BLOCKER — those rows are in the mirror right
+   now). A guest typing their own number, "877", therefore matched nothing, failed verification,
+   **took a strike toward the identity lockout, and was paged to ops as a suspected probe.** The
+   fix (`getClaimFamily`) resolves the bare id and every `-N` sibling, and links all of them.
+2. **The same read made the tool a SECOND DOOR past the stay view.** It projected each row as its
+   own only sibling (`project(row, [row], today)`), so the sibling guard was **structurally
+   unreachable**: block [5] refused to describe a multi-room booking while `get_booking` described
+   it cheerfully from the first room's columns. The module whose entire premise is *"the ONE door
+   from a mirror row to words"* had a second door, opened by its own caller. This is the
+   enumerated-rule failure class in a new disguise — the rule was right, the CALLER bypassed it.
+   **Lesson: a "single door" is only single if every caller is forced through it; a guard that
+   takes its own context as a parameter can be handed a context that disarms it.**
+3. **An ops card that lied in exactly the case that matters.** A guest holding a cancellation for
+   next week has no LIVE stay, so a booking affirmation deferred with `booking_overclaim` — whose
+   card reads *"our system shows none on this number"*. False: the system shows a cancellation. And
+   setting that reason **suppressed** the truthful `booking_undescribable` escalation entirely.
+   `hasLiveStay` conflated "holds nothing" with "holds something we may not describe"; they now
+   page separately (`stayEscalation`).
+4. **`stayContext` was DEAD.** `policy.ts` declared it, never read it, and the comment claimed it
+   "rides the directive". The Paul-approved deviation it stood for — *stay context may only ever ADD
+   urgency, never remove it* — therefore bought **nothing**. It is real now: the ops card tells the
+   human that the guest complaining about a broken AC **is standing in one of our villas right now**.
+5. **Block [6] asserted something we cannot know.** *"This guest has no booking with us yet"* is a
+   CLAIM; our mirror is a change feed, so a real guest we never captured lands there too — and
+   telling the model they have no booking is precisely what makes it pitch a villa to someone
+   standing in one. It now says what we can SEE, and points the model at the recovery.
+6. Smaller: `get_booking` joined the leak tripwires (matched **longest-first with the hit masked**,
+   or it would double-fire inside `get_booking_link`); the §6.6 booking-lookup line was dead and is
+   now in the phrasebook block; `--refresh` exists because hydration was fill-if-null **while the
+   poller COALESCEs a null-from-poll** — so a villa label, once written, was never revisited by
+   anything, and a guest moved B3→C1 would be told the old villa forever.
+
+**The two "NOT BLOCKED" reviews still changed the record, and their corrections matter more than
+their verdict:**
+- **The reconcile fixes the MIRROR, not the RECOGNITION.** Linking is phone-keyed, and this
+  property's confirmed bookings are largely Airbnb / Booking.com / MakeMyTrip — whose numbers eZee
+  masks, giving `guest_phone = NULL`, which links to **nobody by design** (§6.4 forbids the only
+  other key, the attacker-chosen WhatsApp name). So `--apply` can bring the mirror to 100% and **the
+  Airbnb guest standing in Villa B3 is still staged a lead** until they quote their reference. The
+  D1 narrative previously implied the reconcile solved that. It does not. Runbook corrected.
+- **Do not schedule the reconcile.** A scheduled writer racing the 60s poller would write a genuinely
+  NEW booking's row first; the poller's next poll would then diff to `unchanged`, and
+  **`booking.created` would never be emitted** — CH-12's confirmation for that guest silently never
+  fires. Eventless-by-construction is right for a one-shot over history and a latent
+  lifecycle-suppression bug on a cron. It stays a hand-run script.
+- **The `DATABASE_URL` footgun**, now loud in the runbook: the script reads the LOCAL `.env`, so an
+  unguarded run diffs eZee against an **empty local mirror**, reports "MISSING: everything", and
+  `--apply` hydrates the **wrong database**.
+- **OQ-17 filed** (→ CH-14): on the *well-behaved* path — the model honestly says "I can't see a
+  booking; what's the name and check-in date?" — **nothing deterministic escalates**, and no tool can
+  act on a name + date. The safe path and the escalating path are the same path *by luck of
+  phrasing*. That inverts this repo's own rule that safety is code, not model behaviour.
+
+---
+
+#### CH-11 · the website audit (2026-07-13) — §5.4 becomes CODE, and OQ-16 is closed by NOT building it
+
+Paul ran the stored read-only extraction prompt against `chinmoypaul8897/nistula-website`. It
+answered two open questions and produced one finding that changed the code.
+
+**1. OQ-16 (RateplanCode → ep/cp): CLOSED — "do not build the mapping." It does not reliably exist.**
+- The website's own EP/CP resolution is **POSITIONAL, not semantic**: `plan === 'cp' ? villa.extraRatePlans[0].id : villa.ratePlan.id`. Nothing checks that `extraRatePlans[0]` IS the CP plan — eZee's MASTER flag is absent on this property.
+- **CP is not sellable.** The create path never selects a plan at all: it always sends the primary (EP) rate plan, and `BookingRequest` has no `ratePlanId` field. There is no channel by which a plan choice could reach eZee. A CP price is obtainable only from a hand-crafted read-only `/api/quote?plan=cp`, and that price can never become a booking.
+- The 19-digit rate-plan ids are **not in the website's runtime code at all** — only in a point-in-time doc snapshot. Rate plans are per ROOM TYPE, not per villa.
+- An OTA booking (Airbnb / Booking.com — most of this property's volume) can carry a rate plan we have never seen.
+**So CH-11's D4 decision to ship no meal plan was right, and is now permanent.** OQ-07 (breakfast) is answered by the same audit: EP only. Our KB already carries the website's published copy verbatim — *"accommodation only unless breakfast is specifically listed in the booking"* — so **no KB change was needed.** (The site itself contradicts that with a "Breakfast" amenity chip and a "Breakfast sorted" marketing pill; neither is truth, and the concierge answers from the KB.)
+
+**2. OQ-15 (the villa unit): the MECHANISM is settled, and it forced new CODE.**
+The website's booking engine sends eZee a **ROOM TYPE and never a physical RoomID** (`Roomtype_Id`; no
+RoomID field exists in the payload). eZee picks the house. **But the website SHOWS the guest a named
+individual villa** — "Villa C3" — from its own editorial overlay, and stamps individual villas
+"Booked". The website auditor's own words: *"the site promises a specific unit, but the booking
+reserves only a TYPE… the villa name is a DISPLAY fact, not a RESERVED fact."* Nothing there
+reconciles or alerts when eZee assigns a different sibling.
+
+**Therefore a guest will tell us "my Villa C3 booking" — in perfect good faith, because WE told them
+that — while eZee may have put them in C1.** If the model echoes it, we lend our authority to an
+error the guest cannot check, and CH-13 dispatches housekeeping to the wrong house. §5.4's unit rule
+was **prompt-only** (a block [4] instruction), and the guest's own words are the strongest possible
+prompt to echo — so the instruction was standing exactly where it was weakest.
+
+**`scanUnitAssertions` (stayGuards.ts) makes §5.4 deterministic.** The AI may name a unit ONLY when
+the mirror assigned one, and only THAT one; naming any other — **including one the guest named
+themselves** — regenerates, then defers and pages a human (`booking_unit_unknown`, whose card tells
+them the guest may have named it themselves and may be wrong). Scoped to ASSIGNMENT framing, so
+pre-sales description is untouched: *"C3 wraps around its own pool"* is legal (it is a voice-guide
+exemplar); *"your stay is in C3"* is a claim about who sleeps where. 14 new tests, both directions.
+
+**The POLICY half of OQ-15 stays open and no API can close it:** when does the front desk actually
+assign the house, and is an assignment stable enough to tell a guest before they arrive? Paul + front
+desk.
+
+**3. 🚨 A website finding that is not ours to fix, recorded as OQ-18.** `POST /api/debug/booking/create`
+calls the real BKG-31 create against LIVE eZee, with an arbitrary `villaId`, `isTest:false` (skipping
+the "TEST " name prefix), **no auth and no NODE_ENV gate** — it ships in production. And the booking
+kill-switch (`NISTULA_BOOKINGS_DISABLED`) is checked in exactly ONE place, which those debug routes
+bypass. This matters to US because every eZee booking flows into `bookings_mirror` and becomes
+something the AI speaks about — and eZee holds inventory immediately on `InsertBooking`, before any
+confirm. Recommend gating before the real number goes live.
+
+---
+
+#### CH-11 live reconcile (2026-07-14) — 🚨 the mirror held 21 of 144 bookings. The poller is fine; the HISTORY was missing.
+
+Deployed the CH-11 branch (`railway up`; uptime 65,204s → 8.8s; boot clean, `kbVersion=b763d4da`,
+`kbTokens=2461`, **`quirksPresent=false`** — the two invented placeholder quirks are gone from the
+live line). Then ran the reconcile against production.
+
+**The headline number, and the reason this chunk exists:**
+
+| Window | at eZee | in mirror | **MISSING** |
+|---|---|---|---|
+| 15 Apr → 11 Nov (the full window) | 144 | 21 | **123** |
+| **FUTURE arrivals** (15 Jul → 11 Nov) | 18 | 18 | **0** ✅ |
+| **RECENT arrivals** (25 Jun → 14 Jul) | 18 | 3 | **15** 🔴 |
+
+**85% of the property's bookings were invisible to the AI.** But the SHAPE of the gap is the
+finding, and it took the second and third probes to see it:
+
+- **The poller is NOT losing bookings.** Every future arrival was already mirrored — 18 of 18.
+  **CH-12 is safe to mount on this feed.**
+- **The mirror captures bookings by when they were CREATED, not when the guest ARRIVES.** Future
+  arrivals were booked recently, so their create events were in the backlog the poller drained on
+  13 Jul. Guests arriving NOW were booked months ago — before the queue ever captured anything.
+- **Hence: 15 of the last 18 arrivals were missing — people standing in the villas, invisible.** A
+  guest in-house today who messaged the line would have been staged a LEAD and sold the house they
+  were standing in. The D1 hypothesis was not theoretical; it was live.
+
+**`--apply` result: 144 upserted, 0 failed.** Verified in the production DB:
+
+| | before | after |
+|---|---|---|
+| `bookings_mirror` rows | 65 | **188** (+123 = exactly the missing count) |
+| rows **with a villa label** | 0 | 143 — **but see the OQ-19 retraction below: these are eZee's GUESS, not the guest's house** |
+| rows with a usable phone | 17 | **129** |
+| `booking.*` jobs (the CH-12 precondition) | 67 | **67 — UNCHANGED** ✅ |
+| `raw_events(ezee)` errors | 0 | 0 |
+
+**⚠️ RETRACTED — see the OQ-19 addendum below.** This section originally read *"the villa labels
+landed… CH-13's task cards are now buildable"* and celebrated the 143 hydrated labels as a win.
+**That was wrong and it was dangerous.** Within the hour, OQ-19 established that a
+`physical_room_label` is **eZee's own arbitrary pick, not the house the guest booked** — eZee holds
+8 houses inside 3 room TYPES, so a booking cannot name a house at all, and eZee auto-assigns
+lowest-number-first. **A task card built on these labels would send housekeeping to the wrong door.**
+The labels remain in the mirror (ops still wants to know which door eZee has a booking against), but
+the AI's licence to SPEAK one is withdrawn (`TRUST_EZEE_ROOM_ASSIGNMENT = false`). `guest_stays` is
+still 0 — correct: linking happens on the guest's first inbound message.
+
+**The no-events invariant HELD IN PRODUCTION**, not merely in tests: 123 rows written, `booking.*`
+job count unchanged at 67. `--apply` cannot wake CH-12 early.
+
+**Observed reality — an UNDOCUMENTED eZee limit (§5.2's mandate: the live payload is the authority):**
+- **BKG-05 ArrivalList caps the window at ONE MONTH.** A 210-day range returns
+  `{"ErrorCode":"112","ErrorMessage":"Error: Date range is too long. Please provide dates for 1
+  month."}` — **error 112 is not in BKG-05's documented error list, and no cap is mentioned anywhere
+  in its docs.** Same class as InsertBooking's POST + per-night rates: *the vendor docs are wrong.*
+  The reconcile now pages in 28-day slices, and **fails CLOSED if any slice fails** (a failed slice
+  hides its bookings, and a hidden booking does not show up as MISSING — a partial run would report
+  a FALSE ALL-CLEAR, the one direction that must never happen).
+- **The BKG-05 doc contradicts itself, and we had it right.** Its parameter TABLE lists
+  `from_date`/`to_date` as top-level (probed live: returns *"From Date is missing"*); its request
+  EXAMPLE nests them under `Date{}` (works). **Table wrong, example right.**
+- **BKG-03 corrects status, not just rooms.** Re-fetching gave `checked_out` for guests the queue
+  still had as `confirmed` (a front-desk check-out never comes down the queue). Harmless here —
+  `stayView` derives `live` and the stage from DATES precisely because of this — but CH-13 must
+  never key anything on `status === 'checked_in'`.
+
+**Recorded, NOT fixed (for CH-12):** the mirror now holds **123 historical bookings**. CH-12's hourly
+reconciliation sweep re-derives from the mirror, so **it MUST date-filter** or it would schedule
+confirmations and pre-arrivals for stays that ended months ago. This makes CH-12's existing
+precondition sharper, not new.
+
+---
+
+#### CH-11 · 🚨 OQ-19 (2026-07-14) — a guest cannot book a specific HOUSE. eZee picks it. And I armed the AI with the guess.
+
+**This is the biggest finding of the chunk, it BLOCKS the website launch, and it is not a bug in our
+code — it is a bug in how eZee is configured, which CH-11 was simply the first thing to notice.**
+
+**The chain, every link now proven:**
+1. **eZee is configured as a HOTEL, not a villa company.** Eight houses, but only **three room types**
+   (Nistula Apartment / Nistula Villa / Nistula 4BHK Siolim). Apartment 06, 09 and 11 are **the same
+   bookable product** — an interchangeable pool.
+2. **So a booking cannot carry a house.** `InsertBooking`'s `Room_Details.Room_1` accepts a rate plan,
+   a rate type and a room **TYPE** — and **no field of any kind** for a physical house (BKG-31).
+3. **The website drops the guest's choice at that boundary** — its own read-only audit: the chosen
+   house (`villa.id`, which IS the eZee RoomID) *"appears NOWHERE in buildBookingData"*. Nothing calls
+   `AssignRoom` afterwards.
+4. **eZee auto-assigns, lowest-number-first.** PROVEN TWICE: reservations **953** and **957**, both
+   booked as "Nistula Apartment", were **both parked in Apartment 06**.
+5. **The website's confirmation page then reads the house back FROM eZee and prints it** — so the guest
+   is shown the house eZee picked, **not the one they bought**.
+6. The guest's real choice survives **only** in the website's own Postgres — a row nobody in eZee sees.
+
+**A guest can pay for Apartment 09 and be told, on their own confirmation screen, that they have
+Apartment 06.** Nobody is lying on purpose. Nobody even knows.
+
+**⚠️ AND I MADE IT WORSE, LIVE, FOR ABOUT AN HOUR. Own this one.**
+I ran `pnpm ezee:reconcile --apply`, hydrated **143 villa labels**, and wrote *"CH-13's task cards are
+now buildable"* in this very file. But CH-11's own unit guardrail treats a villa label as **the AI's
+permission to name that house** (§5.4: *"name a unit only when `physical_room_label` is assigned"*).
+That rule was written believing the label meant **"the house this booking IS for."** It does not. It
+means **"the house eZee happened to PICK."** So I handed the AI **143 fabrications and told it they
+were facts**, and it was licensed to tell an in-house guest, with total confidence, that they were in
+a house they never booked.
+
+**Fixed: `TRUST_EZEE_ROOM_ASSIGNMENT = false` (stayView.ts).** The AI speaks the villa **TYPE** —
+exactly what it did before the labels landed, and what §5.4 always *meant*. **Deployed and PROVEN
+LIVE:** the production DB was deliberately loaded with eZee's guess for the demo booking
+(`physical_room_label = 'Apartment 06'`), and the AI **still refused to name it** — Paul probed
+*"which apartment am I in?"* and it spoke the type. **Saying less is free. Saying the wrong house is
+not.** The labels STAY in the mirror (ops still wants to know which door eZee has a booking against);
+only the licence to SPEAK one is withdrawn. **Flip the constant back the day a house is genuinely the
+thing that was booked** — the tests around it spell out exactly what starts working again.
+
+**THE RECURRING FAILURE CLASS, A FIFTH TIME — and this one is the purest example yet.** CH-06's flat
+price whitelist, CH-09's entitlement screen, CH-10's resurrection denylist, CH-11's `live`-keyed-on-
+status, and now this: **a rule written from a FIELD rather than from the CONTRACT the field stands in
+for.** §5.4 said "name a unit when `physical_room_label` is assigned" and I implemented exactly that
+— faithfully, and wrongly, because the *field* was never the *fact*. **The lesson has now cost five
+findings: write the predicate from the SENTENCE that states the rule, and treat the column as an
+implementation detail that may be lying to you.**
+
+**Recommendation (an 8-agent panel: 4 options → 3 skeptics → judge):** get the **eZee account manager
+on a call** and re-model the property so **each house is its own bookable product — one house, one
+product**. It is not exotic: **Siolim already works this way** (one room type, one house) and is *the
+one house eZee can never get wrong*. The fix is "make the other seven look like Siolim." **It is not
+an engineering project** — none of eZee's ~92 external endpoints can create or alter a room type; it
+happens in eZee's back office. Rejected: `AssignRoom` (eZee assigns at creation, there is no
+un-assign anywhere in the API, and it would do nothing for OTA bookings) and selling types (it
+contradicts the entire product).
+
+**Honest cost:** rates/availability/stop-sells go from 3 products to 8 — roughly **2.5× the recurring
+admin** for a two-person team. The migration's danger is concentrated in the **OTA channel remap**
+(Airbnb / Booking.com / MakeMyTrip / Agoda / Expedia), which has **no dry-run and no undo**. And
+per-listing availability will collapse from a pool to 1, so OTA listings will read "sold out" far
+more often — **week one will look like a revenue drop and is not one.**
+
+**THE OPEN THREAD (sharpest question in the chunk).** Apartment assignments by source:
+`Airbnb 06:27 09:1 11:6` · `Booking.com 06:2 09:7 11:3` · `makemytrip 06:1 09:9 11:5` ·
+`Walk-in 06:3 09:9 11:11`. **Airbnb is 79% clustered on Apartment 06 — the lowest-numbered one, and
+exactly where both auto-assigned test bookings landed.** Every other channel looks spread, as if
+something is genuinely choosing. **If Airbnb lists the apartments separately, why did 27 of 34 land
+in 06?** If the answer is "the channel manager maps all three listings onto the one room type", then
+**Airbnb guests are being sent to the wrong apartment TODAY** and this stops being a pre-launch
+problem. Paul has eZee + OTA access; this is one lookup.
+
+**Also found in a booking's raw payload (worth confirming, NOT actioned):** the property's own
+reservation note carries a meal price list — *"Breakfast costs Rs. 500 per person per night. Lunch
+Rs. 750. Dinner Rs. 750."* Consistent with the KB (tariff = accommodation only), but it means the
+honest answer to "is breakfast available, and how much?" **exists** and the AI cannot say it. A note
+in an OTA comment field is not a published policy, so **nothing was actioned** — filed for the team.
+
+**Forward pointers (do not lose):** **CH-13** — the task card CANNOT be built on `physical_room_label`
+while OQ-19 is open; it is eZee's guess and would send housekeeping to the wrong door. **CH-12** — the
+reconcile added **123 HISTORICAL bookings** to the mirror; the hourly sweep re-derives from the mirror
+and **MUST date-filter**, or it will schedule confirmations for stays that ended months ago. **The
+`booking.*` backlog is ~70 and GROWS DAILY — measure it, never trust a number written here.**
+
+---
+
+#### CH-11 · close-out audit (2026-07-14) — 4 real defects, 2 false alarms, and the failure class showing up for a SIXTH time
+
+Ran the standing pre-merge adversarial audit (5 lenses → skeptics → judge). I over-scaled it to 68
+agents on an already twice-audited chunk — 3 hung, Paul waited ~30 minutes for nothing, and that is
+on me: the recipe is meant to be right-sized to the risk. The findings below were worth having; the
+agent count was not. **`pnpm check` green at 998 tests** (982 → 998).
+
+**What was real, and fixed:**
+
+1. **🚨 BLOCKER — `scanUnitAssertions` missed 6 of 12 natural ways to name a guest's house.** This is
+   the guard that OQ-19's entire safety story rests on, and it was written from **four assertion
+   SHAPES** rather than from the contract. `"Your house is Apartment 09."` (copula), `"You have been
+   allocated Apartment 06."` (passive), `"The house allocated to you is Apartment 11."` (relative
+   clause), `"I can see Apartment 06 against your booking."`, `"Head to Apartment 11 on arrival."`
+   and `"That would be Apartment 06."` all walked straight through. **This is the SIXTH instance of
+   this repo's signature failure class: a rule written from an ENUM or a LIST rather than from the
+   CONTRACT it stands in for.** Rewritten from the contract — post-OQ-19 `stayView` emits no house
+   label at all, so the model's ONLY source for "Apartment 06" is the guest's own message, and the
+   rule collapses to: *naming a house is legal (it is how we sell); BINDING one to this guest never
+   is.* A violation is now a unit token co-occurring in one sentence with a cue that binds it —
+   possession, occupancy, allocation, a claim to see it on our record, an arrival directive, or an
+   ECHO of the guest's own guess. 16/16 of the attack corpus blocked, 0/6 false positives on
+   pre-sales prose.
+2. **The rewrite's own false positive, caught by the existing suite — and the CH-06 lesson, relearnt.**
+   The first version blocked `"Your two nights at Villa B3 come to ₹34,000"` — the product's core
+   pre-sales QUOTE, and the revenue path. Possession alone cannot tell a quote from an assignment.
+   Fixed with the pattern this repo already had to learn once for KB fees: the exemption is
+   **CONTEXT-BOUND** — possession is a violation *unless its own sentence is a quote* (`PRICE_CUE`,
+   now exported from `rupees.ts` so "is this sentence about money" has ONE definition). And a price
+   cue can **never** rescue a STRONG cue: `"You are in Apartment 06 and the total comes to ₹34,000"`
+   is still a violation. Both directions are pinned by tests. **Never flatten this into "a ₹ figure
+   anywhere makes a unit mention legal"** — that is exactly the bug CH-06 shipped and had to fix.
+3. **DEFECT — `unit_integrity` was never persisted.** The OQ-19 guard fired, nudged and regenerated
+   while leaving **no row in `raw_events`** — so the one signal that the AI had tried to hand a guest
+   the wrong house was invisible in the weekly review. Breaks CH-07's "every guardrail hit is
+   persisted" rule, on the chunk's own newest guard. Added the rule + the `recordViolations` branch,
+   and taught the `sent_after_regen` ladder about stay/unit (a unit regenerate was being filed as
+   `length_format`).
+4. **DEFECT — `ezee-reconcile` printed a FALSE ALL-CLEAR, three lines under a comment saying it must
+   never do that.** On a failed ArrivalList slice it returned `missing: []` — **byte-identical to a
+   clean run** — logged the error, printed `MISSING: 0` and exited 0. An operator would have been
+   told the mirror was complete on the strength of a call that never happened. The fail-closed
+   branch was real; only its *reporting* was not. Added `aborted`, and `main()` now prints
+   `RANGE INCOMPLETE — NO CONCLUSIONS` and exits 1. **The existing test passed throughout, because
+   it asserted only `missing: []` — the ambiguous half.** Both halves are now asserted.
+5. **A money cue gap (older than CH-11, closed here).** `"The booking comes to 45000 for the two
+   nights"` extracted NOTHING — the `comes to / works out to / amounts to` family was not in
+   `PRICE_CUE`, so a fabricated total shipped unchecked past guardrail 1. It fails on `main` too, so
+   it is **not** a CH-11 regression — but CH-11 is the chunk that first lets a guest ask what their
+   booking COSTS, so it closes here. Adding a cue only ever makes us extract MORE and defer MORE: it
+   fails closed by construction.
+
+**What the audit got WRONG — recorded because a false alarm is a finding too:**
+
+- **"CH-11's reference mask reopened the money guardrail."** It did not. I diffed the CH-11
+  extractor against `main` over a money corpus: every behaviour change is CH-11 correctly dropping a
+  **reference number** (953, 45123) while still catching the real amount in the same sentence
+  (45000, 18000). The mask is tight. The real gap was the cue family above, which is a different
+  bug and predates the chunk.
+- **"`pnpm check` fails 3 runs in 4 on a Postgres deadlock; the 982-green claim never happened."**
+  Refuted by running it. The one failing run had **993 tests, not 982** — it had swept up my
+  half-saved edits mid-flight. Contaminated, not flaky.
+
+**The lesson, and it is the same one for the sixth time.** Every serious finding in this chunk — the
+pre-push audit's `live`-keyed-on-status, the pre-merge review's sibling-guard bypass, and now the
+unit guard — is the same shape: *someone (usually me) wrote the rule by enumerating the cases they
+could think of, instead of by stating the contract and letting the code derive the cases.* The tell
+is a list of literals in a guard. When you next see one, that is the bug, and the fix is always to
+ask what the list is STANDING IN FOR.

@@ -244,6 +244,16 @@ export const bookingsMirror = pgTable(
   ],
 );
 
+/** Outcome of a reference claim (CH-11). `refused` covers EVERY failure —
+ * unknown reference, wrong name, wrong date, undescribable booking, locked out
+ * — because the guest-facing value must be indistinguishable across all of
+ * them (an oracle would leak which reservation numbers exist). The distinction
+ * lives here, in the ops trail, and nowhere the guest can see. */
+export const referenceAttemptOutcomeEnum = pgEnum('reference_attempt_outcome', [
+  'linked',
+  'refused',
+]);
+
 /** Link table guest↔booking (§4, CH-10) — phone match now; reference_in_chat
  * and manual arrive with CH-11/admin. Real relations, so real FKs.
  * TODO(CH-18): DELETE_GUEST must erase a guest's rows here (guest-keyed). */
@@ -290,5 +300,38 @@ export const guestFacts = pgTable(
     // Profile-block reads walk one guest's facts newest-first (§4 addition,
     // recorded in progress.md — plan lists no index for this table).
     index('guest_facts_guest_created_idx').on(table.guestId, table.createdAt),
+  ],
+);
+
+/**
+ * Reference-claim attempts (CH-11, §6.4 get_booking: "3 failed reference
+ * attempts/day → hard escalate + polite refusal"). §4 lists no table for this
+ * — recorded addition, Paul-approved.
+ *
+ * WHY Postgres and not the in-memory window CH-07's cool-off uses: that one
+ * guards politeness, this one guards ANOTHER GUEST'S BOOKING. We redeploy on
+ * every merge to main, and a process restart would hand an attacker a fresh
+ * three guesses at reservation numbers that are short and near-sequential on
+ * this property (877, 894, 952, 953 are all real). A security counter may not
+ * evaporate on deploy.
+ *
+ * Keyed by PHONE, not guest id: the phone is the identity an attacker must
+ * actually control, and it survives a guest row being erased (CH-18).
+ * Successful claims are logged too — the ops trail for "who linked what".
+ */
+export const referenceAttempts = pgTable(
+  'reference_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** E.164, normalised — the claimant, not the booking's owner. */
+    phone: text('phone').notNull(),
+    /** What they claimed. Stored for the ops trail; never echoed to a guest. */
+    claimedReference: text('claimed_reference').notNull(),
+    outcome: referenceAttemptOutcomeEnum('outcome').notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    // The rolling-24h count walks one phone's recent rows.
+    index('reference_attempts_phone_created_idx').on(table.phone, table.createdAt),
   ],
 );

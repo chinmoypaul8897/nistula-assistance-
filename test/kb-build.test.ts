@@ -110,12 +110,21 @@ describe('loadKnowledge (committed kb/)', () => {
     );
   });
 
-  it('ships the placeholder quirk under one code-owned heading, within budget', () => {
+  // Paul, 2026-07-13: the two DEMO PLACEHOLDER quirks were PULLED. Their
+  // PLACEHOLDER markers were HTML comments, which concatKnowledge strips — so
+  // the model received two INVENTED facts about real houses ("the second-bedroom
+  // AC in B3 can feel a little weak") and stated them to guests as truth. That is
+  // the fabrication class this entire system exists to prevent, and it was live.
+  //
+  // The file is now empty of notes. This test pins the honest state: no quirks
+  // reach the model at all, so the AI says it will check with the team — which is
+  // true. It flips back the day the villa team fills the template (OQ-01).
+  it('ships NO quirks while the villa team has not filled the template', () => {
     const kb = loadKnowledge();
-    expect(kb.quirksPresent).toBe(true);
-    expect(kb.knowledge).toContain('Villa quirks (practical');
-    // The heading is owned by concatKnowledge, not the file — exactly one of it.
-    expect(kb.knowledge.match(/Villa quirks/g)).toHaveLength(1);
+    expect(kb.quirksPresent).toBe(false);
+    expect(kb.knowledge).not.toContain('Villa quirks');
+    // …and specifically, neither invented note can reach the model.
+    expect(kb.knowledge).not.toMatch(/second-bedroom AC|Morning sun fills the balcony/i);
     expect(kb.tokens).toBeLessThanOrEqual(KB_TOKEN_BUDGET);
   });
 

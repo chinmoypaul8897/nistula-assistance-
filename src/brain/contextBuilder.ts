@@ -21,11 +21,12 @@ import {
 } from '../db/repos.js';
 import { getActiveGuestFacts } from '../db/guestMemory.js';
 import { countUncoveredMessages, getSystemContextKinds } from '../db/summaries.js';
-import { isNightIST } from '../lib/time.js';
+import { isNightIST, istCalendarDay } from '../lib/time.js';
 import { isWindowOpen } from './draftGuards.js';
 import { captionOf, locationTextOf } from './inbound.js';
 import type { LoadedKnowledge } from './knowledge.js';
 import { buildGuestBlock } from './profileBlock.js';
+import { deriveStage, needsHuman, selectStays, type StayView } from './stayView.js';
 import { classesFromContextKinds, type ClaimClass } from './promises.js';
 import {
   buildSituation,
@@ -79,6 +80,10 @@ export interface ContextBuilderArgs {
   /** Block [5] tone inputs (CH-09) — default 'unknown' keeps old callers valid. */
   registerPref?: 'warm_first_name' | 'formal_sir_maam' | 'unknown';
   langPref?: 'en' | 'hinglish' | 'unknown';
+  /** CH-11 booking awareness — PROJECTED in the worker (one pre-claim read,
+   * shared with policy.ts, which runs BEFORE this builder). Never re-queried
+   * here: two reads would risk two different answers in one turn. */
+  stays?: readonly StayView[];
   /** Guardrail-2 evidence window start (§6.5 #2) as the claim cursor's
    * created_at::text — µs-exact, never a JS Date (CH-03 trap). Null means no
    * previous message, so every claimable system row counts. */
@@ -134,6 +139,11 @@ export async function buildTurnContext(
   );
 
   const isNight = isNightIST(dbNow, deps.nightStart, deps.nightEnd);
+  // CH-11: the stage is the model's tone anchor (§8 CH-11 step 3). It is derived
+  // from the DB clock's IST day — the SAME clock block [6] prints — so the stage
+  // can never contradict the date the model is reading in the same prompt.
+  const stays = args.stays ?? [];
+  const today = istCalendarDay(dbNow);
   const situation = buildSituation({
     now: dbNow,
     isNight,
@@ -141,6 +151,7 @@ export async function buildTurnContext(
     degraded: deps.degraded.isDegraded(),
     mustEscalate: args.mustEscalate,
     unviewableMedia: args.unviewableMedia,
+    stage: deriveStage(stays, today),
   });
   const system = buildSystemPrompt(situation, deps.knowledge.knowledge, {
     guestBlock: buildGuestBlock({
@@ -148,6 +159,8 @@ export async function buildTurnContext(
       registerPref: args.registerPref ?? 'unknown',
       langPref: args.langPref ?? 'unknown',
       facts,
+      stays: selectStays(stays, today),
+      bookingNeedsHuman: needsHuman(stays, today),
     }),
     summaryBlock,
   });

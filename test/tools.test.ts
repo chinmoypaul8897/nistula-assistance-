@@ -53,10 +53,26 @@ function ctx(overrides?: {
 const registry = buildToolRegistry();
 
 describe('registry framework', () => {
-  it('exposes the three CH-05 tools + remember_fact with object input schemas', () => {
+  it('exposes the CH-05 tools + remember_fact + get_booking with object input schemas', () => {
     const names = registry.specs().map((s) => s.name).sort();
-    expect(names).toEqual(['get_availability', 'get_booking_link', 'get_quote', 'remember_fact']);
+    expect(names).toEqual([
+      'get_availability',
+      'get_booking',
+      'get_booking_link',
+      'get_quote',
+      'remember_fact',
+    ]);
     for (const spec of registry.specs()) expect(spec.input_schema.type).toBe('object');
+  });
+
+  // §6.4's signature is get_booking(reference?) — ONE argument. The four-argument
+  // shape (reference/name/check_in/email) would let the model supply the very
+  // secret the guest is supposed to state, sourced from the WhatsApp pushname
+  // block [5] shows it. There must be no field to smuggle one into.
+  it('get_booking exposes ONLY a reference field — no name, date or email', () => {
+    const spec = registry.specs().find((s) => s.name === 'get_booking');
+    const props = spec?.input_schema.properties as Record<string, unknown>;
+    expect(Object.keys(props)).toEqual(['reference']);
   });
 
   it('an unknown tool name → UNKNOWN_TOOL result (never throws)', async () => {

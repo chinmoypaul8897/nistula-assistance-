@@ -28,12 +28,31 @@ const ISO_DATE_RE = /\b\d{4}-\d{2}-\d{2}\b/g;
 const DAY_RANGE_RE = /\b\d{1,2}\s?[–-]\s?\d{1,2}\b/g; // "20–22 Dec"
 const CLOCK_RE = /\b\d{1,2}:\d{2}\b/g; // "10:00"
 
+// CH-11: a BOOKING REFERENCE is an id, not an amount. eZee's ids on this
+// property are 3-digit (953, 877) — squarely inside the bare-integer band — so
+// "Your booking 953 is confirmed and the balance is payable at check-in"
+// extracted 953 as an unbacked ₹ figure, deferred the reply with the RATE line
+// and raised a bogus 'price' escalation. Booking awareness is the chunk that
+// first puts these numbers into drafts, so it is the chunk that masks them.
+//
+// Masked GLOBALLY rather than checked within a sentence, because the sentence
+// splitter breaks on the period in "ref no." and would leave the number stranded
+// in a sentence of its own, next to the cue (the CH-07 colon lesson, one
+// abbreviation over). Only the reference phrase is removed — any real figure
+// elsewhere in the sentence still extracts.
+// The introducer set covers the synonyms this system and eZee actually use
+// (eZee's payload calls the id a VoucherNo). Broadened past {booking,reservation,
+// reference,ref,res} on the pre-push audit's note — narrower than the concept.
+const REFERENCE_NUMBER_RE =
+  /\b(?:booking|reservation|reference|ref|res|confirmation|conf|voucher|pnr)\b\.?\s*(?:nos?\.?|number|#)?\s*#?\s*\d{3,7}\b/gi;
+
 function maskNonMoney(text: string): string {
   return text
     .replace(URL_RE, ' ')
     .replace(ISO_DATE_RE, ' ')
     .replace(DAY_RANGE_RE, ' ')
-    .replace(CLOCK_RE, ' ');
+    .replace(CLOCK_RE, ' ')
+    .replace(REFERENCE_NUMBER_RE, ' ');
 }
 
 // --- always-money forms: a currency marker IS the cue -----------------------
@@ -72,8 +91,16 @@ function toAmount(numText: string, multiplierWord?: string): number {
 
 // --- cue-bound forms: bare integers and "34k" need a price cue nearby -------
 // Deliberately NOT bare "booking" (references) and NOT bare "night" (times).
-const PRICE_CUE =
-  /₹|\b(?:rs|inr|rupees?|rates?|prices?|tariff|total|costs?|fees?|charge[sd]?|deposit|payable|pay|nightly|amount)\b|\b(?:per|a)\s+night\b|\/night\b/i;
+// The "comes to / works out to / amounts to" family was missing (close-out
+// audit): "the booking comes to 45000 for the two nights" carried NO cue, so a
+// fabricated total shipped unchecked. It predates CH-11 — but CH-11 is the
+// chunk that first lets a guest ask what their booking COSTS, so it closes here.
+// Adding a cue can only ever make us extract MORE and defer MORE: it fails
+// closed, and can never let a fabricated figure through.
+// Exported so "is this sentence about money?" has ONE definition in the codebase
+// (stayGuards uses it to tell a pre-sales QUOTE from a room assignment).
+export const PRICE_CUE =
+  /₹|\b(?:rs|inr|rupees?|rates?|prices?|tariff|total|costs?|fees?|charge[sd]?|deposit|payable|pay|nightly|amount)\b|\b(?:per|a)\s+night\b|\/night\b|\b(?:comes?|come|works?|worked)\s+(?:out\s+)?(?:to|at)\b|\bamounts?\s+to\b/i;
 
 // The lookbehind excludes ',' and '.' so the tail of a grouped or decimal form
 // ("₹1,500" → "500", "16666.67" → "675") can never re-enter as a bare integer.
@@ -87,6 +114,16 @@ const UNIT_AFTER =
   /^\s?(?:nights?\b|guests?|adults?|children|kids?|bhk|bedrooms?|kms?|m\b|min(?:ute)?s?|hours?|hrs?|%|percent|sq\s?ft|sqft|[ap]m\b)/i;
 const MONTH_NEAR =
   /(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)/i;
+// CH-11: a RESERVATION NUMBER is not a price. eZee's ids on this property are
+// 3-digit (953, 877) — squarely inside BARE_INT's 3-7 digit band and above the
+// floor — so a perfectly ordinary reply like "Your booking 953 is confirmed and
+// the balance is payable at check-in" extracted 953 as an unbacked ₹ amount,
+// deferred with the RATE line and raised a bogus 'price' escalation. Booking
+// awareness is the chunk that first puts these numbers into drafts.
+// PRICE_CUE already refuses bare "booking" as a CUE; this refuses the NUMBER
+// that a reference word introduces, even when another cue shares the sentence.
+const REFERENCE_BEFORE =
+  /\b(?:booking|reservation|reference|ref|res\.?\s?no\.?|confirmation|conf|voucher|pnr|no\.?|#)\s*$/i;
 const BARE_INT_FLOOR = 200; // no villa-adjacent fee or rate sits below this
 const YEAR_MIN = 1900;
 const YEAR_MAX = 2099;
@@ -124,6 +161,8 @@ function collectCueBound(text: string, into: Set<number>): void {
       const before = sentence.slice(Math.max(0, (m.index ?? 0) - 12), m.index ?? 0);
       if (UNIT_AFTER.test(after)) continue;
       if (MONTH_NEAR.test(before) || MONTH_NEAR.test(after.slice(0, 12))) continue;
+      // A number a reference word introduces is an id, not an amount (CH-11).
+      if (REFERENCE_BEFORE.test(before)) continue;
       const n = Number.parseInt(m[0], 10);
       if (n >= YEAR_MIN && n <= YEAR_MAX) continue; // bare years are never prices
       if (n >= BARE_INT_FLOOR) into.add(n);

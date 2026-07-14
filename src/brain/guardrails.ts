@@ -29,6 +29,7 @@ import { applyNegotiationLock, checkPriceIntegrity } from './priceGuards.js';
 import { scanPromises, type ClaimClass } from './promises.js';
 import { PHRASEBOOK } from './prompt.js';
 import { extractRupeeAmounts, type KbFee } from './rupees.js';
+import { scanStayAffirmations, scanUnitAssertions, STAY_NUDGE, UNIT_NUDGE } from './stayGuards.js';
 import type { RecordHit } from './telemetry.js';
 import type { ToolRun } from './tools/registry.js';
 
@@ -60,6 +61,23 @@ export interface GuardrailDeps {
    * is asserted at pipeline end (a must_escalate turn never leaves without
    * `escalate` set). */
   mustEscalate?: boolean;
+  /** CH-11: does this guest actually hold a LIVE booking? From the worker's
+   * projected stays — a code-normalised server enum, NOT a tool result and NOT
+   * block [5]'s text (guest-derived DATA may never license anything). Defaults
+   * TRUE so every pre-CH-11 caller and test keeps its exact behaviour; the
+   * worker always supplies the real value. */
+  hasLiveStay?: boolean;
+  /** CH-11: the guest holds a booking we may NOT describe (a live cancellation,
+   * a multi-room reservation). Distinguishes the two ways `hasLiveStay` can be
+   * false, which need DIFFERENT ops cards: "they hold nothing on this number"
+   * versus "they hold a booking a person must handle". Telling ops the first
+   * when the second is true is a card that LIES (pre-merge review). */
+  hasUndescribableBooking?: boolean;
+  /** CH-11 §5.4 as CODE: the villa units the MIRROR actually assigned this guest.
+   * The AI may name a unit only when eZee gave us one, and only THAT one — the
+   * website shows guests a named villa while booking only a TYPE, so a guest may
+   * name a house they are not in, in good faith. undefined ⇒ check SKIPPED. */
+  assignedUnits?: readonly string[];
   /** Guardrail 5 trigger: the inbound batch asked "are you a bot?". */
   botQuestion?: boolean;
   /** Guardrail 7: the guest's own E.164 — the ONLY phone a draft may contain. */
@@ -71,6 +89,20 @@ export interface GuardrailDeps {
 export type GuardrailOutcome =
   | { action: 'send'; text: string; toolRuns: ToolRun[]; escalate: EscalationReason | null }
   | { action: 'defer'; text: string; toolRuns: ToolRun[]; escalate: EscalationReason };
+
+/**
+ * WHICH ops card a twice-affirmed booking earns. `hasLiveStay === false` has TWO
+ * causes and they need different sentences to a human:
+ * - the guest holds NOTHING on this number → `booking_overclaim`, whose card
+ *   says "our system shows none — they may have a booking we never captured".
+ * - the guest holds a booking we may not DESCRIBE (a cancellation for next week,
+ *   a multi-room reservation) → `booking_undescribable`. The overclaim card
+ *   would be a LIE here: the system shows a booking, it is just not sayable.
+ * A card that misstates the situation is worse than no card — the human acts on it.
+ */
+function stayEscalation(deps: GuardrailDeps): EscalationReason {
+  return deps.hasUndescribableBooking === true ? 'booking_undescribable' : 'booking_overclaim';
+}
 
 const PRICE_NUDGE =
   'A price you stated was not returned by any tool this turn. State only ₹ figures that appear in a get_quote result from this turn; if you have no live quote, do not state any price — offer to bring the team in instead.';
@@ -92,6 +124,8 @@ export async function runGuardrails(
   const nudge = [
     first.priceViolations.length > 0 ? PRICE_NUDGE : null,
     first.promiseViolations.length > 0 ? PROMISE_NUDGE : null,
+    first.stayViolations.length > 0 ? STAY_NUDGE : null,
+    first.unitViolations.length > 0 ? UNIT_NUDGE : null,
     first.identityViolation ? IDENTITY_NUDGE : null,
     first.tooLong ? LENGTH_NUDGE : null,
   ]
@@ -102,6 +136,8 @@ export async function runGuardrails(
       guardrail: 'pooled',
       prices: first.priceViolations,
       promises: first.promiseViolations,
+      stays: first.stayViolations,
+      units: first.unitViolations,
       identity: first.identityViolation,
       tooLong: first.tooLong,
     },
@@ -119,31 +155,57 @@ export async function runGuardrails(
           ? 'price_integrity'
           : first.promiseViolations.length > 0
             ? 'promise_integrity'
-            : first.identityViolation
-              ? 'identity'
-              : 'length_format',
+            : first.stayViolations.length > 0
+              ? 'stay_integrity'
+              : first.unitViolations.length > 0
+                ? 'unit_integrity'
+                : first.identityViolation
+                  ? 'identity'
+                  : 'length_format',
       action: 'sent_after_regen',
       draft: second.text,
     });
     return finalize(second, deps);
   }
 
-  // Two strikes. Money/promise failures defer (§6.5 — and defer WINS over an
-  // identity substitution: the escalation carries the question to a human).
-  if (second.priceViolations.length > 0 || second.promiseViolations.length > 0) {
+  // Two strikes. Money/promise/stay failures defer (§6.5 — and defer WINS over
+  // an identity substitution: the escalation carries the question to a human).
+  if (
+    second.priceViolations.length > 0 ||
+    second.promiseViolations.length > 0 ||
+    second.stayViolations.length > 0 ||
+    second.unitViolations.length > 0
+  ) {
     deps.log.info(
-      { guardrail: 'pooled', prices: second.priceViolations, promises: second.promiseViolations },
+      {
+        guardrail: 'pooled',
+        prices: second.priceViolations,
+        promises: second.promiseViolations,
+        stays: second.stayViolations,
+        units: second.unitViolations,
+      },
       'guardrails failed twice — deferring + escalating',
     );
     await recordViolations(deps, second, 'deferred');
     const priceFailed = second.priceViolations.length > 0;
+    const stayFailed = second.stayViolations.length > 0;
     return {
       action: 'defer',
-      // A price failure defers with the rate line; a promise-only failure with
-      // the team-referral line (both escalate, so both lines are true).
+      // A price failure defers with the rate line; a stay-affirmation or
+      // promise failure with the team-referral line (all escalate, so every
+      // line is true). A twice-asserted booking for a guest who holds none is
+      // exactly the case a person must see — and NOT `booking_undescribable`
+      // (that reason's card says "holds a booking", which is false here); this
+      // guest may in fact have a booking our mirror cannot see (the D1 gap).
       text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
       toolRuns: second.toolRuns,
-      escalate: priceFailed ? 'price' : 'promise',
+      escalate: priceFailed
+        ? 'price'
+        : stayFailed
+          ? stayEscalation(deps)
+          : second.unitViolations.length > 0
+            ? 'booking_unit_unknown'
+            : 'promise',
     };
   }
   // Identity still missing → substitute the approved line whole (§6.5 #5).
@@ -175,6 +237,9 @@ interface Evaluation {
   toolRuns: ToolRun[];
   priceViolations: number[];
   promiseViolations: string[];
+  /** CH-11: booking-state assertions made for a guest with no live stay. */
+  stayViolations: string[];
+  unitViolations: string[];
   referral: boolean;
   identityViolation: boolean;
   tooLong: boolean;
@@ -201,14 +266,26 @@ async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evalu
     systemEvidence: deps.systemEvidence ?? new Set(),
     escalationPlanned: deps.mustEscalate === true,
   });
+  // CH-11: an assertion gate, not an evidence licence — see stayGuards.ts.
+  // Defaults to "has a live stay" so every pre-CH-11 caller keeps its behaviour.
+  const stays = scanStayAffirmations(nego.text, deps.hasLiveStay ?? true);
+  const units = scanUnitAssertions(nego.text, deps.assignedUnits);
   const identityViolation = deps.botQuestion === true && !containsIdentityLine(nego.text);
   const tooLong = nego.text.length > MAX_REPLY_CHARS || bulletLineCount(nego.text) > 3;
   return {
-    ok: price.ok && promises.violations.length === 0 && !identityViolation && !tooLong,
+    ok:
+      price.ok &&
+      promises.violations.length === 0 &&
+      stays.violations.length === 0 &&
+      units.violations.length === 0 &&
+      !identityViolation &&
+      !tooLong,
     text: nego.text,
     toolRuns: turn.toolRuns,
     priceViolations: price.unbacked,
     promiseViolations: promises.violations,
+    stayViolations: stays.violations,
+    unitViolations: units.violations,
     referral: promises.referral,
     identityViolation,
     tooLong,
@@ -241,20 +318,34 @@ async function finalize(
   if (clamp.changed || preMutated) {
     text = clamp.text;
     // Re-run the pure checks on the mutated text — a clamp must never be able
-    // to smuggle a violation past the pool (review decision).
+    // to smuggle a violation past the pool (review decision). Stay integrity is
+    // re-run too, for symmetry (pre-push audit NIT): today applyFormatClamp only
+    // removes characters and the lexicon spans newlines, so it is belt-and-
+    // braces, but it stays armed if a future clamp gains a line-joining rewrite.
     const price = checkPriceIntegrity(text, evaluation.toolRuns, deps.whitelist ?? []);
     const promises = scanPromises(text, {
       toolRuns: evaluation.toolRuns,
       systemEvidence: deps.systemEvidence ?? new Set(),
       escalationPlanned: deps.mustEscalate === true,
     });
-    if (!price.ok || promises.violations.length > 0) {
-      const priceFailed = !price.ok;
+    const stays = scanStayAffirmations(text, deps.hasLiveStay ?? true);
+    const units = scanUnitAssertions(text, deps.assignedUnits);
+    if (
+      !price.ok ||
+      promises.violations.length > 0 ||
+      stays.violations.length > 0 ||
+      units.violations.length > 0
+    ) {
+      const reason: EscalationReason = !price.ok
+        ? 'price'
+        : promises.violations.length > 0
+          ? 'promise'
+          : stayEscalation(deps);
       return {
         action: 'defer',
-        text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
+        text: reason === 'price' ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
         toolRuns: evaluation.toolRuns,
-        escalate: priceFailed ? 'price' : 'promise',
+        escalate: reason,
       };
     }
     if (deps.botQuestion === true && !containsIdentityLine(text)) text = PHRASEBOOK.isBot;
@@ -303,6 +394,24 @@ async function recordViolations(
       action,
       draft: evaluation.text,
       details: { violations: evaluation.promiseViolations },
+    });
+  }
+  if (evaluation.stayViolations.length > 0) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'stay_integrity',
+      action,
+      draft: evaluation.text,
+      details: { violations: evaluation.stayViolations },
+    });
+  }
+  if (evaluation.unitViolations.length > 0) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'unit_integrity',
+      action,
+      draft: evaluation.text,
+      details: { violations: evaluation.unitViolations },
     });
   }
   if (evaluation.identityViolation) {
