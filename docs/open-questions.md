@@ -149,8 +149,56 @@
 **Question:** `bookings_mirror.rateplan_id` holds an opaque eZee RateplanCode. Nothing in this repo maps it to EP (room only) or CP (with breakfast), and §5.1's quote API takes `plan=ep|cp` — so the WEBSITE codebase must already know the mapping. What is it?
 **Why / blocks:** plan §8 CH-11 step 3 asks block [5] to state the stay's "plan". CH-11 deliberately SHIPPED WITHOUT IT and forbade the AI from stating what a booking includes, because eZee's own human-readable label ("European Plan") is a trap: the model would helpfully translate it into "breakfast is included", and NO guardrail checks an inclusion claim (guardrail 1 checks rupees; guardrail 2 checks actions). Overlaps OQ-07.
 **Owner:** Paul (from the nistula-website codebase). **Feeds:** block [5] stays · "is breakfast included?" · `get_quote`'s default plan.
-**Status:** ⬜ OPEN
+**Status:** 🕐 IN PROGRESS — a read-only extraction prompt for the website repo is stored below; Paul runs it there and pastes the answer here.
 **Answer:**
+
+<!-- ============================================================================
+WEBSITE-REPO QUESTION PROMPT (OQ-15 + OQ-16) — reusable. Paste into a Claude Code
+session opened ON the `chinmoypaul8897/nistula-website` repo. READ-ONLY: the website
+calls the LIVE eZee API, so nothing may be written and no booking-creating endpoint
+may be touched. Stored here (CH-11, 2026-07-13) per the CH-06 precedent so the ask is
+never re-derived from memory.
+==============================================================================
+
+READ-ONLY TASK. Do not modify, create, or delete any file in this repo. Do not run any
+command that writes anything or calls a booking-creating endpoint. Answer by reading code
+only, and cite every answer with a `path:line` reference. If something is genuinely not in
+the code, say "NOT IN CODE" — never guess, never fill from general knowledge.
+
+CONTEXT: a separate project (a WhatsApp AI concierge for Nistula) mirrors eZee bookings and
+needs to know what it may truthfully tell a guest about their booking. It must never invent
+a fact. I need five things this website already knows.
+
+1. RATE PLAN -> MEAL PLAN. Your /api/quote takes a `plan` parameter (`ep` = room only,
+   `cp` = with breakfast). eZee identifies a rate plan by an opaque numeric `RateplanCode`
+   (a.k.a. RatePlanID / rate_plan_id — 19 digits, e.g. 5220300000000000006).
+   - Where does `plan=ep|cp` get turned into an eZee rate-plan id? Show the mapping.
+   - Give me the COMPLETE table: RateplanCode -> ep|cp -> human name, for every rate plan
+     this site can quote or book, for all 8 villas.
+   - Is `cp` (breakfast) actually sold on this site today, or is `ep` the only real plan?
+
+2. WHAT THE BOOKING ENGINE ACTUALLY BOOKS. Find the code that creates a booking in eZee
+   (InsertBooking / the IBE path).
+   - Which RateplanCode does it send?
+   - Does it send a specific physical RoomID (an individual house like B3/C1), or does it
+     book at ROOM TYPE level and let eZee assign the unit? Quote the request payload it builds.
+   - Does the site ever show the guest which specific villa/unit they will get, before or
+     after booking? If yes, where does that come from?
+
+3. THE ID MAP. Give me the mapping the site uses between: its own villa id/slug -> eZee
+   RoomID (physical unit) -> eZee RoomTypeID (the type). All 8 villas.
+
+4. BREAKFAST / INCLUSIONS COPY. Does the site anywhere state whether breakfast or meals are
+   included in a rate? Quote the exact wording and its source file. (I need to know whether
+   "is breakfast included?" has a published answer, or none.)
+
+5. ANY OTHER eZee IDS the site relies on that a booking record would carry — package codes,
+   promo/discount codes, source/channel strings. Just list them with where they're used.
+
+OUTPUT: a single markdown answer with the five sections, every fact cited `path:line`, and an
+explicit "NOT IN CODE" for anything absent. Do not write it to a file — just print it.
+
+============================================================================ -->
 
 ---
 
