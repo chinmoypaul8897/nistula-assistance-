@@ -85,7 +85,7 @@ Guest WhatsApp ⇄ Meta Cloud API (coexistence with front-desk app)
 ### 2.4 The six acceptance scenarios (condensed — full versions live in the product picture)
 
 1. **Midnight enquiry:** 23:42 "3bhk 20–22 dec rate?" → exact website price in seconds, discount ask deflected with pride, booking link. No human involved.
-2. **Booking made:** website/OTA booking appears in eZee → confirmation immediately, pre-arrival T−3, welcome on the day — untouched by staff.
+2. **Booking made:** a **direct** (website/walk-in) booking appears in eZee → confirmation immediately, pre-arrival T−3, welcome on the day — untouched by staff. *(CH-12 amendment, Paul-approved: **OTA bookings are mirrored but NOT messaged** until the business answers Q13 — "may we WhatsApp Airbnb/Booking.com guests?". `LIFECYCLE_SOURCES` is the gate. Production holds 12 real OTA guests with unmasked numbers, so this is not hypothetical.)*
 3. **Two towels:** in-stay request → staff task "Villa B3 · Rahul · 2 towels" → guest follow-up 30 min later understood in context; honest status wording ("I've nudged housekeeping"), never "checked with housekeeping" when it only checked the task record.
 4. **Special request (proposal décor):** outside KB → escalation card to front desk with summary → staff reply from the app pauses the AI; SLA timer re-pings staff if nobody replies in 10 min.
 5. **Night issue (weak AC, 23:05):** honest hold ("the team comes in at 10"), villa-quirks tip if the KB has one, morning digest carries it.

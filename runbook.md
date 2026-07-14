@@ -718,7 +718,7 @@ we now fail locally, before burning the call, and say why.
 - `sendTemplated` — free-form while the window is open; the **template** path when
   it is shut. **This is the only way to reach someone who has not written to us.**
 
-**Two honest limits, so nobody is surprised:**
+**Three honest limits, so nobody is surprised:**
 1. **A guest's AI reply still goes silent on a closed window.** There is no
    template for an arbitrary conversational reply and there never can be. CH-12
    did not fix that and could not — it fixed *lifecycle* messages, which do have
@@ -730,9 +730,14 @@ we now fail locally, before burning the call, and say why.
    approved templates and `WA_TEMPLATE_MODE=send`, exercises it for real.
 3. **CH-07's interim ops escalation** goes to OPS numbers as free-form, so it is
    now subject to the same rule. If an ops number has not messaged the line in 24h
-   the escalation is refused and `window_closed_blocked` fires. **TODO(CH-13/14):
-   move staff sends onto `sendTemplated` + `nst_escalation_card`.** Meanwhile the
-   roster rule stands: **every staff/ops number messages the business line once.**
+   the send is refused — and **the AI will then NOT tell the guest the team has
+   been informed** (the guardrail-2 evidence row is only written after a card
+   actually lands; `ops_escalation_undelivered` fires instead). That is the honest
+   behaviour, but it means **an ops number that goes quiet for a day stops
+   receiving escalations.** ⚠️ **"Every staff/ops number messages the line once"
+   is NOT sufficient — one message buys 24 hours.** The real fix is
+   **TODO(CH-13/14): move staff sends onto `sendTemplated` + `nst_escalation_card`**,
+   which reaches a shut window. Until then, watch for `ops_escalation_undelivered`.
 
 ### Alerts you may see
 

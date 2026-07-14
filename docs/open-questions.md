@@ -354,3 +354,79 @@ hand inside eZee. **This breaks the moment the site launches.**
 **and** the website repo. **Feeds:** the website launch · CH-13 task cards · CH-12 pre-arrival copy ·
 OQ-15 (now largely answered by this).
 **Answer:**
+
+---
+
+## F · CH-12 (lifecycle engine) — 2026-07-14
+
+*All four are BUSINESS questions, so per the standing rule none of them blocked the chunk. Each is
+already sitting behind a fail-closed default in the code; the answers make the system **better**,
+not **correct**.*
+
+### OQ-20 — May we WhatsApp guests who booked through Airbnb or Booking.com?
+**Status:** 🔴 **BLOCKER for the lifecycle engine's real value.** (Same question as team-question Q13,
+promoted here because CH-12 made it concrete.)
+
+**What we need to know:** are we permitted — by the platforms' terms and by our own policy — to send
+automatic confirmation / pre-arrival / welcome messages to a guest who booked via an OTA?
+
+**Why it matters to a real guest:** we measured production on 14 Jul. Of the 22 bookings arriving
+today or later, **12 are Airbnb (8) or Booking.com (4) guests whose real, unmasked phone numbers we
+hold.** The comfortable assumption that "OTA numbers are masked so it cannot happen" is **false** —
+makemytrip and go-mmt mask them; Airbnb and Booking.com do not. Without a decision, the first thing
+this system does in the world is message twelve people nobody authorised us to message.
+
+**What we shipped meanwhile:** `LIFECYCLE_SOURCES`, defaulting to **direct only**
+(`Internet Booking Engine,Walk-in`). Every OTA booking is mirrored, but **no OTA guest is messaged**.
+The refusal is a decision in code, not an accident of missing data.
+
+**What changes once they answer:** one environment variable. If yes, add the channels to
+`LIFECYCLE_SOURCES` and roughly triple the lifecycle's reach.
+
+### OQ-21 — Is everything in eZee a real, paying guest?
+**Status:** 🔴 (team-question Q39.)
+
+**What we need to know:** do maintenance blocks, owner stays, or held/test bookings ever appear in
+eZee with a phone number attached?
+
+**Why it matters:** the lifecycle sends to whatever phone the booking carries. A maintenance block
+with the caretaker's number gets a warm "we look forward to welcoming you".
+
+**What we shipped meanwhile:** `LIFECYCLE_EPOCH` — only bookings mirrored AFTER the cutover instant
+get lifecycle at all, so nothing historical can fire; plus the status allowlist (`confirmed` /
+`modified` only — an unconfirmed hold is never congratulated).
+
+**What changes once they answer:** if such rows exist, we need a way to recognise them (a rate plan,
+a source string, a name convention) and add a fifth gate.
+
+### OQ-22 — What do you do in eZee when a booking changes, and how fast?
+**Status:** 🔴 (team-question Q38.) **We have never once seen a `Modify` come down the feed** — the
+mirror holds **zero** `modified` rows.
+
+**Why it matters:** if a guest moves their stay from the 20th to the 27th by phone and that never
+reaches eZee's connectivity queue, we will send the welcome on the 20th and state the wrong dates.
+
+**What we shipped meanwhile:** the sender re-reads the mirror immediately before every send, so any
+change that IS mirrored is always honoured; and a message older than 36 hours is dropped as stale
+rather than delivered late and wrong. An un-mirrored change we cannot see.
+
+**What changes once they answer:** if amendments are made in a way that never reaches connectivity,
+that is a process fix at the front desk, not a code fix — and it must be fixed before go-live.
+
+### OQ-23 — The pre-arrival now asks every guest for their arrival time. Who sends the pin?
+**Status:** 🟡 (extends OQ-12 / team-question Q37.)
+
+**What we need to know:** the canonical location pin per villa — and who is responsible for replying
+when a guest sends their arrival time.
+
+**Why it matters:** `kb/faq.md` already promises "share your arrival time and we'll send an accurate
+location pin". CH-12 now makes that promise **proactively, to every arriving guest, three days
+out** — at scale, on a schedule. **There is no pin anywhere in the knowledge base**, and no staff
+task is created when the guest answers (that is CH-13). Today a human must notice the reply.
+
+**What we shipped meanwhile:** the pre-arrival asks for the arrival time and says a person will send
+the pin — which is exactly what the FAQ already promises, so nothing is invented. But a promise made
+reactively to one guest is not the same as one made automatically to every guest.
+
+**What changes once they answer:** the pin goes into the KB, and CH-13 turns the guest's reply into a
+frontdesk task so nobody has to notice it by hand.
