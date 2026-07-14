@@ -15,6 +15,8 @@ import {
   CONVERSATION_SUMMARISE_QUEUE,
   CONVERSATION_SWEEP_QUEUE,
   EZEE_POLL_QUEUE,
+  LIFECYCLE_RECONCILE_QUEUE,
+  LIFECYCLE_SEND_QUEUE,
   SUMMARISER_NIGHTLY_QUEUE,
 } from '../../src/jobs/index.js';
 
@@ -45,6 +47,8 @@ export async function createTestBoss(): Promise<PgBoss> {
     BOOKING_CREATED_QUEUE,
     BOOKING_MODIFIED_QUEUE,
     BOOKING_CANCELLED_QUEUE,
+    LIFECYCLE_SEND_QUEUE,
+    LIFECYCLE_RECONCILE_QUEUE,
   ]) {
     await boss.deleteQueue(queue).catch(() => {}); // absent on first run
   }

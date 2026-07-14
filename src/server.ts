@@ -128,6 +128,7 @@ async function main(): Promise<void> {
     graphBaseUrl: config.graphBaseUrl,
     phoneNumberId: waPhoneNumberId,
     accessToken: waAccessToken,
+    templateMode: config.waTemplateMode,
   });
   const converse = createConverse({
     apiKey: config.anthropicApiKey,
@@ -174,6 +175,13 @@ async function main(): Promise<void> {
     nightStart: config.nightStart,
     nightEnd: config.nightEnd,
     ezee: { client: ezee, pollerEnabled: config.ezeePollerEnabled },
+    // CH-12. The gates are fail-closed by construction: an unset LIFECYCLE_EPOCH
+    // schedules NOTHING, and LIFECYCLE_SEND_ENABLED=0 sends nothing even when
+    // rows exist. Merging this chunk cannot, on its own, message anybody.
+    lifecycle: {
+      gates: { epoch: config.lifecycleEpoch, sources: config.lifecycleSources },
+      sendEnabled: config.lifecycleSendEnabled,
+    },
   });
   await app.register(waWebhookRoutes, {
     db,

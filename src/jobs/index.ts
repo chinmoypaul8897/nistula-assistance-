@@ -29,6 +29,16 @@ import {
 import type { Db } from '../db/client.js';
 import type { EzeeClient } from '../ezee/client.js';
 import { createEzeePoller } from '../ezee/poller.js';
+import type { GateContext } from '../lifecycle/gates.js';
+import { runReconcile } from '../lifecycle/reconcile.js';
+import {
+  cancelForBooking,
+  LIFECYCLE,
+  scheduleForBooking,
+  type SchedulerDeps,
+} from '../lifecycle/scheduler.js';
+import { runSender } from '../lifecycle/sender.js';
+import { istCalendarDay, nowIST } from '../lib/time.js';
 import { summarizeError } from '../lib/logger.js';
 import type { WaClient } from '../wa/client.js';
 
@@ -42,6 +52,8 @@ export const EZEE_POLL_QUEUE = 'ezee.poll';
 export const BOOKING_CREATED_QUEUE = 'booking.created';
 export const BOOKING_MODIFIED_QUEUE = 'booking.modified';
 export const BOOKING_CANCELLED_QUEUE = 'booking.cancelled';
+export const LIFECYCLE_SEND_QUEUE = 'lifecycle.send';
+export const LIFECYCLE_RECONCILE_QUEUE = 'lifecycle.reconcile';
 export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
   created: BOOKING_CREATED_QUEUE,
   modified: BOOKING_MODIFIED_QUEUE,
@@ -150,6 +162,19 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
       retentionSeconds: 14 * 24 * 3600,
     });
   }
+  // CH-12. Both follow the ezee.poll shape: stately + a constant singletonKey on
+  // the schedule = at most one created AND one active run, DB-enforced. A sender
+  // tick that overran into the next minute and doubled up would double-send.
+  await boss.createQueue(LIFECYCLE_SEND_QUEUE, {
+    policy: 'stately',
+    retryLimit: 0, // the next minute's cron tick IS the retry
+    expireInSeconds: 110, // < the 60s cadence x2: a hung tick cannot stack
+  });
+  await boss.createQueue(LIFECYCLE_RECONCILE_QUEUE, {
+    policy: 'stately',
+    retryLimit: 0, // the next hour's tick IS the retry
+    expireInSeconds: 600,
+  });
 }
 
 /**
@@ -187,7 +212,10 @@ export interface JobsDeps {
   /** A STARTED boss (boot calls boss.start() first). */
   boss: PgBoss;
   db: Db;
-  wa: Pick<WaClient, 'createSendIntent' | 'dispatchText' | 'sendText'>;
+  wa: Pick<
+    WaClient,
+    'createSendIntent' | 'dispatchText' | 'sendText' | 'planTemplatedSend' | 'dispatchTemplated'
+  >;
   log: WorkerLogger;
   /** The Claude client (§5.5) — server builds the real one; tests inject a fake. */
   converse: ConverseFn;
@@ -219,6 +247,11 @@ export interface JobsDeps {
    * default OFF: two pollers ACKing one eZee queue steal each other's
    * bookings (dev would consume prod's), so only Railway ever sets 1. */
   ezee?: { client: EzeeClient; pollerEnabled: boolean };
+  /** CH-12 lifecycle. `gates` carries the four fail-closed gates (epoch/date/
+   * status/source); `sendEnabled` is LIFECYCLE_SEND_ENABLED — off means rows
+   * are still SCHEDULED but nothing is ever sent. Absent ⇒ the whole lifecycle
+   * engine stays unmounted (tests that do not care). */
+  lifecycle?: { gates: Omit<GateContext, 'today'>; sendEnabled: boolean };
 }
 
 export interface Jobs {
@@ -336,6 +369,63 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
         'eZee poller DISABLED (EZEE_POLLER_ENABLED=0) — bookings_mirror will go stale',
       );
     }
+  }
+  if (deps.lifecycle !== undefined) {
+    const { gates, sendEnabled } = deps.lifecycle;
+    // `today` is re-derived on EVERY run, never captured at boot: a process that
+    // stays up for a week would otherwise keep scheduling against the day it
+    // booted, and the date gate would rot open.
+    const schedulerDeps = (): SchedulerDeps => ({
+      db: deps.db,
+      log: deps.log,
+      gates: { ...gates, today: istCalendarDay(nowIST()) },
+    });
+
+    for (const [kind, queue] of Object.entries(BOOKING_EVENT_QUEUES)) {
+      await deps.boss.work<{ reservationNo: string }>(queue, workOptions, async (jobs) => {
+        for (const job of jobs) {
+          if (kind === 'cancelled') {
+            await cancelForBooking(schedulerDeps(), job.data.reservationNo);
+          } else {
+            await scheduleForBooking(schedulerDeps(), job.data.reservationNo);
+          }
+        }
+      });
+    }
+
+    await deps.boss.work(LIFECYCLE_SEND_QUEUE, workOptions, async () => {
+      await runSender({
+        db: deps.db,
+        log: deps.log,
+        wa: deps.wa,
+        enabled: sendEnabled,
+      });
+    });
+    await deps.boss.work(LIFECYCLE_RECONCILE_QUEUE, workOptions, async () => {
+      await runReconcile(schedulerDeps());
+    });
+
+    await scheduleCron(deps.boss, LIFECYCLE_SEND_QUEUE, LIFECYCLE.senderCron, 'Asia/Kolkata', {
+      singletonKey: 'send',
+    });
+    await scheduleCron(
+      deps.boss,
+      LIFECYCLE_RECONCILE_QUEUE,
+      LIFECYCLE.reconcileCron,
+      'Asia/Kolkata',
+      { singletonKey: 'reconcile' },
+    );
+    deps.log.info(
+      { sendEnabled, epoch: gates.epoch?.toISOString(), sources: gates.sources },
+      sendEnabled
+        ? 'lifecycle ENABLED — scheduled messages WILL be sent'
+        : 'lifecycle mounted, sending DISABLED (LIFECYCLE_SEND_ENABLED=0) — rows accrue, nothing sends',
+    );
+  } else {
+    // Same reason as the poller's: a cron left by an earlier boot must not fire
+    // into a queue that now has no worker.
+    await deps.boss.unschedule(LIFECYCLE_SEND_QUEUE).catch(() => {});
+    await deps.boss.unschedule(LIFECYCLE_RECONCILE_QUEUE).catch(() => {});
   }
   return { enqueueConversationProcess: enqueue };
 }

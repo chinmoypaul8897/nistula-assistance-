@@ -16,6 +16,7 @@ import {
   upsertGuestByPhone,
   type NewMessage,
 } from '../db/repos.js';
+import { touchPhoneWindow } from '../db/windows.js';
 import { summarizeError } from '../lib/logger.js';
 import { normalizePhone } from '../lib/phone.js';
 import { alertOps } from '../ops/alerts.js';
@@ -192,6 +193,13 @@ async function handleInbound(
     log.warn({ waMessageId: message.id }, 'inbound phone not normalisable — skipped, raw stored');
     return;
   }
+  // CH-12 (§5.3): EVERY inbound opens a 24h window, whoever sent it. Guests keep
+  // theirs on the conversation, but staff and ops numbers have no conversation
+  // at all — and Meta's window binds them identically. Written before the dedupe
+  // check on purpose: a redelivery is still evidence that they wrote to us, and
+  // touchPhoneWindow never moves a window backwards.
+  await touchPhoneWindow(db, phone, new Date());
+
   const profileName = value.contacts?.find((c) => c.wa_id === message.from)?.profile?.name;
   const guest = await upsertGuestByPhone(db, phone, profileName);
   const conversation = await getOrCreateConversation(db, guest.id);
