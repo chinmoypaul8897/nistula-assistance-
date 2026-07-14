@@ -32,6 +32,25 @@ hourly sweep **MUST date-filter** or it will message guests about stays that end
 the one house eZee never gets wrong). None of eZee's ~92 endpoints can create a room type — it
 happens in eZee's back office. Full analysis + the eZee account-manager script: `docs/open-questions.md` OQ-19.
 
+## 🚨 CH-12 is BUILT but NOT DONE (2026-07-14)
+
+`pnpm check` is green at 1205 tests, **but nothing is deployed and no lifecycle message has been
+sent.** Before calling it done: **re-measure and purge** the production `booking.*` backlog (83 at
+last count, it grows daily), set `LIFECYCLE_EPOCH` on Railway, run the live demo, then merge + tag.
+
+**The fact that changes how you think about this system:** the comfortable belief that OTA phone
+numbers are masked — and that OTA guests are therefore unreachable by accident — is **FALSE**.
+makemytrip and go-mmt mask them. **Airbnb and Booking.com do not.** Production holds **12 real OTA
+guests arriving soon, with real phone numbers**. `LIFECYCLE_SOURCES` (direct-only, fail-closed) is
+the only thing standing between them and a WhatsApp nobody authorised (**OQ-20**, 🔴 unanswered).
+
+CH-12 is the first chunk that **speaks first** — everything before it only ever replied to someone
+who had messaged us. That inverts the risk, and a 5-lens adversarial review proved it: **8
+blocker-class defects, in code whose test suite was green.** The worst was the recurring failure
+class for the **seventh** time — the sender re-used the *scheduling* status allowlist at *send*
+time, so every stay that actually happened (`checked_in`/`checked_out`) permanently lost its
+welcome, thank-you and win-back. **Guard by the CONTRACT, never by the ENUM.**
+
 ## Session protocol (mandatory — from plan.md §0)
 
 [plan.md](plan.md) is the **single source of truth** for the build; [progress.md](progress.md) is the session-memory layer. Every build session:
