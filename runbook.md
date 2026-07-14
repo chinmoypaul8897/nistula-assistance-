@@ -629,3 +629,27 @@ nothing (the CH-07 lesson).
 - Draft-mode unlock ritual — CH-16
 - Incidents: webhook silent · eZee down · degraded mode · cost spike — CH-17/18
 - Env rotation (WA token!) · backups & restore drill · go-live checklist — CH-18a
+
+## 🚨 OQ-19 — the villa label is eZee's GUESS (CH-11, 2026-07-14)
+
+**Do not act on `bookings_mirror.physical_room_label`.**
+
+eZee holds 8 houses inside 3 room types, so a booking cannot name a house — eZee auto-assigns
+lowest-number-first. The label is **not** the house the guest booked. The AI is therefore forbidden
+from speaking one (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`) and says "your Nistula Villa".
+
+**A staff task card built on that label would send housekeeping to the wrong door.** Blocks CH-13.
+The fix is a PMS re-model (one house = one bookable product) — see `docs/open-questions.md` OQ-19.
+
+**eZee quirks found the hard way (the docs are wrong about all of these):**
+- `ArrivalList` caps its window at **ONE MONTH** — error `112`, which is **not in its documented
+  error list**, and the cap is mentioned nowhere. The reconcile pages it in 28-day slices, and
+  **fails closed if any slice fails** (a partial run would report a false all-clear).
+- `ArrivalList`'s **parameter table contradicts its own request example**. The example is right:
+  dates nest under `Date{}`. Top-level `from_date` returns *"From Date is missing"*.
+- `ProcessBooking` (confirm) needs **`Inventory_Mode: "REGULAR"`** — the value `InsertBooking`
+  returned. **Blank fails** with "Missing parameters", despite the doc treating it as optional.
+- `RoomList` **rejects `check_out_date` and `num_nights` together**.
+- `InsertBooking` has **no room field at all**. A booking cannot name a house. This is OQ-19.
+- A booking must be **CONFIRMED** before it enters the connectivity queue — an unconfirmed booking
+  holds inventory but the poller never sees it.

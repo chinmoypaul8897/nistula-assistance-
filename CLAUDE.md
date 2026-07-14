@@ -8,6 +8,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Current state: CH-00 → CH-10 are DONE, merged, tagged (`vCH-00`…`vCH-10`) and LIVE on Railway (CH-09 merged via PR #27 after a 24-agent pre-push audit fixed a money BLOCKER; its live three-probe demo passed 2026-07-13 with real facts saved in the production DB).** The service takes real WhatsApp messages on the Meta test number, replies in Nistula's voice through Claude, quotes live website-identical prices via tools, answers villa/policy/FAQ questions from the compiled knowledge base (prompt block [3]), brackets every model turn with deterministic code (§6.7 policy routing before, the complete §6.5 guardrail pipeline after — every hit persisted to `raw_events`), carries §6.3 short-term memory (token-budgeted transcript window + the `[EARLIER CONTEXT]` rolling summary + the nightly 04:00 IST summariser), and now has §6.4 long-term memory: `remember_fact` saves durable guest facts behind deterministic sensitive/instruction/entitlement screens (any rate or authority claim refused fail-closed), block [5] GUEST CONTEXT renders the full profile (name + detected register/lang prefs + newest 15 facts; stays/tasks stubbed for CH-11/13), memory promises need a real save (guardrail-2 class C4 + the `fact_saved` evidence row), and `POST /admin/guest-lookup` peeks a guest's memory (bearer + flag; enabled in local dev only — Railway carries no admin vars). **CH-10 (eZee mirror) is DONE and LIVE (2026-07-13, 761 tests):** the 60s poller mirrors eZee bookings into `bookings_mirror`, ACKs only what committed, and emits `booking.*` events for CH-12. Its live run drained the property's whole un-ACKed backlog — 62 items, 0 errors — and the pre-push audit's BLOCKER (multi-room full-cancels arriving as suffixed `-1/-2/-3` entries with no bare entry) turned out to be **sitting in production waiting**. **BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — only Railway may run the poller, or dev would ACK-consume real bookings prod never sees (runbook §CH-10). Move secrets to Railway with **Node**, never a PowerShell pipe (it prepends a UTF-8 BOM into the stored value). BKG-20 "ReadBooking" is broken — never used; `InsertBooking` needs POST + per-night comma-separated rates (the vendor docs are wrong). Website (Internet Booking Engine) bookings **DO** reach the queue — verified end to end (booking 953: create → mirror → cancel → mirror, dates/amount verbatim). An earlier "they don't" reading was a queue-BATCHING artifact; **a poll against a backlogged eZee queue proves nothing — only test against a drained queue.** **🚨 CH-12 HARD PRECONDITION: production holds 67 un-consumed `booking.*` jobs** (25 created + 42 cancelled, measured 2026-07-14) — mounting CH-12's workers would fire them all and message guests about months-old/cancelled bookings. **Purge or date-filter them FIRST.** CH-11's `--apply` reconcile added 123 mirror rows and left that count UNCHANGED at 67 (hydration emits no events — verified in production, not just in tests), **but it also means the mirror now holds 123 HISTORICAL bookings, so CH-12's hourly sweep MUST date-filter** or it will schedule confirmations for stays that ended months ago (progress.md status header + the CH-11 live-reconcile addendum). **Next chunk: CH-11 (Booking awareness).** `progress.md` is authoritative for exactly what exists and what each chunk learned — read it, not this paragraph, for detail.
 
+## 🚨 OQ-19 — a guest cannot book a specific HOUSE. eZee picks it. (Found 2026-07-14, CH-11)
+
+**BLOCKS THE WEBSITE LAUNCH. Read before touching anything that names a villa.**
+
+eZee is configured as a **hotel**: 8 houses inside only **3 room types**, so Apartment 06/09/11 are
+the SAME bookable product. `InsertBooking` therefore has **no field for a house at all** — the
+website drops the guest's choice at that boundary, and **eZee auto-assigns lowest-number-first**
+(reservations 953 AND 957, both "Nistula Apartment", both landed in **Apartment 06**). The website's
+confirmation page then reads the house back FROM eZee — so **a guest can pay for Apartment 09 and be
+told on their own receipt that they have Apartment 06.**
+
+**CONSEQUENCE FOR THIS CODEBASE:** `bookings_mirror.physical_room_label` is **eZee's GUESS, not the
+guest's house.** `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` — **the AI speaks the villa TYPE and
+names NO house.** Do not "fix" this by flipping it on because a label exists; the label is the bug.
+(I hydrated 143 of them and briefly armed the AI with them — see the OQ-19 addendum in progress.md.)
+
+**CH-13: the staff task card CANNOT be built on that label** — it would send housekeeping to the
+wrong door. **CH-12: the mirror now holds 123 HISTORICAL bookings** (CH-11's reconcile), so its
+hourly sweep **MUST date-filter** or it will message guests about stays that ended months ago.
+
+**The fix is a PMS re-model, not code:** one house = one bookable product (Siolim already is, and is
+the one house eZee never gets wrong). None of eZee's ~92 endpoints can create a room type — it
+happens in eZee's back office. Full analysis + the eZee account-manager script: `docs/open-questions.md` OQ-19.
+
 ## Session protocol (mandatory — from plan.md §0)
 
 [plan.md](plan.md) is the **single source of truth** for the build; [progress.md](progress.md) is the session-memory layer. Every build session:

@@ -79,6 +79,8 @@
 | OQ-15 | When does eZee assign the villa unit; may we name it pre-arrival? | Paul + front desk | CH-13 task cards · CH-12 copy | 🕐 mechanism settled, policy open |
 | OQ-16 | RateplanCode → ep/cp map | Paul (website) | block [5] · breakfast | ✅ DO NOT BUILD IT |
 | OQ-17 | Should a guest ASSERTING a booking we cannot see fetch a human? | Paul + planning | CH-14 | ⬜ |
+| OQ-18 | Website has an UNGATED route that creates real bookings | Paul (website) | pre-launch safety | ⬜ |
+| **OQ-19** | **🚨 A guest cannot book a specific house — eZee picks it. PROVEN.** | **Paul + eZee acct mgr** | **BLOCKS website launch** | 🚨 |
 
 ---
 
@@ -288,3 +290,51 @@ source, the bare-integer guardrail context-aware fix, the `backedAmounts` price-
 allowlist, the `parseMessage` block-type exhaustiveness guard, and CH-05 test-coverage
 gaps) are tracked in `progress.md` under the CH-05 review addendum — they are mine to do
 in CH-07, not questions for you.*
+
+---
+
+## E · 🚨 THE ONE THAT MATTERS MOST (found 2026-07-14, CH-11)
+
+### OQ-19 — A guest cannot actually book a specific house. eZee picks it.
+**Status:** 🚨 **PROVEN END TO END. BLOCKS THE WEBSITE LAUNCH.** Not a concierge bug — a bug in how
+eZee is configured, which the concierge merely made visible.
+
+**What is true, each step verified:**
+1. **eZee is configured as a HOTEL, not a villa company.** Eight houses, but only **three room types**
+   ("Nistula Apartment", "Nistula Villa", "Nistula 4BHK Siolim"). So Apartment 06, 09 and 11 are
+   **the same bookable product** to eZee — an interchangeable pool, the way a hotel treats Room 204
+   and Room 206.
+2. **eZee's booking API therefore has no field for a house.** `InsertBooking`'s `Room_Details.Room_1`
+   accepts a rate plan, a rate type and a **room TYPE** — and nothing that identifies a physical
+   house (docs/ezee/04_bookings.md, BKG-31).
+3. **The website drops the guest's choice at that boundary.** Its own read-only audit: the chosen
+   house (`villa.id`, which IS the eZee RoomID) *"appears NOWHERE in buildBookingData"*. Nothing
+   calls `AssignRoom` afterwards.
+4. **eZee then picks a house by itself.** PROVEN LIVE, twice: CH-10's test booking for the
+   "Nistula Apartment" type was assigned **Apartment 06**; and reservation **957** (created
+   2026-07-14, type-level, 15–17 Mar 2027) was likewise auto-assigned **Apartment 06**
+   (BKG-03 returns `RoomID 5220300000000000008` / `RoomName "06"`).
+5. **The confirmation page then reads the house back FROM eZee and names it.** So the guest is shown
+   **the house eZee picked, not the one they bought.**
+6. **The guest's actual choice survives only in the website's own database** — a row no one in eZee
+   ever sees.
+
+**What this does to a real guest:** they browse, fall for **Apartment 09**, pay for Apartment 09 —
+and their own confirmation screen tells them they have **Apartment 06**. Nobody is lying to them on
+purpose. Nobody even knows.
+
+**Nobody has been harmed yet: the website is not live.** Existing bookings (walk-in, OTA) look
+correctly spread across all seven active houses, so the front desk is evidently assigning them by
+hand inside eZee. **This breaks the moment the site launches.**
+
+**This ONE root cause explains a whole family of problems we have been treating separately:**
+- the booking poll carries no room, so the concierge's mirror had **zero** villa labels
+- the AI cannot tell an in-house guest which house they are in (§5.4's rule, now enforced in code)
+- CH-13's staff task cards cannot say which door to send housekeeping to
+- OQ-10 (Siolim's odd "base occupancy 2" for an 8-guest villa) smells like the same hotel-shaped setup
+- and now: a confirmation page that names the wrong house
+
+**Owner:** Paul + the eZee account manager (this is a PMS configuration decision, not a code fix)
+**and** the website repo. **Feeds:** the website launch · CH-13 task cards · CH-12 pre-arrival copy ·
+OQ-15 (now largely answered by this).
+**Answer:**
