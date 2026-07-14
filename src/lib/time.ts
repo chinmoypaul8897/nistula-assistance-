@@ -95,6 +95,48 @@ export function formatISTDisplay(instant: Date): string {
   return `${weekday} ${p.day} ${month} ${p.year}, ${hour12}:${minute} ${ampm} IST`;
 }
 
+/**
+ * Calendar-day arithmetic on a YYYY-MM-DD string. Constructed at UTC midnight on
+ * both sides, so it is pure day maths — no timezone can shift it.
+ *
+ * WHY it lives here and takes a STRING: eZee dates are 'YYYY-MM-DD' strings end
+ * to end and must never be new Date()-ed (a Date would drag a timezone in and
+ * check_in could silently slide a day). Hoisted out of brain/stayView.ts in
+ * CH-12 so the lifecycle scheduler shares one implementation rather than
+ * growing a second — two subtly different day-shifts is exactly how a
+ * pre-arrival lands on the wrong morning.
+ */
+export function shiftDay(day: string, days: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** "Sunday 20 December" — a check-in day, for a lifecycle body (British, no year:
+ * the stay is imminent and the year would read like a form). */
+export function formatDayDisplay(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  return `${WEEKDAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+}
+
+/**
+ * A stay's dates, British and compact: "20–22 December 2026", collapsing the
+ * month when it is shared and the year when both fall in it ("30 December 2026
+ * – 2 January 2027" otherwise). check_out is the departure day, stated as such —
+ * we never silently subtract a night.
+ */
+export function formatStayDates(checkIn: string, checkOut: string): string {
+  const a = new Date(`${checkIn}T00:00:00Z`);
+  const b = new Date(`${checkOut}T00:00:00Z`);
+  const sameYear = a.getUTCFullYear() === b.getUTCFullYear();
+  const sameMonth = sameYear && a.getUTCMonth() === b.getUTCMonth();
+  const left = sameMonth
+    ? `${a.getUTCDate()}`
+    : `${a.getUTCDate()} ${MONTHS[a.getUTCMonth()]}${sameYear ? '' : ` ${a.getUTCFullYear()}`}`;
+  const right = `${b.getUTCDate()} ${MONTHS[b.getUTCMonth()]} ${b.getUTCFullYear()}`;
+  return `${left}–${right}`;
+}
+
 /** IST wall-clock parts of an instant. */
 function istParts(instant: Date): {
   year: number;

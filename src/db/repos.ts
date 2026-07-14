@@ -34,6 +34,38 @@ export async function upsertGuestByPhone(
   return row;
 }
 
+/**
+ * Creates (or finds) a guest from BOOKING data — CH-12's scheduler, explicitly
+ * superseding CH-10's no-auto-creation rule (plan CH-12 step 3).
+ *
+ * WHY it exists alongside upsertGuestByPhone: a guest who booked on the website
+ * has never messaged us, so nobody else would ever create their row — and the
+ * name we have is eZee's, not a WhatsApp profile name. The two sources are kept
+ * strictly apart: this writes first_name/last_name, and NEVER wa_profile_name,
+ * because the WhatsApp pushname is attacker-chosen and §6.4 forbids matching on
+ * it. Existing names are not overwritten — a name the guest gave us themselves
+ * outranks the one an OTA typed for them.
+ */
+export async function upsertGuestFromBooking(
+  db: DbLike,
+  guest: { phone: string; firstName: string | null; lastName: string | null },
+): Promise<Guest> {
+  const [row] = await db
+    .insert(guests)
+    .values({ phone: guest.phone, firstName: guest.firstName, lastName: guest.lastName })
+    .onConflictDoUpdate({
+      target: guests.phone,
+      set: {
+        firstName: sql`coalesce(${guests.firstName}, excluded.first_name)`,
+        lastName: sql`coalesce(${guests.lastName}, excluded.last_name)`,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  if (row === undefined) throw new Error('guest upsert (from booking) returned no row');
+  return row;
+}
+
 /** The guest's single rolling conversation — created on first contact (§4). */
 export async function getOrCreateConversation(db: Db, guestId: string): Promise<Conversation> {
   const [created] = await db
