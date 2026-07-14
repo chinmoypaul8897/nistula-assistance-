@@ -88,19 +88,43 @@ export async function reconcileMirror(
     failed: [],
   };
 
-  const outcome = await deps.client.fetchArrivals({
-    fromDate: opts.fromDate,
-    toDate: opts.toDate,
-  });
-  if (outcome.status !== 'ok') {
-    deps.log.error({ status: outcome.status }, '[reconcile] ArrivalList failed — no conclusions');
-    return base;
+  // eZee caps ArrivalList at ONE MONTH per call — an UNDOCUMENTED limit, found
+  // live on the first production run:
+  //     {"ErrorCode":"112","ErrorMessage":"Error: Date range is too long.
+  //      Please provide dates for 1 month."}
+  // Error 112 is not in BKG-05's documented error list at all, and no date cap is
+  // mentioned anywhere in its docs (the same class of vendor-doc gap as
+  // InsertBooking's POST + per-night rates). So we PAGE the window in slices.
+  //
+  // (The nested `Date{}` request shape we ship IS correct — probed live: the doc's
+  // parameter TABLE lists from_date/to_date top-level, and that spelling fails
+  // with "From Date is missing"; the doc's request EXAMPLE nests them, and that
+  // works. Table wrong, example right.)
+  const slices = monthSlices(opts.fromDate, opts.toDate);
+  const reservations: unknown[] = [];
+  for (const slice of slices) {
+    const outcome = await deps.client.fetchArrivals(slice);
+    if (outcome.status !== 'ok') {
+      // FAIL CLOSED. A failed slice makes its bookings invisible to us, and an
+      // invisible booking does not show up as MISSING — so a partial run reports
+      // a FALSE ALL-CLEAR, which is the one direction that must never happen.
+      deps.log.error(
+        { status: outcome.status, slice },
+        '[reconcile] ArrivalList failed on a slice — NO CONCLUSIONS for the whole range',
+      );
+      return base;
+    }
+    reservations.push(...outcome.reservations);
+    deps.log.info(
+      { ...slice, found: outcome.reservations.length },
+      '[reconcile] arrivals slice',
+    );
   }
 
   // Reservation numbers eZee says are arriving in this window.
   const atEzee = [
     ...new Set(
-      outcome.reservations
+      (reservations as Parameters<typeof normalizeReservation>[0][])
         .map((r) => normalizeReservation(r).reservationNo)
         .filter((no): no is string => no !== null),
     ),
@@ -164,6 +188,29 @@ export async function reconcileMirror(
     : [...missing, ...unlabelled];
   const out = await backfillBookings(deps, toHydrate);
   return { ...result, upserted: out.upserted, failed: out.failed };
+}
+
+/** eZee rejects an ArrivalList window longer than "1 month" (undocumented error
+ * 112). 28 days keeps every slice safely inside that, whatever they mean by a
+ * month, at the cost of a few extra reads — and reads are free and never ACK. */
+const MAX_SLICE_DAYS = 28;
+
+/** Splits [from, to] inclusive into windows of at most MAX_SLICE_DAYS. */
+export function monthSlices(
+  fromDate: string,
+  toDate: string,
+): Array<{ fromDate: string; toDate: string }> {
+  const slices: Array<{ fromDate: string; toDate: string }> = [];
+  let cursor = fromDate;
+  // Guard against a reversed range rather than looping forever.
+  if (toDate < fromDate) return [{ fromDate, toDate }];
+  while (cursor <= toDate) {
+    const end = shiftDate(cursor, MAX_SLICE_DAYS - 1);
+    const sliceEnd = end > toDate ? toDate : end;
+    slices.push({ fromDate: cursor, toDate: sliceEnd });
+    cursor = shiftDate(sliceEnd, 1);
+  }
+  return slices;
 }
 
 /** IST-agnostic date shift on a YYYY-MM-DD string — arrival dates are calendar

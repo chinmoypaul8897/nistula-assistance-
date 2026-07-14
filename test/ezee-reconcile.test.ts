@@ -15,7 +15,7 @@ import type { Db } from '../src/db/client.js';
 import { upsertMirrorRow, type MirrorRowInput } from '../src/db/bookings.js';
 import * as schema from '../src/db/schema.js';
 import type { EzeeClient, EzeePollOutcome } from '../src/ezee/client.js';
-import { parseArgs, reconcileMirror, shiftDate } from '../scripts/ezee-reconcile.js';
+import { monthSlices, parseArgs, reconcileMirror, shiftDate } from '../scripts/ezee-reconcile.js';
 
 const TEST_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://nistula:nistula@localhost:5432/nistula_test';
@@ -181,6 +181,72 @@ describe('--apply hydrates through BKG-03 (the only call that returns a room)', 
 
     const [row] = await db.select().from(schema.bookingsMirror);
     expect(row?.physicalRoomLabel).toBe('Villa B3');
+  });
+});
+
+// Found on the FIRST production run: eZee rejects an ArrivalList window longer
+// than "1 month" with {"ErrorCode":"112","ErrorMessage":"Error: Date range is too
+// long. Please provide dates for 1 month."} — an error code that is NOT in BKG-05's
+// documented list, and a cap mentioned NOWHERE in its docs. The default 210-day
+// window failed outright, and the script correctly refused to conclude anything.
+describe('the undocumented one-month cap — the range is paged', () => {
+  it('splits a long range into slices of at most 28 days', () => {
+    const slices = monthSlices('2026-01-01', '2026-04-15');
+    expect(slices.length).toBeGreaterThan(1);
+    for (const s of slices) {
+      const days =
+        (Date.parse(`${s.toDate}T00:00:00Z`) - Date.parse(`${s.fromDate}T00:00:00Z`)) / 86_400_000;
+      expect(days).toBeLessThan(28);
+    }
+    // Contiguous and complete — no arrival may fall between two slices.
+    expect(slices[0]?.fromDate).toBe('2026-01-01');
+    expect(slices.at(-1)?.toDate).toBe('2026-04-15');
+    for (let i = 1; i < slices.length; i++) {
+      expect(shiftDate(slices[i - 1]!.toDate, 1)).toBe(slices[i]!.fromDate);
+    }
+  });
+
+  it('leaves a short range as one slice', () => {
+    expect(monthSlices('2026-01-01', '2026-01-10')).toEqual([
+      { fromDate: '2026-01-01', toDate: '2026-01-10' },
+    ]);
+  });
+
+  it('queries every slice and unions the results', async () => {
+    const asked: Array<{ fromDate: string; toDate: string }> = [];
+    const c = fakeClient({
+      fetchArrivals: async (r) => {
+        asked.push(r);
+        return ok([reservation(asked.length === 1 ? '111' : '222')]);
+      },
+    });
+    const r = await reconcileMirror({ db, client: c, log }, {
+      fromDate: '2026-01-01',
+      toDate: '2026-02-20',
+      apply: false,
+    });
+    expect(asked.length).toBe(2);
+    expect(r.atEzee.sort()).toEqual(['111', '222']);
+  });
+
+  // THE load-bearing one. A failed slice makes its bookings invisible, and an
+  // invisible booking does not show up as MISSING — so a partial run would report
+  // a FALSE ALL-CLEAR. That is the one direction that must never happen.
+  it('draws NO conclusions for the whole range if any single slice fails', async () => {
+    let call = 0;
+    const c = fakeClient({
+      fetchArrivals: async () => {
+        call += 1;
+        return call === 2 ? { status: 'unreachable' } : ok([reservation('111')]);
+      },
+    });
+    const r = await reconcileMirror({ db, client: c, log }, {
+      fromDate: '2026-01-01',
+      toDate: '2026-02-20',
+      apply: false,
+    });
+    expect(r.atEzee).toEqual([]);
+    expect(r.missing).toEqual([]); // never a false all-clear
   });
 });
 
