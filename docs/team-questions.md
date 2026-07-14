@@ -39,7 +39,9 @@ Here is what we found. In eZee, our 8 houses are not 8 bookable things. They are
 
 **The cost, honestly:** rates and availability would then be maintained per house rather than per group — roughly 2.5× the recurring rate admin. The OTA channel mappings (Airbnb, Booking.com) would have to be remapped, and **that step has no undo**, so it needs planning rather than a quick afternoon.
 
-**The one thing we would like you to check today, because it may already be live:** on Airbnb, our apartment bookings cluster **27 out of 34 on Apartment 06** — the exact fingerprint of eZee auto-assigning — while other channels spread out normally. **If Airbnb lists the apartments as separate listings, then OTA guests may be getting the wrong apartment right now.** You have the eZee and Airbnb access; a single look settles it, and it is the difference between "a launch blocker" and "a live problem".
+**Good news, and worth saying plainly: this does NOT affect Airbnb, Booking.com or any other OTA.** Those channels sell only two products — "villas" and "apartments" — as categories, so an OTA guest never picks a specific house in the first place. eZee or the front desk choosing one for them is simply the normal process, not an error. **No OTA guest is getting the wrong house.** (We briefly suspected otherwise, because Airbnb bookings cluster heavily on Apartment 06 — that turned out to be the maintenance closures, not a bug.)
+
+**This is a website problem, and only a website problem.** Paul has confirmed it in the website code and is fixing it there. Nothing is reaching a real guest today.
 
 ---
 

@@ -1187,14 +1187,34 @@ admin** for a two-person team. The migration's danger is concentrated in the **O
 per-listing availability will collapse from a pool to 1, so OTA listings will read "sold out" far
 more often — **week one will look like a revenue drop and is not one.**
 
-**THE OPEN THREAD (sharpest question in the chunk).** Apartment assignments by source:
-`Airbnb 06:27 09:1 11:6` · `Booking.com 06:2 09:7 11:3` · `makemytrip 06:1 09:9 11:5` ·
-`Walk-in 06:3 09:9 11:11`. **Airbnb is 79% clustered on Apartment 06 — the lowest-numbered one, and
-exactly where both auto-assigned test bookings landed.** Every other channel looks spread, as if
-something is genuinely choosing. **If Airbnb lists the apartments separately, why did 27 of 34 land
-in 06?** If the answer is "the channel manager maps all three listings onto the one room type", then
-**Airbnb guests are being sent to the wrong apartment TODAY** and this stops being a pre-launch
-problem. Paul has eZee + OTA access; this is one lookup.
+**⚠️ THE "OPEN THREAD" — RAISED, THEN CLOSED BY PAUL THE SAME DAY. IT WAS A FALSE ALARM.**
+This section originally read: *"Airbnb is 79% clustered on Apartment 06… if the channel manager maps
+all three listings onto one room type, Airbnb guests are being sent to the wrong apartment TODAY."*
+The data was real — `Airbnb 06:27 09:1 11:6` · `Booking.com 06:2 09:7 11:3` · `makemytrip 06:1 09:9
+11:5` · `Walk-in 06:3 09:9 11:11` — but **the inference was wrong, and it was wrong because I was
+reasoning about the business from the database instead of asking.**
+
+**What is actually true (Paul, 2026-07-14):** the OTAs sell only **two products — "villas" and
+"apartments"** — as CATEGORIES. **An OTA guest never chooses a house**, so eZee (or the front desk)
+assigning one is not an error, it is the normal process. And the 06 clustering is explained by
+**apartments being blocked for maintenance** — when 09/11 are closed, everything piles onto 06.
+**No OTA guest is getting the wrong apartment. There is no live harm.** OQ-19 is a **pre-launch
+WEBSITE problem only.**
+
+**A second false alarm from the same session, also closed:** I then worried that the front desk
+reassigns guests around maintenance, so a hydrated label could go stale. **It cannot** — Nistula
+**closes the dates BEFORE** maintenance, so a booked guest is never moved out of a house. (A general
+label-refresh is still worth doing eventually; Paul parked it for v2.)
+
+**THE LESSON, and it is the one Paul already named as a standing rule:** both scares came from
+inferring how the business works out of a data pattern. The distribution was real; the story I built
+on it was not. **A number in the mirror cannot tell you what the business meant by it —
+[[build-tech-first-ask-business-once]] exists for exactly this.** Ask, don't infer.
+
+**What survived, and it is confirmed:** Paul read the website code himself and **confirmed OQ-19 is
+real** — the site sells a specific house, `InsertBooking` has nowhere to carry it, and the
+confirmation page reads eZee's pick back to the guest. **He is fixing it on the website side.** The
+AI names no house regardless, which is safe in either world.
 
 **Also found in a booking's raw payload (worth confirming, NOT actioned):** the property's own
 reservation note carries a meal price list — *"Breakfast costs Rs. 500 per person per night. Lunch

@@ -296,8 +296,24 @@ in CH-07, not questions for you.*
 ## E · 🚨 THE ONE THAT MATTERS MOST (found 2026-07-14, CH-11)
 
 ### OQ-19 — A guest cannot actually book a specific house. eZee picks it.
-**Status:** 🚨 **PROVEN END TO END. BLOCKS THE WEBSITE LAUNCH.** Not a concierge bug — a bug in how
-eZee is configured, which the concierge merely made visible.
+**Status:** 🚨 **CONFIRMED BY PAUL 2026-07-14 — he read the website code himself, agrees it is real,
+and is fixing it on the website side.** Proven end to end here first. **BLOCKS THE WEBSITE LAUNCH.**
+Not a concierge bug — a bug in how eZee is configured, which the concierge merely made visible.
+
+**SCOPE — read this before you act on anything below.** This is a **WEBSITE-ONLY** problem, and
+**nothing is reaching a real guest today.**
+- **The OTAs are NOT affected.** Airbnb, Booking.com et al. sell only **two products — "villas" and
+  "apartments"**, as CATEGORIES. An OTA guest **never chooses a house**, so eZee (or the front desk)
+  assigning one is the normal, correct process.
+- **Two false alarms were raised and closed the same day.** (a) *"Airbnb bookings cluster 79% on
+  Apartment 06, so OTA guests may be getting the wrong apartment TODAY"* — **wrong**; the clustering
+  is **apartments blocked for maintenance** (when 09/11 are closed, everything lands on 06).
+  (b) *"the front desk reassigns around maintenance, so a stored label goes stale"* — **wrong**;
+  Nistula **closes the dates BEFORE** maintenance, so a booked guest is never moved. (A general
+  label-refresh is still worth doing one day — Paul parked it for v2.)
+- **Both scares came from inferring how the business works out of a data pattern.** The numbers were
+  real; the stories built on them were not. This is precisely what the standing rule exists to
+  prevent — **ask the business, do not infer it from the mirror.**
 
 **What is true, each step verified:**
 1. **eZee is configured as a HOTEL, not a villa company.** Eight houses, but only **three room types**
