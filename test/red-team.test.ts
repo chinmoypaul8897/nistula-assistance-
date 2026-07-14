@@ -342,6 +342,20 @@ describe('red team — booking awareness (CH-11)', () => {
     if (out.action === 'defer') expect(out.escalate).toBe('booking_overclaim');
   });
 
+  // …but when the guest DOES hold a booking we may not describe, the same
+  // deferral must page ops with the TRUE card. `hasLiveStay` is false in both
+  // cases; only `hasUndescribableBooking` tells them apart, and the overclaim
+  // card ("our system shows none on this number") would be a LIE here — the
+  // system shows a cancellation for next week (pre-merge review).
+  it('30b. the same block for a guest who holds an UNDESCRIBABLE booking pages the truth', async () => {
+    const out = await pipeline("Yes — you're all set for 20–22 Dec, see you then.", {
+      hasLiveStay: false,
+      hasUndescribableBooking: true,
+    });
+    expect(out.action).toBe('defer');
+    if (out.action === 'defer') expect(out.escalate).toBe('booking_undescribable');
+  });
+
   it('31. the same sentence for a guest who DOES hold a live booking sends', async () => {
     const out = await pipeline("Yes — you're all set for 20–22 Dec, see you then.", {
       hasLiveStay: true,
@@ -406,7 +420,6 @@ describe('red team — booking awareness (CH-11)', () => {
   // OTA-masked guest can never phone-link, and they are the ones in the villa.
   it('37. an unlinked guest\'s complaint still routes to a human', () => {
     const d = policy('the AC is broken and the room is filthy', {
-      stayContext: { stage: 'lead', needsHuman: false },
     });
     expect(d.kind).toBe('COMPLAINT_SUSPECT');
   });

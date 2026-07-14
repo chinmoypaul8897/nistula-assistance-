@@ -137,7 +137,6 @@ export async function processConversation(
     conversation: ctx.conversation,
     now: ctx.dbNow,
     overLimit: deps.rateWindow.isOverLimit(ctx.guestPhone, ctx.dbNow),
-    stayContext,
   });
   const plan = settlePlanFor(directive, ctx.conversation.status);
 
@@ -231,13 +230,13 @@ export async function processConversation(
     // policy plan's reason wins over the guardrails' (a complaint that also
     // deferred a price still pings ops exactly once).
     const reason = plan.escalate ?? turn?.escalate ?? null;
-    if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail);
+    if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail, stayContext);
     // CH-11: a booking claim rides its OWN channel. The slot above is
     // single-valued, so a complaint in the same turn would silently swallow it —
     // and a booking a human must see is precisely the event to surface. Fired
     // even when `reason` already escalated.
     if (turn?.securityEscalate != null) {
-      await escalateToOps(deps, conversationId, turn.securityEscalate, directive.guestTextTail);
+      await escalateToOps(deps, conversationId, turn.securityEscalate, directive.guestTextTail, stayContext);
     }
     // CH-11: block [5] tells the model "the team is being brought in" for a
     // guest holding an undescribable booking (a live cancellation, a multi-room
@@ -246,8 +245,15 @@ export async function processConversation(
     // model actually ran (block [5] is shown to no one otherwise) and no other
     // escalation already covered the turn — one ops ping, deterministic,
     // independent of whether the model used a referral phrase.
-    if (turn !== null && stayContext.needsHuman && reason === null && turn.securityEscalate === null) {
-      await escalateToOps(deps, conversationId, 'booking_undescribable', directive.guestTextTail);
+    // Suppressed only when THIS booking is already what someone was paged about
+    // — never merely because some other reason (a price defer, a complaint) also
+    // escalated, which would drop the booking card entirely. The guardrails now
+    // pick `booking_undescribable` themselves when they know (stayEscalation), so
+    // the two paths agree rather than race.
+    const bookingAlreadyPaged =
+      reason === 'booking_undescribable' || turn?.securityEscalate === 'booking_undescribable';
+    if (turn !== null && stayContext.needsHuman && !bookingAlreadyPaged) {
+      await escalateToOps(deps, conversationId, 'booking_undescribable', directive.guestTextTail, stayContext);
     }
     // CH-11: record the reference-claim STRIKE and link audit rows POST-CLAIM
     // (CH-03 D2: the tool leaves no DB side effect a pre-claim retry could

@@ -22,9 +22,10 @@
  *   paid. Money questions go to a human.
  */
 import { z } from 'zod';
+import type { BookingMirror } from '../../db/bookings.js';
 import {
   countRecentFailures,
-  getMirrorForClaim,
+  getClaimFamily,
   isStayLinked,
   linkStayByReference,
   REFERENCE_ATTEMPT_LIMIT,
@@ -145,17 +146,21 @@ export const getBookingTool: ToolDef = {
       }
       booking.claim.attempted = reference;
 
-      const row = await getMirrorForClaim(booking.db, reference);
+      // The whole RESERVATION, not one exact row: a guest types the bare "877"
+      // while eZee delivered that booking as `877-1/-2/-3`. Resolving to a single
+      // exact row would fail to find their own booking, strike them, and page ops
+      // as if they were probing. The family is also what makes the stay view's
+      // sibling guard reachable — projecting a row as its own only sibling is a
+      // second door past the "one door to words" rule.
+      const family = await getClaimFamily(booking.db, reference);
+      const record = family[0] ?? null;
 
       // Already theirs → answer, no strike. An honest guest re-stating their own
       // reference must never be charged for it. If it is not describable
       // (cancelled/multi-room) that is the OWNER's own booking — a person must
       // tell them, but it is NOT an identity probe.
-      if (row !== null && (await isStayLinked(booking.db, booking.guestId, row.id))) {
-        const view = project(row, [row], booking.today);
-        if (!view.describable) return handOwnerToHuman(booking);
-        return { ok: true, data: { stays: [payload(view)] } };
-      }
+      const owned = await anyLinked(booking, family);
+      if (owned) return describeOwn(booking, family);
 
       // Locked out? Check BEFORE reading anything into the answer.
       const failures = await countRecentFailures(booking.db, booking.guestPhone);
@@ -165,22 +170,22 @@ export const getBookingTool: ToolDef = {
       // (against an empty record it fails) so the work does not signal either.
       const verdict = verifyClaim(
         {
-          guestName: row?.guestName ?? null,
-          guestEmail: row?.guestEmail ?? null,
-          checkIn: row?.checkIn ?? null,
+          guestName: record?.guestName ?? null,
+          guestEmail: record?.guestEmail ?? null,
+          checkIn: record?.checkIn ?? null,
         },
         booking.guestText,
       );
-      if (row === null || !verdict.ok) return refuse(booking, reference);
+      if (record === null || !verdict.ok) return refuse(booking, reference);
 
-      // Verified as theirs. Link it either way (it IS their booking).
-      await linkStayByReference(booking.db, booking.guestId, row.id);
+      // Verified as theirs. Link EVERY row of the reservation — a three-room
+      // booking is one booking, and linking only the row they happened to quote
+      // would hide the rest from block [5] and re-strike them on the next id.
+      for (const row of family) {
+        await linkStayByReference(booking.db, booking.guestId, row.id);
+      }
       booking.claim.linkedReference = reference;
-      const view = project(row, [row], booking.today);
-      // …but if we may not describe it (cancelled, multi-room), a person handles
-      // it — on the benign channel, not the identity-probe one.
-      if (!view.describable) return handOwnerToHuman(booking);
-      return { ok: true, data: { stays: [payload(view)] } };
+      return describeOwn(booking, family);
     } catch (error) {
       // A DB failure must never throw into the model (registry contract) and must
       // never look like a refusal — that would burn a strike for our outage.
@@ -189,6 +194,38 @@ export const getBookingTool: ToolDef = {
     }
   },
 };
+
+/** Does this guest already own ANY row of the reservation? One suffixed room is
+ * enough — the reservation is one booking. */
+async function anyLinked(
+  booking: ToolBookingContext,
+  family: readonly BookingMirror[],
+): Promise<boolean> {
+  for (const row of family) {
+    if (await isStayLinked(booking.db, booking.guestId, row.id)) return true;
+  }
+  return false;
+}
+
+/**
+ * Describes a reservation the guest OWNS — through the same door block [5] uses,
+ * with the full family as the sibling set. A multi-room reservation therefore
+ * projects as undescribable HERE too, and is handed to a person rather than
+ * described from its first room's columns.
+ */
+function describeOwn(
+  booking: ToolBookingContext,
+  family: readonly BookingMirror[],
+): ToolResult {
+  const views = family.map((row) => project(row, family, booking.today));
+  const describable = views.filter((v): v is DescribedStay => v.describable);
+  // Any row we may not describe means the RESERVATION is not safely describable
+  // (it is one booking): fail closed and bring a person in.
+  if (describable.length !== views.length || views.length === 0) {
+    return handOwnerToHuman(booking);
+  }
+  return { ok: true, data: { stays: describable.map(payload) } };
+}
 
 /** A reference that could not be verified as theirs — a probe or a typo. Latches
  * the turn, marks the STRIKE (the worker records it post-claim, CH-03 D2), and

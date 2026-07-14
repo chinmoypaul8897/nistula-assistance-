@@ -9,6 +9,7 @@ import { summarizeError } from '../lib/logger.js';
 import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import type { Directive, EscalationReason, TurnPlan } from './policy.js';
+import type { Stage } from './stayView.js';
 import { createHitRecorder } from './telemetry.js';
 import type { TurnLogger } from './turn.js';
 
@@ -47,12 +48,22 @@ export async function escalateToOps(
   conversationId: string,
   reason: EscalationReason,
   guestTextTail: string,
+  stay?: StayNote,
 ): Promise<void> {
   const summary = ESCALATION_SUMMARIES[reason];
   // The card carries the guest's ask (sanitised + capped by policy.ts) — the
   // humanRequest line's "they have the full picture" must be honest. PII to
   // an ops WhatsApp is the CH-14 card pattern; logs still carry ids only.
-  const card = guestTextTail === '' ? summary : `${summary}\nGuest: "${guestTextTail}"`;
+  //
+  // CH-11: and WHERE the guest is. This is the whole of "stay context may only
+  // ever ADD urgency, never remove it" (the deliberate §6.7 deviation): we did
+  // not narrow the complaint trigger, we told the human that the person
+  // complaining is standing in one of our villas right now.
+  const lines = [summary];
+  const note = stayNote(stay);
+  if (note !== null) lines.push(note);
+  if (guestTextTail !== '') lines.push(`Guest: "${guestTextTail}"`);
+  const card = lines.join('\n');
   for (const ops of deps.opsNumbers) {
     await deps.wa.sendText(ops, card, { conversationId: null, sender: 'system' });
   }
@@ -76,6 +87,30 @@ export async function escalateToOps(
     summary,
     detail: { conversationId, reason },
   });
+}
+
+/** What the worker knows about this guest's bookings, for the card (CH-11). */
+export interface StayNote {
+  stage: Stage;
+  needsHuman: boolean;
+}
+
+/**
+ * The urgency line. An in-house guest complaining about a broken AC is a
+ * different call than a lead who is annoyed — and the human reading the card is
+ * the one who has to decide which. `lead` says nothing (the absence of a booking
+ * is not urgent, and saying so would just be noise on every pre-sales card).
+ */
+function stayNote(stay: StayNote | undefined): string | null {
+  if (stay === undefined) return null;
+  const parts: string[] = [];
+  if (stay.stage === 'inhouse') parts.push('IN-HOUSE right now — they are in one of our villas');
+  else if (stay.stage === 'prearrival') parts.push('Arriving soon — has an upcoming stay');
+  else if (stay.stage === 'postguest') parts.push('A past guest — no current booking');
+  if (stay.needsHuman) {
+    parts.push('holds a booking the AI may not describe (cancelled, or multi-room)');
+  }
+  return parts.length === 0 ? null : `Stay: ${parts.join('; ')}.`;
 }
 
 /** Policy telemetry + the §3.3 cool-off ops alert — winning-claim path only. */

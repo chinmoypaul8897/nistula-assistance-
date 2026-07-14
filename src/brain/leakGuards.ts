@@ -17,10 +17,18 @@
  *   and exempts ONLY the guest's own number (last-10 match handles +91/0/bare
  *   spellings). The business number is not exempt: no approved copy sends any
  *   phone number, so one in a draft is anomalous by construction.
- * - §6.5 #7's "other guests' NAMES" arm is deliberately deferred to CH-11
- *   (Paul-approved 2026-07-12): CH-09's block [5] carries only THIS guest's
- *   own facts (fact queries are guest-scoped, pinned by tests), so no
- *   cross-guest data reaches the prompt until CH-11's stays/bookings do.
+ * - §6.5 #7's "other guests' NAMES" arm was deferred to CH-11 (Paul-approved
+ *   2026-07-12). CH-11 HAS LANDED and the arm is still not needed — but for a
+ *   structural reason, not an accident, so do not "finish" it without reading
+ *   this. CH-11 is the first code that loads a FOREIGN guest's row (the
+ *   reference claim reads a mirror row that may not be the caller's), yet no
+ *   foreign name can reach a prompt, a draft or an ops card: stayView.ts drops
+ *   guest_name/guest_email by construction, get_booking's payload emits neither,
+ *   its refusals are byte-identical, and block [5] renders only rows already
+ *   LINKED to this guest. There is nothing for a name-scan to catch.
+ *   RE-POINTED: the arm becomes real when a foreign name genuinely enters —
+ *   CH-12's scheduler (it creates guests from mirror `guest_name`) and CH-13's
+ *   staff cards (they print a guest's first name). Decide it there.
  */
 import { LEAK_SCAN_SOURCES, PHRASEBOOK, REGISTER_EXEMPLARS } from './prompt.js';
 
@@ -62,10 +70,14 @@ const PROMPT_SHINGLES = (() => {
 })();
 
 // Short, high-signal internals — none appears in legitimate guest prose.
+// NOTE: matched LONGEST-FIRST with the hit masked out (see below), because
+// `get_booking` is a substring of `get_booking_link` — a naive pass would record
+// two hits for one leak and quietly inflate the weekly review.
 const TRIPWIRES = [
   'get_quote',
   'get_availability',
   'get_booking_link',
+  'get_booking',
   'remember_fact',
   '[SITUATION]',
   '[KNOWLEDGE]',
@@ -104,9 +116,14 @@ export function scanForLeaks(draft: string, guestPhone: string): LeakScanResult 
     }
   }
 
-  const lower = draft.toLowerCase();
-  for (const wire of TRIPWIRES) {
-    if (lower.includes(wire.toLowerCase())) hits.push(`tripwire:${wire}`);
+  // Longest-first, masking each hit, so a nested wire (get_booking inside
+  // get_booking_link) is reported once — as the most specific name that matched.
+  let lower = draft.toLowerCase();
+  for (const wire of [...TRIPWIRES].sort((a, b) => b.length - a.length)) {
+    const needle = wire.toLowerCase();
+    if (!lower.includes(needle)) continue;
+    hits.push(`tripwire:${wire}`);
+    lower = lower.split(needle).join(' '.repeat(needle.length));
   }
 
   const masked = draft.replace(URL_RE, ' ');

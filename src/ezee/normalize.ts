@@ -28,7 +28,12 @@
  *     live reservations — so `physical_room_label` is ALWAYS null from the
  *     poller. BKG-03 FetchSingleBooking DOES return them (e.g. RoomID
  *     5220300000000000008 / RoomName "06"). The parsing below stays tolerant
- *     of both. TODO(CH-11): enrich physical_room_label via FetchSingleBooking.
+ *     of both. CH-11 built the enrichment: `pnpm ezee:reconcile --apply` hydrates
+ *     the label via BKG-03 through the event-free backfill writer, and the poller
+ *     diff now COALESCEs a null-from-poll so a later poll cannot erase it.
+ *     TODO(CH-13): the task card needs a CURRENT label, and hydration today is
+ *     fill-if-null — nothing ever REFRESHES a label eZee later changes (a guest
+ *     moved B3→C1). Make CH-13's enrichment re-fetch and overwrite, not fill.
  */
 import type { MirrorRowInput, UpsertMirrorOutcome } from '../db/bookings.js';
 import { normalizePhone } from '../lib/phone.js';

@@ -311,6 +311,58 @@ describe('the reference claim — every failure is the SAME value', () => {
   });
 });
 
+// The pre-merge review found both of these. They are not hypotheticals: eZee
+// delivered 877 and 894 to THIS property as `-1/-2/-3` with no bare entry.
+describe('a reservation is a FAMILY of rows, not one exact id', () => {
+  it('finds an owner who types the BARE id when only suffixed rows exist', async () => {
+    // The production shape: a full cancel of a 3-room booking, no bare "877".
+    for (const suffix of ['-1', '-2', '-3']) {
+      await upsertMirrorRow(
+        db,
+        makeInput({ ezeeReservationNo: `877${suffix}`, guestPhone: null, status: 'cancelled' }),
+      );
+    }
+    const ctx = await ctxFor(STRANGER, 'my booking is 877, Rahul Mehta, 26 Aug');
+    const res = await run({ reference: '877' }, ctx);
+
+    // It IS theirs: verified, linked, handed to a human — and NOT struck.
+    expect(res).toMatchObject({ ok: false, error: 'REFUSED' });
+    expect(ctx.booking?.claim.escalateReason).toBe('booking_undescribable');
+    expect(ctx.booking?.claim.strikeReference).toBeNull();
+    const guest = await upsertGuestByPhone(db, STRANGER, 'x');
+    expect(await getGuestStays(db, guest.id)).toHaveLength(3); // all three rooms
+  });
+
+  // The tool must not be a SECOND door past the stay view. Projecting a row as
+  // its own only sibling made the sibling guard structurally unreachable.
+  it('refuses to describe a multi-room reservation the sibling guard catches', async () => {
+    for (const suffix of ['-1', '-2']) {
+      await upsertMirrorRow(db, makeInput({ ezeeReservationNo: `953${suffix}` }));
+    }
+    const guest = await upsertGuestByPhone(db, OWNER, 'Pushname');
+    await linkStaysByPhone(db, guest.id, OWNER);
+
+    const ctx = await ctxFor(OWNER, 'checking booking 953');
+    const res = await run({ reference: '953' }, ctx);
+
+    expect(res).toMatchObject({ ok: false, error: 'REFUSED' });
+    expect(ctx.booking?.claim.escalateReason).toBe('booking_undescribable');
+    expect(JSON.stringify(res)).not.toContain('2026-08-26'); // no dates leak
+  });
+
+  it('does not treat a numeric neighbour as a sibling', async () => {
+    await upsertMirrorRow(db, makeInput({ ezeeReservationNo: '9531' }));
+    await upsertMirrorRow(db, makeInput({ ezeeReservationNo: '953' }));
+    const guest = await upsertGuestByPhone(db, OWNER, 'Pushname');
+    await linkStaysByPhone(db, guest.id, OWNER);
+
+    const ctx = await ctxFor(OWNER, 'checking booking 953');
+    const res = await run({ reference: '953' }, ctx);
+    // 9531 is a DIFFERENT reservation — 953 must still describe cleanly.
+    expect(res).toMatchObject({ ok: true });
+  });
+});
+
 describe('the WhatsApp profile name can never verify a claim', () => {
   // The whole reason the tool takes ONE argument. Even if the model tries to
   // pass a name, there is no field for it — and the guest's text is the only

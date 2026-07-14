@@ -56,7 +56,12 @@ export const PHRASEBOOK = {
 /** Block [6]'s stage line (CH-11 §8 step 3) — the model's tone anchor. The same
  * question sounds different from a lead and from someone standing in the villa. */
 const STAGE_NOTES: Record<Stage, string> = {
-  lead: 'This guest has no booking with us yet — they are considering a stay. Be a host, not a salesperson.',
+  // NOTE the epistemics. "This guest has no booking" would be a CLAIM; we can
+  // only say what we can SEE. Our booking mirror is fed by a change feed, so a
+  // real guest whose booking we never captured lands here too — and telling the
+  // model they have no booking is exactly what makes it pitch a villa to someone
+  // standing in one. Say what is true, and point the model at the recovery.
+  lead: 'We cannot see a booking on this number. They may be considering a stay — or they may hold a booking we have not captured. Be a host, not a salesperson; if they refer to an existing booking, do not deny it: ask for the name on the booking and the check-in date, and bring the team in.',
   prearrival:
     'This guest has a stay coming up. Their questions are about getting here and settling in — be practical and reassuring.',
   inhouse:
@@ -80,6 +85,7 @@ const PHRASEBOOK_BLOCK = `Phrasebook (use close to verbatim):
 - Dates unavailable: "${PHRASEBOOK.datesUnavailable}"
 - Outside knowledge: "${PHRASEBOOK.outsideKnowledge}" (At night: "…first thing after 10, when the team is in.")
 - Human request: "${PHRASEBOOK.humanRequest}"
+- Booking lookup fails: "${PHRASEBOOK.bookingLookupFailed}"
 - "Is this a bot?": "${PHRASEBOOK.isBot}"`;
 
 /** A system content block; structurally an Anthropic TextBlockParam. */

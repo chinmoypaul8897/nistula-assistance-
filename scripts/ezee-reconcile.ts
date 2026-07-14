@@ -34,7 +34,7 @@
  *   about the ACK, not about reading, so this is safe to run from a laptop.
  * - It is PRINT-ONLY unless --apply is passed.
  *
- * CLI: `pnpm ezee:reconcile [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--apply]`
+ * CLI: `pnpm ezee:reconcile [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--apply] [--refresh]`
  * Default range: 30 days back (to catch guests already in-house) to 120 forward.
  */
 import { inArray } from 'drizzle-orm';
@@ -74,7 +74,7 @@ export interface ReconcileResult {
 /** Pure-ish core (injected client + db) — exported for tests. */
 export async function reconcileMirror(
   deps: { db: Db; client: EzeeClient; log: BackfillLogger },
-  opts: { fromDate: string; toDate: string; apply: boolean },
+  opts: { fromDate: string; toDate: string; apply: boolean; refresh?: boolean },
 ): Promise<ReconcileResult> {
   const base: ReconcileResult = {
     from: opts.fromDate,
@@ -150,7 +150,18 @@ export async function reconcileMirror(
 
   // Hydrate the missing rows AND the label-less held ones, through CH-10's own
   // tested writer (BKG-03 per id; no events; never ACKs).
-  const toHydrate = [...missing, ...unlabelled];
+  //
+  // --refresh re-fetches EVERY booking in the window, not only the ones lacking a
+  // label. WHY it must exist: hydration is otherwise fill-if-null, and the poller
+  // diff COALESCEs a null-from-poll so a label, once written, is never revisited
+  // by anything. If eZee moves a guest from B3 to C1 (maintenance, an upgrade, an
+  // overbooking shuffle) the change arrives on the queue carrying NO room
+  // information at all — and we would go on telling that guest, and CH-13's staff
+  // card, the OLD villa forever. Fill-once is safe only while nothing is filled.
+  // (The durable fix is CH-13's enrichment job re-fetching and overwriting.)
+  const toHydrate = opts.refresh === true
+    ? [...new Set([...missing, ...inMirror])]
+    : [...missing, ...unlabelled];
   const out = await backfillBookings(deps, toHydrate);
   return { ...result, upserted: out.upserted, failed: out.failed };
 }
@@ -166,7 +177,7 @@ export function shiftDate(day: string, days: number): string {
 export function parseArgs(
   argv: string[],
   today: string,
-): { fromDate: string; toDate: string; apply: boolean } {
+): { fromDate: string; toDate: string; apply: boolean; refresh: boolean } {
   const get = (flag: string): string | undefined => {
     const i = argv.indexOf(flag);
     return i === -1 ? undefined : argv[i + 1];
@@ -175,6 +186,7 @@ export function parseArgs(
     fromDate: get('--from') ?? shiftDate(today, -DEFAULT_DAYS_BACK),
     toDate: get('--to') ?? shiftDate(today, DEFAULT_DAYS_FORWARD),
     apply: argv.includes('--apply'),
+    refresh: argv.includes('--refresh'),
   };
 }
 

@@ -11,7 +11,7 @@
  *   their already-mirrored bookings. This is the half that matters, because
  *   most guests are mirrored BEFORE they ever message.
  */
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, or, sql } from 'drizzle-orm';
 import type { Db, DbLike } from './client.js';
 import { bookingsMirror, guestStays, referenceAttempts } from './schema.js';
 import type { BookingMirror } from './bookings.js';
@@ -77,6 +77,48 @@ export async function getMirrorForClaim(
     .from(bookingsMirror)
     .where(eq(bookingsMirror.ezeeReservationNo, reservationNo));
   return row ?? null;
+}
+
+/**
+ * Every row belonging to ONE reservation — the bare id and every per-room
+ * suffixed sibling ("877", "877-1", "877-2"…). This, not a single exact row, is
+ * what a reference claim must resolve to. Two reasons, both grounded in rows
+ * that are IN PRODUCTION RIGHT NOW:
+ *
+ * 1. A guest quoting their own reservation number types the BARE id ("877") —
+ *    but eZee delivered that booking's full cancellation as `877-1/-2/-3` with
+ *    NO bare entry (the CH-10 audit BLOCKER, confirmed live on 877 and 894). An
+ *    exact-match read finds nothing, so the owner would fail verification, take
+ *    a STRIKE, and be paged to ops as a suspected identity probe.
+ * 2. The sibling rows ARE the multi-room signal. Handing one of them to the stay
+ *    view alone (as its own only sibling) makes the sibling guard structurally
+ *    unreachable, so the tool would happily describe a booking block [5] refuses
+ *    to describe — a second door past the "one door to words" rule.
+ *
+ * Ordered bare-first, so the caller's record-to-verify-against is the row most
+ * likely to carry guest data (a suffixed cancel entry often carries none).
+ */
+export async function getClaimFamily(
+  db: DbLike,
+  reservationNo: string,
+): Promise<BookingMirror[]> {
+  const base = reservationNo.replace(/-\d+$/, '');
+  const rows = await db
+    .select()
+    .from(bookingsMirror)
+    .where(
+      or(
+        eq(bookingsMirror.ezeeReservationNo, base),
+        // Only a `-<digits>` suffix — never a numeric neighbour ("8771").
+        sql`${bookingsMirror.ezeeReservationNo} ~ ${'^' + escapeRegex(base) + '-[0-9]+$'}`,
+      ),
+    );
+  return [...rows].sort((a, b) => a.ezeeReservationNo.length - b.ezeeReservationNo.length);
+}
+
+/** Reservation ids are eZee's, not ours — never trust them into a regex. */
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 }
 
 /** Links a VERIFIED reference claim. Idempotent — a guest re-stating a

@@ -211,13 +211,23 @@ describe('the safety invariants', () => {
 describe('argument parsing', () => {
   it('defaults to 90 days back and 120 forward — back catches long in-house stays', () => {
     const a = parseArgs([], '2026-07-13');
-    expect(a).toEqual({ fromDate: '2026-04-14', toDate: '2026-11-10', apply: false });
+    expect(a).toEqual({ fromDate: '2026-04-14', toDate: '2026-11-10', apply: false, refresh: false });
   });
 
   it('honours explicit dates and the apply flag', () => {
     expect(parseArgs(['--from', '2026-01-01', '--to', '2026-02-01', '--apply'], '2026-07-13')).toEqual(
-      { fromDate: '2026-01-01', toDate: '2026-02-01', apply: true },
+      { fromDate: '2026-01-01', toDate: '2026-02-01', apply: true, refresh: false },
     );
+  });
+
+  // --refresh re-fetches labelled rows too. Without it, hydration is fill-if-null
+  // and the poller's COALESCE means a villa label, once written, is never
+  // revisited — so a guest moved B3→C1 would be told the OLD villa forever.
+  it('takes --refresh', () => {
+    expect(parseArgs(['--apply', '--refresh'], '2026-07-13')).toMatchObject({
+      apply: true,
+      refresh: true,
+    });
   });
 
   it('shiftDate crosses month and year boundaries', () => {

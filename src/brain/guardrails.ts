@@ -67,6 +67,12 @@ export interface GuardrailDeps {
    * TRUE so every pre-CH-11 caller and test keeps its exact behaviour; the
    * worker always supplies the real value. */
   hasLiveStay?: boolean;
+  /** CH-11: the guest holds a booking we may NOT describe (a live cancellation,
+   * a multi-room reservation). Distinguishes the two ways `hasLiveStay` can be
+   * false, which need DIFFERENT ops cards: "they hold nothing on this number"
+   * versus "they hold a booking a person must handle". Telling ops the first
+   * when the second is true is a card that LIES (pre-merge review). */
+  hasUndescribableBooking?: boolean;
   /** Guardrail 5 trigger: the inbound batch asked "are you a bot?". */
   botQuestion?: boolean;
   /** Guardrail 7: the guest's own E.164 — the ONLY phone a draft may contain. */
@@ -78,6 +84,20 @@ export interface GuardrailDeps {
 export type GuardrailOutcome =
   | { action: 'send'; text: string; toolRuns: ToolRun[]; escalate: EscalationReason | null }
   | { action: 'defer'; text: string; toolRuns: ToolRun[]; escalate: EscalationReason };
+
+/**
+ * WHICH ops card a twice-affirmed booking earns. `hasLiveStay === false` has TWO
+ * causes and they need different sentences to a human:
+ * - the guest holds NOTHING on this number → `booking_overclaim`, whose card
+ *   says "our system shows none — they may have a booking we never captured".
+ * - the guest holds a booking we may not DESCRIBE (a cancellation for next week,
+ *   a multi-room reservation) → `booking_undescribable`. The overclaim card
+ *   would be a LIE here: the system shows a booking, it is just not sayable.
+ * A card that misstates the situation is worse than no card — the human acts on it.
+ */
+function stayEscalation(deps: GuardrailDeps): EscalationReason {
+  return deps.hasUndescribableBooking === true ? 'booking_undescribable' : 'booking_overclaim';
+}
 
 const PRICE_NUDGE =
   'A price you stated was not returned by any tool this turn. State only ₹ figures that appear in a get_quote result from this turn; if you have no live quote, do not state any price — offer to bring the team in instead.';
@@ -166,7 +186,7 @@ export async function runGuardrails(
       // guest may in fact have a booking our mirror cannot see (the D1 gap).
       text: priceFailed ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,
       toolRuns: second.toolRuns,
-      escalate: priceFailed ? 'price' : stayFailed ? 'booking_overclaim' : 'promise',
+      escalate: priceFailed ? 'price' : stayFailed ? stayEscalation(deps) : 'promise',
     };
   }
   // Identity still missing → substitute the approved line whole (§6.5 #5).
@@ -291,7 +311,7 @@ async function finalize(
         ? 'price'
         : promises.violations.length > 0
           ? 'promise'
-          : 'booking_overclaim';
+          : stayEscalation(deps);
       return {
         action: 'defer',
         text: reason === 'price' ? PHRASEBOOK.quoteApiDown : PHRASEBOOK.outsideKnowledge,

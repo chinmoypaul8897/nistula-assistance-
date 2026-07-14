@@ -200,6 +200,13 @@ explicit "NOT IN CODE" for anything absent. Do not write it to a file — just p
 
 ============================================================================ -->
 
+### OQ-17 — Should a guest ASSERTING a booking we cannot see deterministically fetch a human?
+**Question:** CH-11's stay guard stops the AI from *inventing* a booking, and if the model insists twice it defers and raises `booking_overclaim` ("they may genuinely have a booking we never captured — check eZee"). But that only fires when the model MISBEHAVES. On the **well-behaved** path — the model obeys block [4] and honestly says *"I can't see a booking on this number; what's the name and the check-in date?"* — **nothing deterministic escalates**, and there is no tool that can act on a name + date (`get_booking` takes a reference only, by design). A human is reached only if the model happens to use a referral phrase that guardrail 2 then makes true. Should a guest with zero linked stays who ASSERTS a booking ("I have a booking", "my reservation", "I'm checking in today") trigger a deterministic escalation, the way a complaint does?
+**Why / blocks:** This is the D1 population — a real guest with a real booking our change-feed mirror never captured. It is the exact case CH-11 exists to be safe about, and today the SAFE model path and the ESCALATING path are the same path by luck of phrasing, not by construction — which inverts this repo's own rule that safety is code, not model behaviour. Not built now because a new guest-text heuristic has real false-positive surface (a lead asking "do I need a booking?") and needs its own lexicon + red-team cases: a decision, not an improvisation.
+**Owner:** Paul + planning chat. **Feeds:** CH-14 (takeover + escalation SLA — its natural home).
+**Status:** ⬜ OPEN
+**Answer:**
+
 ---
 
 ## D · Planning-chat decisions (design, not just data)

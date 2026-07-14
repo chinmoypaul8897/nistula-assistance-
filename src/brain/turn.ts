@@ -23,7 +23,7 @@ import { runGuardrails } from './guardrails.js';
 import type { LoadedKnowledge } from './knowledge.js';
 import type { EscalationReason } from './policy.js';
 import { PHRASEBOOK, type SystemBlock } from './prompt.js';
-import { liveStays, type StayView } from './stayView.js';
+import { liveStays, needsHuman, type StayView } from './stayView.js';
 import { createHitRecorder } from './telemetry.js';
 import type { DegradedTracker } from './tools/degraded.js';
 import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
@@ -253,6 +253,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
       // read that filled block [5], so the gate and the prompt can never
       // disagree. Guest-derived DATA (block [5]'s text) licenses nothing.
       hasLiveStay: liveStays(args.stays ?? []).length > 0,
+      hasUndescribableBooking: needsHuman(args.stays ?? [], istCalendarDay(args.dbNow)),
       // Guardrail 5 (CH-07): the policy pass's inbound bot-question flag.
       botQuestion: args.botQuestion ?? false,
       // Guardrail 7 (CH-07): self-exemption + the after-hours substitution.

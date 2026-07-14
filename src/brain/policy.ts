@@ -103,8 +103,12 @@ const HUMAN_REQUEST_RES = [
 // highest-stakes conversation we handle worse than it is today.
 //
 // The rule that ships instead: stay context may only ever ADD urgency, never
-// remove it. Sentiment alone still escalates; `stayContext` rides the directive
-// so the ops card and block [6] can say WHERE the guest is. (Paul-approved.)
+// remove it. Sentiment alone still escalates, exactly as it does today; the stay
+// context is carried to the HUMAN instead — the ops card says whether the person
+// complaining is standing in one of our villas right now (opsEscalation.stayNote)
+// and block [6] gives the model the same tone anchor. decidePolicy therefore
+// takes NO stay input at all: it is a pure leaf, and a field it never reads would
+// be a lie in the type (a pre-merge review found exactly that). (Paul-approved.)
 const COMPLAINT_RE =
   /\b(?:dirty|filthy|broken|not\s+work\w*|doesn'?t\s+work|stopped\s+working|worst|terrible|awful|horrible|disappoint\w*|unacceptable|angry|furious|refund|complain\w*|pathetic|rude|smell(?:y|s|ing)?|stink\w*|leak(?:s|y|ing)?|no\s+(?:water|power|electricity|wifi)|ac\s+(?:is\s+)?(?:not|isn'?t|nahi)|disgusting|unhygienic|cockroach\w*|bahut\s+kharab|kharab)\b/i;
 
@@ -143,13 +147,14 @@ export interface PolicyInput {
   conversation: Pick<Conversation, 'status' | 'humanActiveUntil'>;
   now: Date;
   overLimit: boolean;
-  /** CH-11 stay context, derived ONCE in the worker and passed in — policy.ts
-   * stays a pure leaf that never touches the DB. Only ever RAISES urgency
-   * (see the COMPLAINT_RE note); defaults keep every existing caller valid. */
-  stayContext?: StayContext;
 }
 
-/** What the worker knows about this guest's bookings when policy runs. */
+/**
+ * What the worker knows about this guest's bookings. NOT an input to
+ * `decidePolicy` — see the COMPLAINT_RE note: stay context may only ADD urgency,
+ * and it does so on the ops CARD, not by changing what escalates. It lives here
+ * because the worker derives it once and both the card and block [6] consume it.
+ */
 export interface StayContext {
   stage: Stage;
   /** A booking exists that we may not describe (cancelled-but-live, multi-room)

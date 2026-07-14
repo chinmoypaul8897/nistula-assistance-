@@ -99,12 +99,12 @@ describe('block [6] stage line', () => {
     expect(s).toContain('IN one of our villas right now');
   });
 
-  it('tells the model a lead is not a booked guest', () => {
-    expect(buildSituation({ ...base, stage: 'lead' })).toContain('no booking with us yet');
+  it('tells the model what we can SEE, not that the guest has no booking', () => {
+    expect(buildSituation({ ...base, stage: 'lead' })).toContain('cannot see a booking on this number');
   });
 
   it('omits the line entirely when no stage was derived (pre-CH-11 callers)', () => {
     const s = buildSituation(base);
-    expect(s).not.toMatch(/no booking with us yet|IN one of our villas/);
+    expect(s).not.toMatch(/cannot see a booking|IN one of our villas/);
   });
 });

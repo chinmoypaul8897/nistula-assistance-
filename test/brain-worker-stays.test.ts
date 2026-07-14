@@ -175,7 +175,7 @@ describe('a mirrored booking reaches the model', () => {
 
     const prompt = systemText(converseCalls);
     expect(prompt).toContain('Stays: no booking is linked to this number.');
-    expect(prompt).toContain('no booking with us yet'); // stage: lead
+    expect(prompt).toContain('cannot see a booking on this number'); // stage: lead
   });
 
   // A cancelled booking keeps its dates and its link. It must never be described
@@ -243,6 +243,39 @@ describe('a mirrored booking reaches the model', () => {
     expect(prompt).toContain('(a past stay)');
     // A returning guest with no upcoming stay is postguest, never a lead.
     expect(prompt).toContain('stayed with us before');
+  });
+});
+
+// "Stay context may only ever ADD urgency, never remove it" — the deliberate
+// §6.7 deviation. We did NOT narrow the complaint trigger; we tell the human
+// that the person complaining is standing in one of our villas. If that line is
+// absent, the deviation bought nothing and the flag is dead code (pre-merge
+// review found exactly that: policy.ts declared it and never read it).
+describe('the ops card carries WHERE the guest is', () => {
+  it('tells a human that a complaining guest is IN-HOUSE right now', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    await upsertMirrorRow(db, mirrorInput({ checkIn: today, checkOut: '2099-01-01' }));
+    const { conversation } = await seedConversation(db, GUEST);
+    await seedGuestMessage(db, conversation.id, 'the AC is broken and the room is filthy', 60_000);
+
+    const opsSends: string[] = [];
+    const { deps } = rig();
+    deps.opsNumbers = ['+917700900599'];
+    const realSend = deps.wa.sendText.bind(deps.wa);
+    deps.wa = {
+      ...deps.wa,
+      sendText: async (to: string, body: string, opts: never) => {
+        opsSends.push(body);
+        return realSend(to, body, opts);
+      },
+    } as typeof deps.wa;
+
+    await processConversation(deps, conversation.id);
+
+    // The complaint still escalates on sentiment alone (never narrowed) …
+    expect(opsSends.some((c) => c.includes('appears unhappy'))).toBe(true);
+    // … and the card now says WHERE they are.
+    expect(opsSends.some((c) => c.includes('IN-HOUSE right now'))).toBe(true);
   });
 });
 
