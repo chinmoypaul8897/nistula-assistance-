@@ -66,12 +66,40 @@ export async function escalateToOps(
   if (note !== null) lines.push(note);
   if (guestTextTail !== '') lines.push(`Guest: "${guestTextTail}"`);
   const card = lines.join('\n');
+  // 🚨 THE RESULT IS NOT OPTIONAL. This used to be a bare `await sendText(...)`
+  // with the SendResult discarded, and the evidence row below written regardless
+  // — which meant that when the send failed, guardrail 2 still licensed the AI
+  // to tell the guest "I'm bringing the team in" while no human had been reached.
+  // CH-12 made that failure certain rather than occasional (an ops number whose
+  // own 24h window is shut is now refused at the chokepoint), and the hard rule
+  // is unambiguous: NEVER PROMISE WHAT DIDN'T HAPPEN.
+  //
+  // The carve-out, and it is NOT the bug: when NO ops number is configured at
+  // all, the alert log IS the ops channel (CH-02 decision D4 — that is how dev
+  // runs today). "Nobody is configured" and "everybody was unreachable" are
+  // different facts, and only the second one makes the promise a lie.
+  let delivered = deps.opsNumbers.length === 0;
   for (const ops of deps.opsNumbers) {
-    await deps.wa.sendText(ops, card, { conversationId: null, sender: 'system' });
+    const result = await deps.wa.sendText(ops, card, { conversationId: null, sender: 'system' });
+    if (result.ok) delivered = true;
   }
+
+  if (!delivered) {
+    // No evidence row: guardrail 2 will now REFUSE any "the team has been
+    // informed" claim, and the model must fall back to an honest line. The guest
+    // is not lied to; ops is told loudly that a card never landed.
+    await alertOps(deps.log, {
+      kind: 'ops_escalation_undelivered',
+      summary: 'ESCALATION NOT DELIVERED — no ops number could be reached',
+      detail: { conversationId, reason, opsNumbers: deps.opsNumbers.length },
+    });
+    return;
+  }
+
   try {
     // Claimable evidence (§6.5 #2, CH-02 D5 opt-in tagging): transcript-
     // invisible (mapTranscript skips system rows) but guardrail-2 readable.
+    // Written ONLY after a card actually reached a human.
     await insertMessage(deps.db, {
       conversationId,
       direction: 'out',

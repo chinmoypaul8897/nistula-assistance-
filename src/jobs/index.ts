@@ -168,7 +168,11 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
   await boss.createQueue(LIFECYCLE_SEND_QUEUE, {
     policy: 'stately',
     retryLimit: 0, // the next minute's cron tick IS the retry
-    expireInSeconds: 110, // < the 60s cadence x2: a hung tick cannot stack
+    // A batch of 10 sends against a degraded Graph is 10 x (3 tries x 10s + jitter)
+    // ≈ 340s worst case. The old 110s expired a tick that was still working, so
+    // pg-boss called it failed while it succeeded. stately + singletonKey is what
+    // prevents overlap; the expire only needs to exceed honest work.
+    expireInSeconds: 420,
   });
   await boss.createQueue(LIFECYCLE_RECONCILE_QUEUE, {
     policy: 'stately',
@@ -375,10 +379,13 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     // `today` is re-derived on EVERY run, never captured at boot: a process that
     // stays up for a week would otherwise keep scheduling against the day it
     // booted, and the date gate would rot open.
-    const schedulerDeps = (): SchedulerDeps => ({
+    const quiet = { nightStart: deps.nightStart ?? '20:00', nightEnd: deps.nightEnd ?? '10:00' };
+    const schedulerDeps = (fromSweep = false): SchedulerDeps => ({
       db: deps.db,
       log: deps.log,
       gates: { ...gates, today: istCalendarDay(nowIST()) },
+      quiet,
+      fromSweep,
     });
 
     for (const [kind, queue] of Object.entries(BOOKING_EVENT_QUEUES)) {
@@ -398,11 +405,12 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
         db: deps.db,
         log: deps.log,
         wa: deps.wa,
+        gates: { sources: gates.sources },
         enabled: sendEnabled,
       });
     });
     await deps.boss.work(LIFECYCLE_RECONCILE_QUEUE, workOptions, async () => {
-      await runReconcile(schedulerDeps());
+      await runReconcile(schedulerDeps(true));
     });
 
     await scheduleCron(deps.boss, LIFECYCLE_SEND_QUEUE, LIFECYCLE.senderCron, 'Asia/Kolkata', {
@@ -415,12 +423,22 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
       'Asia/Kolkata',
       { singletonKey: 'reconcile' },
     );
-    deps.log.info(
-      { sendEnabled, epoch: gates.epoch?.toISOString(), sources: gates.sources },
-      sendEnabled
-        ? 'lifecycle ENABLED — scheduled messages WILL be sent'
-        : 'lifecycle mounted, sending DISABLED (LIFECYCLE_SEND_ENABLED=0) — rows accrue, nothing sends',
-    );
+    // Boot must not claim it is armed when it is inert. LIFECYCLE_EPOCH unset
+    // means NOTHING is ever scheduled, so "ENABLED" would be a lie in the one
+    // log line an operator reads to check.
+    if (gates.epoch === undefined) {
+      deps.log.warn(
+        { sendEnabled },
+        'lifecycle mounted but LIFECYCLE_EPOCH is UNSET — nothing will ever be scheduled',
+      );
+    } else {
+      deps.log.info(
+        { sendEnabled, epoch: gates.epoch.toISOString(), sources: gates.sources },
+        sendEnabled
+          ? 'lifecycle ENABLED — scheduled messages WILL be sent'
+          : 'lifecycle mounted, sending DISABLED (LIFECYCLE_SEND_ENABLED=0) — rows accrue, nothing sends',
+      );
+    }
   } else {
     // Same reason as the poller's: a cron left by an earlier boot must not fire
     // into a queue that now has no worker.

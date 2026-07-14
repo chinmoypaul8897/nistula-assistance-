@@ -90,6 +90,7 @@ const senderDeps = (wa: ReturnType<typeof makeWa>['wa'], enabled = true): Sender
   db,
   log,
   wa,
+  gates: { sources: GATES.sources },
   enabled,
 });
 
@@ -151,7 +152,7 @@ describe('runSender', () => {
 
     const result = await runSender(senderDeps(wa, false));
 
-    expect(result).toEqual({ attempted: 0, sent: 0, skipped: 0, failed: 0 });
+    expect(result).toEqual({ attempted: 0, sent: 0, skipped: 0, deferred: 0, failed: 0 });
     expect(sent).toHaveLength(0);
     const rows = await db.select().from(scheduledMessages);
     expect(rows.every((r) => r.status === 'pending')).toBe(true); // still deliverable
@@ -263,9 +264,13 @@ describe('runSender', () => {
     const result = await runSender(senderDeps(wa));
 
     expect(sent).toHaveLength(0);
-    expect(result).toMatchObject({ skipped: 1, sent: 0, failed: 0 });
+    expect(result).toMatchObject({ deferred: 1, sent: 0, failed: 0 });
     const [row] = await db.select().from(scheduledMessages).where(sql`kind = 'confirmation'`);
     expect(row?.status).toBe('pending'); // still deliverable
+    expect(row?.skipReason).toBe('window_closed');
+    // BACKED OFF, not left at the front of the queue: 25 undeliverable rows are
+    // permanently the OLDEST, so without this they starve every newer message.
+    expect(row?.sendAt.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('does not send the same row twice across two ticks', async () => {

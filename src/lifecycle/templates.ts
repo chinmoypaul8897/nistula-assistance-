@@ -50,7 +50,23 @@ const param = z
   .min(1)
   .max(200)
   .refine((v) => !/[\n\r\t]/.test(v), 'template params may not contain newlines or tabs')
-  .refine((v) => !/ {4,}/.test(v), 'template params may not contain 4+ consecutive spaces');
+  .refine((v) => !/ {4,}/.test(v), 'template params may not contain 4+ consecutive spaces')
+  // THE MONEY RULE, made load-bearing rather than incidental. Nothing in the
+  // lifecycle path passes bookings_mirror.amount today — but "no caller happens
+  // to do it" is not a guarantee, and this is the one outbound with no model and
+  // no §6.5 guardrail behind it. A guest name of "₹5,000" would otherwise render
+  // a rupee figure straight onto a guest's screen.
+  .refine((v) => !/₹|\b(?:INR|Rs\.?)\s*\d/i.test(v), 'template params may not contain a ₹ figure')
+  // OQ-19, enforced in the SLOT and not just the sentence. The bodies are
+  // checked for house names by a test, but a house can only ever reach a guest
+  // through a PARAM — and `villaType` is free text from eZee's back office. The
+  // OQ-19 fix is a PMS re-model, which means somebody will edit those room-type
+  // names; "Nistula Villa B1" must not sail through onto a guest's screen.
+  .refine(
+    (v) => !/\b(?:Apartment|Villa)\s*(?:0?\d|[BC]\d)\b/i.test(v) && !/\bSiolim 4BHK\b/i.test(v),
+    'template params may not name a physical house (OQ-19 — eZee only guessed it)',
+  )
+  .refine((v) => !/https?:\/\//i.test(v), 'template params may not carry a URL');
 
 export interface TemplateDef {
   /** The name submitted to Meta. Versioned: a body change is a NEW template. */
@@ -103,8 +119,15 @@ export const LIFECYCLE_TEMPLATES: Record<ScheduledKind, TemplateDef> = {
     category: 'utility',
     order: ['firstName', 'villaType'],
     schema: z.object({ firstName: param, villaType: param }),
+    // WHY no "a late breakfast" (it was here, and a review caught it): the
+    // tariff is ACCOMMODATION ONLY unless meals are listed on the booking
+    // (kb/policies.md, kb/faq.md), the meal plan is an opaque rate code we
+    // cannot read (OQ-16), and no breakfast fee is published — so guardrail 1
+    // would block the AI from even pricing it if the guest said yes. Offering a
+    // service we may not provide, cannot price and cannot fulfil is exactly what
+    // §6.5 exists to stop, and this body sits where §6.5 cannot see it.
     render: (p) =>
-      `${p.firstName}, your ${p.villaType} is ready for you today, from 3 pm. Anything at all during your stay — a late breakfast, an extra towel, a cab — message us right here.`,
+      `${p.firstName}, your ${p.villaType} is ready for you today, from 3 pm. Anything at all during your stay — an extra towel, a cab, a recommendation — message us right here.`,
   }),
 
   poststay: def({

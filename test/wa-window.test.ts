@@ -216,10 +216,15 @@ describe('sendTemplated — the only way to reach a closed window', () => {
 
     expect(result).toMatchObject({ ok: false, error: 'WINDOW_CLOSED_SIMULATED' });
     expect(sent).toHaveLength(0);
-    expect(log.error).toHaveBeenCalledWith(
-      expect.objectContaining({ opsAlert: 'wa_template_unsendable' }),
-      expect.stringContaining('[OPS-ALERT]'),
+    // WARN, deliberately not an ops alert: this is the EXPECTED state for every
+    // lifecycle guest on the dev test number (they have never messaged us), and
+    // the sender re-attempts on a backoff — alerting here paged ops once per row
+    // per tick, for ever.
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ template: 'nst_welcome_v1' }),
+      expect.stringContaining('CLOSED window'),
     );
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('marks a simulated (open-window) send raw.devTemplate = true, with no visible prefix', async () => {

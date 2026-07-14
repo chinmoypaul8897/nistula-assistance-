@@ -21,6 +21,17 @@ import { conversations, phoneWindows } from './schema.js';
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Meta sends `timestamp` as unix seconds. A missing/garbled one falls back to
+ * now — tolerant parsing per §5.3, and the greatest() guard below keeps the
+ * fallback from ever shrinking a live window.
+ */
+export function inboundTimestamp(raw: string | undefined): Date {
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) return new Date();
+  return new Date(seconds * 1000);
+}
+
 /** Records an inbound from ANY number — guest, staff or ops. Cheap, idempotent,
  * and called on every inbound: a number can be both a guest and on the roster,
  * and we would rather hold a window we never read than miss one we need. */

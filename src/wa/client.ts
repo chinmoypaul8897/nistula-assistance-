@@ -33,23 +33,19 @@ import { messages } from '../db/schema.js';
 import { windowStateFor } from '../db/windows.js';
 import { http as defaultHttp } from '../lib/http.js';
 import { summarizeError } from '../lib/logger.js';
-import {
-  ALL_TEMPLATES,
-  templateComponents,
-  type TemplateDef,
-  type TemplateKey,
-} from '../lifecycle/templates.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
+import { failSend as settleFailed, graphFailure, type SendResult } from './sendFailure.js';
+import { createTemplateSender, type TemplateMode } from './templateSend.js';
 import type { WaSendResponse } from './types.js';
 
-/**
- * Whether real Meta templates are sent, or simulated as free-form (plan CH-12
- * step 4). Template approval belongs to the real number's WABA, which does not
- * exist yet — so dev sends the IDENTICAL body as free-form and marks the row
- * raw.devTemplate = true. No visible prefix: the guest sees what production
- * would send. Nothing branches on NODE_ENV, only on this value (§5.3).
- */
-export type TemplateMode = 'simulate' | 'send';
+export type { SendResult } from './sendFailure.js';
+
+export type {
+  PlannedTemplatedSend,
+  PlannedTemplatedSendOk,
+  TemplateMode,
+  TemplatedSend,
+} from './templateSend.js';
 
 /** Outbound rows can never claim guest authorship (§4 sender semantics). */
 export type OutboundSender = Exclude<Message['sender'], 'guest'>;
@@ -62,10 +58,6 @@ export interface SendOptions {
   conversationId: string | null;
   sender: OutboundSender;
 }
-
-export type SendResult =
-  | { ok: true; messageId: string; waMessageId: string }
-  | { ok: false; messageId: string | null; error: string };
 
 /** Dispatch of a committed intent row — messages has no phone column, so the caller restates the target. */
 export interface DispatchArgs {
@@ -93,26 +85,6 @@ export interface WaClientDeps {
   /** Test seam only: the clock the window is judged against. */
   now?: () => Date;
 }
-
-/** A window-aware send of catalogued, pre-approved text. */
-export interface TemplatedSend {
-  key: TemplateKey;
-  params: Record<string, string>;
-}
-
-/** A decided-but-not-yet-written templated send (see planTemplatedSend). */
-export interface PlannedTemplatedSendOk {
-  ok: true;
-  /** The rendered text — stored on the row whichever vehicle carries it. */
-  body: string;
-  /** True ⇒ a real Meta template goes on the wire (window shut, mode 'send'). */
-  asTemplate: boolean;
-  templateName: string;
-  params: Record<string, string>;
-  def: TemplateDef;
-  intentExtra: { type: Message['type']; templateName: string; raw: unknown };
-}
-export type PlannedTemplatedSend = PlannedTemplatedSendOk | { ok: false; error: string };
 
 /** Builds the send client; boot wires live deps, tests inject fakes. */
 export function createWaClient(deps: WaClientDeps) {
@@ -198,12 +170,12 @@ export function createWaClient(deps: WaClientDeps) {
       });
       httpStatus = response.status;
       if (!response.ok) {
-        return await failSend(args.messageId, args.conversationId, await graphFailure(response));
+        return await settleFailed(deps.db, deps.log, args.messageId, args.conversationId, await graphFailure(response));
       }
       const parsed = (await response.json().catch(() => ({}))) as WaSendResponse;
       waMessageId = parsed.messages?.[0]?.id;
       if (waMessageId === undefined) {
-        return await failSend(args.messageId, args.conversationId, {
+        return await settleFailed(deps.db, deps.log, args.messageId, args.conversationId, {
           errorText: 'Graph 2xx without a message id',
           httpStatus,
         });
@@ -223,7 +195,9 @@ export function createWaClient(deps: WaClientDeps) {
     } catch (error) {
       // summarizeError, never raw messages: a thrown DB error embeds bound
       // params (§3.3) — and this row/alert text must stay content-free.
-      return await failSend(
+      return await settleFailed(
+        deps.db,
+        deps.log,
         args.messageId,
         args.conversationId,
         { errorText: summarizeError(error), httpStatus },
@@ -282,184 +256,6 @@ export function createWaClient(deps: WaClientDeps) {
     });
   }
 
-  /**
-   * Sends catalogued text, window-aware — the ONLY way to reach someone who has
-   * not written to us, and therefore the whole basis of CH-12.
-   *
-   * Window OPEN  → free-form. Warmer, free, and it threads naturally.
-   * Window SHUT  → the template path: a real Meta template in 'send' mode, or
-   *                the identical body as free-form in 'simulate' mode, marked
-   *                raw.devTemplate = true (plan CH-12 step 4).
-   *
-   * Returns the window state alongside the result so the caller can meter a
-   * `wa_template` cost event only when a template was actually the vehicle.
-   */
-  async function sendTemplated(
-    toE164: string,
-    send: TemplatedSend,
-    opts: SendOptions,
-  ): Promise<SendResult & { usedTemplate: boolean }> {
-    const planned = await planTemplatedSend(toE164, send, opts);
-    if (!planned.ok) {
-      return { ok: false, messageId: null, error: planned.error, usedTemplate: false };
-    }
-    let message: Message;
-    try {
-      message = await createSendIntent(deps.db, planned.body, opts, planned.intentExtra);
-    } catch (error) {
-      await alertOps(deps.log, {
-        kind: 'wa_send_failed',
-        summary: 'WhatsApp send-intent insert failed (template)',
-        detail: { conversationId: opts.conversationId, template: planned.templateName },
-      });
-      return { ok: false, messageId: null, error: summarizeError(error), usedTemplate: false };
-    }
-    const result = await dispatchTemplated(
-      { messageId: message.id, toE164, body: planned.body, conversationId: opts.conversationId },
-      planned,
-    );
-    return { ...result, usedTemplate: planned.asTemplate };
-  }
-
-  /**
-   * Decides HOW a catalogued message would go out, without writing or sending
-   * anything — the window read, the param validation and the template-vs-
-   * free-form choice, all up front.
-   *
-   * WHY it is separate: the lifecycle sender must claim its scheduled_messages
-   * row and create the message intent in ONE transaction (so a crash can neither
-   * double-send nor silently lose the message), and it therefore needs the body
-   * decided BEFORE that transaction opens. This is the same intent/dispatch split
-   * CH-03's worker uses; sendTemplated above is the convenience wrapper over it
-   * for callers that need no transaction of their own (CH-13's staff cards).
-   */
-  async function planTemplatedSend(
-    toE164: string,
-    send: TemplatedSend,
-    opts: SendOptions,
-  ): Promise<PlannedTemplatedSend> {
-    const def = ALL_TEMPLATES[send.key];
-    let body: string;
-    try {
-      body = def.render(def.schema.parse(send.params));
-    } catch (error) {
-      await alertOps(deps.log, {
-        kind: 'wa_template_invalid',
-        summary: 'Template params rejected before sending',
-        detail: { template: def.name, conversationId: opts.conversationId },
-      });
-      return { ok: false, error: summarizeError(error) };
-    }
-
-    const window = await windowStateFor(
-      deps.db,
-      { conversationId: opts.conversationId, phone: toE164 },
-      now(),
-    );
-    const asTemplate = !window.open && templateMode === 'send';
-
-    // A simulated template is PHYSICALLY a free-form text, so it cannot enter a
-    // closed window either. That is not a gap in the simulation — it is the same
-    // constraint production has, minus the approved template. The dev test number
-    // cannot prove the closed-window path; only the real WABA can.
-    if (!window.open && templateMode === 'simulate') {
-      deps.log.warn(
-        { template: def.name, windowSource: window.source },
-        'template simulated into a CLOSED window — a real send needs WA_TEMPLATE_MODE=send',
-      );
-      await alertOps(deps.log, {
-        kind: 'wa_template_unsendable',
-        summary: 'Closed window and templates are simulated — message not sent',
-        detail: { template: def.name, conversationId: opts.conversationId },
-      });
-      return { ok: false, error: 'WINDOW_CLOSED_SIMULATED' };
-    }
-
-    return {
-      ok: true,
-      body,
-      asTemplate,
-      templateName: def.name,
-      params: send.params,
-      def,
-      intentExtra: {
-        type: asTemplate ? 'template' : 'text',
-        templateName: def.name,
-        raw: { devTemplate: !asTemplate, template: def.name },
-      },
-    };
-  }
-
-  /** Graph call for an already-COMMITTED templated intent row. Never throws. */
-  async function dispatchTemplated(
-    args: DispatchArgs,
-    planned: PlannedTemplatedSendOk,
-  ): Promise<SendResult> {
-    return planned.asTemplate
-      ? dispatchToGraph(args, {
-          messaging_product: 'whatsapp',
-          to: args.toE164,
-          type: 'template',
-          template: {
-            name: planned.def.name,
-            language: { code: planned.def.language },
-            components: templateComponents(planned.def, planned.params),
-          },
-        })
-      : dispatchToGraph(args, {
-          messaging_product: 'whatsapp',
-          to: args.toE164,
-          type: 'text',
-          text: { body: args.body },
-        });
-  }
-
-  interface SendFailure {
-    errorText: string;
-    errorCode?: number;
-    errorTitle?: string;
-    httpStatus?: number;
-  }
-
-  async function failSend(
-    messageId: string,
-    conversationId: string | null,
-    failure: SendFailure,
-    waMessageId?: string,
-  ): Promise<SendResult> {
-    try {
-      // Writing waMessageId when known keeps a post-2xx failure healable:
-      // the later delivered/read webhook matches the row and the D3 lattice
-      // (failed < delivered) corrects the false 'failed'.
-      await deps.db
-        .update(messages)
-        .set({
-          status: 'failed',
-          error: failure.errorText,
-          ...(waMessageId === undefined ? {} : { waMessageId }),
-        })
-        .where(and(eq(messages.id, messageId), eq(messages.status, 'queued')));
-    } catch {
-      // DB gone mid-failure: the row stays 'queued' — inert by design; the
-      // TODO(CH-17) stale-queued sweep is the recovery net. Alert regardless.
-    }
-    // Structured fields per D4 (CH-17 dedupe keys off them); free error text
-    // stays on the message row, never in logs.
-    await alertOps(deps.log, {
-      kind: 'wa_send_failed',
-      summary: 'WhatsApp send failed',
-      detail: {
-        messageId,
-        conversationId,
-        waMessageId,
-        errorCode: failure.errorCode,
-        errorTitle: failure.errorTitle,
-        httpStatus: failure.httpStatus,
-      },
-    });
-    return { ok: false, messageId, error: failure.errorText };
-  }
-
   /** Marks an inbound message read (§5.3, optional nicety) — no message row. */
   async function markRead(waMessageId: string): Promise<boolean> {
     try {
@@ -478,43 +274,27 @@ export function createWaClient(deps: WaClientDeps) {
     }
   }
 
+  // The TEMPLATE half of the chokepoint (§5.3), split into its own file for the
+  // ~300-line rule. It is handed THIS client's internals rather than
+  // re-implementing them, so there is still exactly one door out (D2).
+  const templates = createTemplateSender({
+    db: deps.db,
+    log: deps.log,
+    now,
+    templateMode,
+    createSendIntent,
+    dispatchToGraph,
+  });
+
   return {
     sendText,
-    sendTemplated,
-    planTemplatedSend,
-    dispatchTemplated,
     markRead,
     createSendIntent,
     dispatchText,
+    sendTemplated: templates.sendTemplated,
+    planTemplatedSend: templates.planTemplatedSend,
+    dispatchTemplated: templates.dispatchTemplated,
   };
 }
 
 export type WaClient = ReturnType<typeof createWaClient>;
-
-/** Token-free failure from a Graph error response: status + Meta's own code/type/message. */
-async function graphFailure(response: Response): Promise<{
-  errorText: string;
-  errorCode?: number;
-  errorTitle?: string;
-  httpStatus: number;
-}> {
-  let detail = '';
-  let errorCode: number | undefined;
-  let errorTitle: string | undefined;
-  try {
-    const parsed = (await response.json()) as WaSendResponse;
-    if (parsed.error !== undefined) {
-      errorCode = parsed.error.code;
-      errorTitle = parsed.error.type;
-      detail = ` ${parsed.error.code ?? ''} ${parsed.error.message ?? ''}`.trimEnd();
-    }
-  } catch {
-    // Non-JSON error body — the status code alone still tells the story.
-  }
-  return {
-    errorText: `Graph ${response.status}${detail}`.slice(0, 300),
-    errorCode,
-    errorTitle,
-    httpStatus: response.status,
-  };
-}
