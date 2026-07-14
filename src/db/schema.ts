@@ -335,3 +335,81 @@ export const referenceAttempts = pgTable(
     index('reference_attempts_phone_created_idx').on(table.phone, table.createdAt),
   ],
 );
+
+/** §4 scheduled_messages vocabulary. `lead_followup` is CH-15's; CH-12 defines
+ * it so the enum never needs a second migration. */
+export const scheduledMessageKindEnum = pgEnum('scheduled_message_kind', [
+  'confirmation',
+  'prearrival',
+  'welcome',
+  'poststay',
+  'winback',
+  'lead_followup',
+]);
+export const scheduledMessageStatusEnum = pgEnum('scheduled_message_status', [
+  'pending',
+  'sent',
+  'skipped',
+  'cancelled',
+  'failed',
+]);
+
+/**
+ * Lifecycle + follow-up sends (§4, CH-12). A row is an INTENTION, never a
+ * promise: the sender re-reads bookings_mirror at send time and skips anything
+ * that stopped being true (§3.4 — the mirror is the truth, the schedule is a
+ * plan). That is why a cancelled booking is safe even if its cancel event were
+ * somehow missed.
+ *
+ * WHY no 'sending' state (the §4 enum has none): the send-intent pattern puts
+ * the atomicity on the MESSAGE row, not here. The sender flips pending→sent and
+ * writes the 'queued' message row in ONE transaction, committed BEFORE the
+ * Graph call — so a crash mid-send leaves a 'queued' message (CH-17's stale
+ * sweep reconciles it) and never a second send. The `WHERE status='pending'`
+ * guard on that flip is what makes concurrent senders safe.
+ */
+export const scheduledMessages = pgTable(
+  'scheduled_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    guestId: uuid('guest_id')
+      .notNull()
+      .references(() => guests.id),
+    bookingId: uuid('booking_id').references(() => bookingsMirror.id),
+    kind: scheduledMessageKindEnum('kind').notNull(),
+    templateName: text('template_name').notNull(),
+    /** Rendered template params — villa TYPE only, never a house (OQ-19), and
+     * never a ₹ figure (§3.4 money rule). */
+    params: jsonb('params').notNull(),
+    sendAt: timestamp('send_at', { withTimezone: true }).notNull(),
+    status: scheduledMessageStatusEnum('status').notNull().default('pending'),
+    /** `${kind}:${referenceBase(reservationNo)}` — the idempotency key. A modify
+     * UPDATEs send_at through this while still pending; it never duplicates. */
+    dedupeKey: text('dedupe_key').notNull().unique(),
+    /** WHY no FK: a message-id cursor per the §4 convention (see conversations). */
+    sentMessageId: uuid('sent_message_id'),
+    /** §4 addition (recorded): a `skipped` row with no reason is unauditable,
+     * and CH-14b's morning digest has to explain itself to a human. */
+    skipReason: text('skip_reason'),
+    ...timestamps,
+  },
+  (table) => [
+    // §4 index list: the minutely sender scans due pending rows.
+    index('scheduled_messages_status_send_at_idx').on(table.status, table.sendAt),
+  ],
+);
+
+/**
+ * 24h-window tracking for NON-guest numbers — staff and ops (§4, §5.3). Guest
+ * windows live on conversations.service_window_expires_at; these numbers have
+ * no conversation, but Meta's 24h rule applies to them exactly the same, so a
+ * task card or digest sent to a cold staff number must go as a template.
+ * Written on EVERY inbound (a number may be both a guest and on the roster);
+ * read only for sends with conversation_id = null.
+ */
+export const phoneWindows = pgTable('phone_windows', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  phone: text('phone').notNull().unique(),
+  lastInboundAt: timestamp('last_inbound_at', { withTimezone: true }).notNull(),
+  ...timestamps,
+});
