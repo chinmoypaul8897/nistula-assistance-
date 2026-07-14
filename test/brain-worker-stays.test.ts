@@ -155,7 +155,12 @@ describe('a mirrored booking reaches the model', () => {
     expect(stayLine).not.toMatch(/\bEP\b|\bCP\b|breakfast/i);
   });
 
-  it('names the UNIT once eZee has assigned one', async () => {
+  // 🚨 OQ-19 — this test asserted the OPPOSITE and it was a live defect. eZee holds
+  // 8 houses inside 3 room TYPES, so a booking cannot name a house: eZee picks one
+  // itself, and the guest's actual choice never reaches it. The label is eZee's
+  // guess. The AI must not put it in front of a guest, even when the mirror holds
+  // one — see stayView.TRUST_EZEE_ROOM_ASSIGNMENT.
+  it('never puts eZee’s guessed house in the prompt, even when the mirror holds one', async () => {
     await upsertMirrorRow(db, mirrorInput({ physicalRoomLabel: 'Villa B3' }));
     const { conversation } = await seedConversation(db, GUEST);
     await seedGuestMessage(db, conversation.id, 'which villa am I in?', 60_000);
@@ -163,7 +168,10 @@ describe('a mirrored booking reaches the model', () => {
     const { deps, converseCalls } = rig();
     await processConversation(deps, conversation.id);
 
-    expect(systemText(converseCalls)).toContain('- Villa B3, 2026-08-26');
+    const stayLine =
+      systemText(converseCalls).split('\n').find((l) => l.includes('2026-08-26 to 2026-08-28')) ?? '';
+    expect(stayLine).toContain('Nistula Villa (villa type');
+    expect(stayLine).not.toContain('Villa B3');
   });
 
   it('tells the model a stranger has no booking', async () => {

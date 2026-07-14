@@ -59,6 +59,29 @@ export const LIVE_STATUSES = ['confirmed', 'modified', 'checked_in'] as const;
 
 export type Stage = 'lead' | 'prearrival' | 'inhouse' | 'postguest';
 
+/**
+ * 🚨 OQ-19 — MAY THE AI NAME THE HOUSE eZee HAS A BOOKING AGAINST?
+ *
+ * **FALSE, deliberately, until the property is re-modelled in eZee.**
+ *
+ * eZee holds 8 houses inside 3 room TYPES, so a booking cannot name a house —
+ * its create API has no field for one. eZee auto-assigns instead, and the guest's
+ * actual choice is dropped before it ever arrives. Proven live: two type-level
+ * bookings (953, 957) were BOTH parked in Apartment 06.
+ *
+ * So `physical_room_label` is not "the guest's house". It is eZee's guess. Acting
+ * on it would let the AI tell a guest, with total confidence, that they are in a
+ * house they did not book and may not be given.
+ *
+ * With this false the AI speaks the villa TYPE — exactly what it did before the
+ * labels were hydrated, and what §5.4's *intent* has always been.
+ *
+ * FLIP TO TRUE only when a house is genuinely the thing that was booked (one
+ * house = one bookable product in eZee, as Siolim already is). The unit tests
+ * around this constant spell out precisely what changes when you do.
+ */
+export const TRUST_EZEE_ROOM_ASSIGNMENT = false;
+
 /** Why a row could not be described — ops/telemetry only, never guest-facing. */
 export type UndescribableReason =
   | 'status_not_describable'
@@ -169,12 +192,38 @@ export function project(
     return { describable: false, ...base, reason: 'sibling_rows' };
   }
 
+  // OQ-19 (2026-07-14) — THE GROUND TRUTH OF §5.4 TURNED OUT TO BE FALSE.
+  //
+  // §5.4 says: name a unit only when `physical_room_label` is assigned. That rule
+  // was written believing the label meant "the house this booking IS for". It does
+  // not. It means "the house eZee happened to PICK".
+  //
+  // eZee is configured with 3 room TYPES holding 8 houses, so a booking cannot
+  // carry a house at all — InsertBooking has no field for one. eZee therefore
+  // auto-assigns, lowest-numbered-first: reservations 953 AND 957, both booked as
+  // "Nistula Apartment", were both parked in Apartment 06. The guest's actual
+  // choice is dropped at the boundary and never reaches eZee.
+  //
+  // So a label is NOT evidence that the guest is in that house — it is eZee's
+  // guess, it may contradict what they booked and paid for, and it can be changed
+  // by the front desk without the poll ever telling us (BKG-02 carries no room).
+  //
+  // Until the property is re-modelled (one house = one bookable product, the way
+  // Siolim already is), the AI names NO house. It says "your Nistula Villa", which
+  // is what it did before the labels landed, and which was accidentally safe.
+  // Saying less is free. Saying the wrong house is not.
+  //
+  // The labels STAY in the mirror — ops and a future task card still want to know
+  // which door eZee has this booking against. Only the AI's licence to SPEAK one
+  // is withdrawn. Flip this back the day OQ-19 is answered, and the tests below
+  // will tell you exactly what starts working again.
+  const unitLabel = TRUST_EZEE_ROOM_ASSIGNMENT ? row.physicalRoomLabel : null;
+
   return {
     describable: true,
     ...base,
-    // §5.4: a named unit ONLY when eZee has actually assigned one.
-    villa: row.physicalRoomLabel ?? row.roomTypeName,
-    isUnit: row.physicalRoomLabel !== null,
+    villa: unitLabel ?? row.roomTypeName,
+    isUnit: unitLabel !== null,
     checkIn: row.checkIn,
     checkOut: row.checkOut,
     adults: row.adults,

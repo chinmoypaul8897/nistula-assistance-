@@ -19,6 +19,7 @@ import {
   roomCount,
   selectStays,
   STAYS_RENDER_LIMIT,
+  TRUST_EZEE_ROOM_ASSIGNMENT,
   type StayView,
 } from '../src/brain/stayView.js';
 
@@ -138,9 +139,26 @@ describe('villa naming — §5.4 never promises a unit we were not given', () =>
     expect(view).toMatchObject({ villa: 'Nistula Villa', isUnit: false });
   });
 
-  it('speaks the UNIT once the mirror actually holds one', () => {
+  // 🚨 OQ-19 (2026-07-14). This test used to assert the OPPOSITE, and that was a
+  // live defect: a hydrated label licensed the AI to name the house.
+  //
+  // eZee holds 8 houses in 3 room TYPES, so a booking cannot carry a house — the
+  // create API has no field for one. eZee auto-assigns instead (reservations 953
+  // AND 957, both "Nistula Apartment", were both parked in Apartment 06), and the
+  // guest's real choice is dropped before eZee ever sees it. So the label is
+  // eZee's GUESS, not the guest's house — and naming it would tell a guest, with
+  // full confidence, that they are in a house they did not book.
+  //
+  // The AI therefore names NO house, even when the mirror holds one.
+  it('still speaks the TYPE even when the mirror holds a unit — the label is eZee’s guess, not the guest’s house', () => {
     const view = solo(row({ physicalRoomLabel: 'Villa B3' }));
-    expect(view).toMatchObject({ villa: 'Villa B3', isUnit: true });
+    expect(view).toMatchObject({ villa: 'Nistula Villa', isUnit: false });
+    // …and the house name must not leak into the projection at all.
+    expect(JSON.stringify(view)).not.toContain('Villa B3');
+  });
+
+  it('the safety flag is OFF, and is the single thing that gates it', () => {
+    expect(TRUST_EZEE_ROOM_ASSIGNMENT).toBe(false);
   });
 });
 
