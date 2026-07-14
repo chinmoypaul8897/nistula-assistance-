@@ -30,30 +30,16 @@
  * of them the winner. A crash after the commit: the message row sits 'queued'
  * and CH-17's stale-queued sweep reconciles it — it is never blindly re-sent.
  */
-import { and, eq, gte, lt, sql } from 'drizzle-orm';
-import type { BookingMirror } from '../db/bookings.js';
+import { and, eq, lt } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { insertCostEvents } from '../db/repos.js';
-import { bookingsMirror, conversations, guests, scheduledMessages } from '../db/schema.js';
+import { conversations, guests, scheduledMessages } from '../db/schema.js';
 import { istCalendarDay, nowIST } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
-import { hasPhone, passesSource, type GateContext } from './gates.js';
-import { LIFECYCLE_TEMPLATES, type ScheduledKind } from './templates.js';
+import type { GateContext } from './gates.js';
+import { blockedBy, defer, resolve, type Outcome, type ScheduledRow } from './sendGuards.js';
 
-/** §2.3: "fewer than 2 win-backs sent in the trailing 365 days". */
-const WINBACK_CAP = 2;
-const WINBACK_WINDOW_DAYS = 365;
-/** A deferred row waits this long before the sender looks at it again. Without
- * it, an undeliverable row (window shut) is permanently the OLDEST row, so it
- * permanently occupies the batch — 25 of them starve every newer message for
- * ever, while alerting once a minute each. */
-const DEFER_MINUTES = 15;
-/** Past this age a lifecycle message has stopped being true. "We look forward to
- * welcoming you on Sunday" is worse than silence when Sunday was last week —
- * and a guest who finally opens their window on arrival day must not receive
- * their confirmation, pre-arrival and welcome all at once. */
-const STALE_AFTER_HOURS = 36;
 
 export interface SenderLogger extends AlertLogger {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -83,95 +69,6 @@ export interface SenderResult {
   failed: number;
 }
 
-type ScheduledRow = typeof scheduledMessages.$inferSelect;
-type Outcome = 'sent' | 'skipped' | 'deferred' | 'failed';
-
-/** Terminal: resolve the row, it will never be sent. */
-async function resolve(
-  db: Db,
-  row: ScheduledRow,
-  status: 'skipped' | 'failed',
-  reason: string,
-): Promise<void> {
-  await db
-    .update(scheduledMessages)
-    .set({ status, skipReason: reason.slice(0, 100) })
-    .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'pending')));
-}
-
-/** Transient: keep it pending, look again later. THIS is the retry mechanism. */
-async function defer(db: Db, row: ScheduledRow, reason: string): Promise<void> {
-  await db
-    .update(scheduledMessages)
-    .set({
-      sendAt: new Date(Date.now() + DEFER_MINUTES * 60_000),
-      skipReason: reason.slice(0, 100), // why it is waiting; the row stays pending
-    })
-    .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'pending')));
-}
-
-/**
- * The send-time contract: **is this still a real booking?** — NOT "would we
- * schedule it today?".
- *
- * Getting this wrong is the codebase's own recurring failure class, and it bit
- * here: the first version re-used the SCHEDULING allowlist (confirmed|modified),
- * so the moment a real stay advanced to `checked_in` or `checked_out` — which is
- * exactly what happens to every stay that actually occurs — the welcome, the
- * thank-you and the win-back were all killed, permanently. The file even
- * explained at length why re-applying the DATE gate would do that, and then did
- * the same thing with the status.
- *
- * A booking that has been *lived* is still a booking. A booking that was
- * cancelled is not.
- */
-function bookingState(booking: BookingMirror): 'ok' | 'terminal' | 'transient' {
-  switch (booking.status) {
-    case 'confirmed':
-    case 'modified':
-    case 'checked_in':
-    case 'checked_out':
-      return 'ok';
-    case 'cancelled':
-    case 'no_show':
-      return 'terminal';
-    // An unconfirmed hold, or a status eZee has not shown us before. It may well
-    // resolve on the next poll, so it must NOT burn the message.
-    case 'unknown':
-    default:
-      return 'transient';
-  }
-}
-
-/** Marketing may only go to a guest who asked for it (§4, CH-15's consent). */
-async function marketingBlock(db: Db, row: ScheduledRow, kind: ScheduledKind): Promise<string | null> {
-  if (LIFECYCLE_TEMPLATES[kind].category !== 'marketing') return null;
-
-  const [guest] = await db.select().from(guests).where(eq(guests.id, row.guestId));
-  if (guest === undefined) return 'guest_missing';
-  // WHY consent is checked HERE and not when the row was scheduled: it is
-  // captured by CH-15's post-stay thank-you, ~74 days AFTER the booking was
-  // scheduled. Gating at schedule time would mean marketing_opt_in is always
-  // false at that moment, and the win-back could never fire for anyone, ever.
-  if (!guest.marketingOptIn) return 'no_marketing_opt_in';
-
-  if (kind === 'winback') {
-    const since = new Date(Date.now() - WINBACK_WINDOW_DAYS * 24 * 3600_000);
-    const [{ count } = { count: 0 }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(scheduledMessages)
-      .where(
-        and(
-          eq(scheduledMessages.guestId, row.guestId),
-          eq(scheduledMessages.kind, 'winback'),
-          eq(scheduledMessages.status, 'sent'),
-          gte(scheduledMessages.updatedAt, since),
-        ),
-      );
-    if (count >= WINBACK_CAP) return 'winback_cap_reached';
-  }
-  return null;
-}
 
 /** One tick: send everything due. Never throws — a bad row must not wedge the cron. */
 export async function runSender(deps: SenderDeps): Promise<SenderResult> {
@@ -206,47 +103,6 @@ export async function runSender(deps: SenderDeps): Promise<SenderResult> {
 
   if (result.attempted > 0) deps.log.info({ ...result }, '[lifecycle] sender tick');
   return result;
-}
-
-/** Everything that can stop a due row, in the order that reads best in a log. */
-async function blockedBy(
-  deps: SenderDeps,
-  row: ScheduledRow,
-): Promise<{ outcome: Exclude<Outcome, 'sent'>; reason: string } | null> {
-  // Too old to be true. A pre-arrival delivered a week late is a lie.
-  const ageHours = (Date.now() - row.sendAt.getTime()) / 3_600_000;
-  if (ageHours > STALE_AFTER_HOURS) {
-    return { outcome: 'skipped', reason: 'stale' };
-  }
-
-  if (row.bookingId !== null) {
-    const [booking] = await deps.db
-      .select()
-      .from(bookingsMirror)
-      .where(eq(bookingsMirror.id, row.bookingId));
-    if (booking === undefined) return { outcome: 'skipped', reason: 'booking_missing' };
-
-    const state = bookingState(booking);
-    if (state === 'terminal') {
-      return { outcome: 'skipped', reason: `booking_${booking.status}` };
-    }
-    if (state === 'transient') {
-      return { outcome: 'deferred', reason: `booking_${booking.status}` };
-    }
-    // The SOURCE and PHONE gates are re-applied — eZee changes both fields, and
-    // a booking re-sourced to an OTA after it was scheduled must not send (Q13).
-    // The DATE gate is deliberately NOT re-applied: check_in is in the past by
-    // the time a thank-you is due, which is the entire point of a thank-you.
-    if (!passesSource(booking, deps.gates.sources)) {
-      return { outcome: 'skipped', reason: 'source_not_allowed' };
-    }
-    if (!hasPhone(booking)) return { outcome: 'skipped', reason: 'no_phone' };
-  }
-
-  const marketing = await marketingBlock(deps.db, row, row.kind);
-  if (marketing !== null) return { outcome: 'skipped', reason: marketing };
-
-  return null;
 }
 
 async function sendOne(deps: SenderDeps, row: ScheduledRow): Promise<Outcome> {
