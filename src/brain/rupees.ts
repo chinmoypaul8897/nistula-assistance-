@@ -91,8 +91,16 @@ function toAmount(numText: string, multiplierWord?: string): number {
 
 // --- cue-bound forms: bare integers and "34k" need a price cue nearby -------
 // Deliberately NOT bare "booking" (references) and NOT bare "night" (times).
-const PRICE_CUE =
-  /₹|\b(?:rs|inr|rupees?|rates?|prices?|tariff|total|costs?|fees?|charge[sd]?|deposit|payable|pay|nightly|amount)\b|\b(?:per|a)\s+night\b|\/night\b/i;
+// The "comes to / works out to / amounts to" family was missing (close-out
+// audit): "the booking comes to 45000 for the two nights" carried NO cue, so a
+// fabricated total shipped unchecked. It predates CH-11 — but CH-11 is the
+// chunk that first lets a guest ask what their booking COSTS, so it closes here.
+// Adding a cue can only ever make us extract MORE and defer MORE: it fails
+// closed, and can never let a fabricated figure through.
+// Exported so "is this sentence about money?" has ONE definition in the codebase
+// (stayGuards uses it to tell a pre-sales QUOTE from a room assignment).
+export const PRICE_CUE =
+  /₹|\b(?:rs|inr|rupees?|rates?|prices?|tariff|total|costs?|fees?|charge[sd]?|deposit|payable|pay|nightly|amount)\b|\b(?:per|a)\s+night\b|\/night\b|\b(?:comes?|come|works?|worked)\s+(?:out\s+)?(?:to|at)\b|\bamounts?\s+to\b/i;
 
 // The lookbehind excludes ',' and '.' so the tail of a grouped or decimal form
 // ("₹1,500" → "500", "16666.67" → "675") can never re-enter as a bare integer.

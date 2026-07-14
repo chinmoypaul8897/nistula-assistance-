@@ -69,6 +69,14 @@ export interface ReconcileResult {
   applied: boolean;
   upserted: number;
   failed: string[];
+  /**
+   * TRUE when a slice failed and we bailed. Without this the fail-closed return
+   * was byte-identical to a clean run (`missing: []`) — the summary printed an
+   * all-clear and the process exited 0, which is the exact FALSE ALL-CLEAR the
+   * fail-closed branch exists to prevent (close-out audit). Every consumer must
+   * check this BEFORE reading `missing`.
+   */
+  aborted: boolean;
 }
 
 /** Pure-ish core (injected client + db) — exported for tests. */
@@ -86,6 +94,7 @@ export async function reconcileMirror(
     applied: opts.apply,
     upserted: 0,
     failed: [],
+    aborted: false,
   };
 
   // eZee caps ArrivalList at ONE MONTH per call — an UNDOCUMENTED limit, found
@@ -112,7 +121,7 @@ export async function reconcileMirror(
         { status: outcome.status, slice },
         '[reconcile] ArrivalList failed on a slice — NO CONCLUSIONS for the whole range',
       );
-      return base;
+      return { ...base, aborted: true };
     }
     reservations.push(...outcome.reservations);
     deps.log.info(
@@ -270,6 +279,15 @@ async function main(): Promise<void> {
 
   const r = await reconcileMirror({ db, client, log }, opts);
   console.log('');
+  if (r.aborted) {
+    // NEVER print a count here. A booking inside a failed slice is invisible to
+    // us, so it cannot appear as MISSING — printing "MISSING: 0" would tell the
+    // operator the mirror is complete on the strength of a call that failed.
+    console.log(`RANGE INCOMPLETE — eZee failed on a slice of ${r.from} → ${r.to}.`);
+    console.log('NO CONCLUSIONS: the mirror has NOT been checked. Re-run before trusting it.');
+    await closeDb();
+    process.exit(1);
+  }
   console.log(`eZee arrivals ${r.from} → ${r.to}`);
   console.log(`  at eZee        : ${String(r.atEzee.length)}`);
   console.log(`  in our mirror  : ${String(r.inMirror.length)}`);

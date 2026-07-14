@@ -31,9 +31,17 @@
  *     of both. CH-11 built the enrichment: `pnpm ezee:reconcile --apply` hydrates
  *     the label via BKG-03 through the event-free backfill writer, and the poller
  *     diff now COALESCEs a null-from-poll so a later poll cannot erase it.
- *     TODO(CH-13): the task card needs a CURRENT label, and hydration today is
- *     fill-if-null — nothing ever REFRESHES a label eZee later changes (a guest
- *     moved B3→C1). Make CH-13's enrichment re-fetch and overwrite, not fill.
+ *     🚨 TODO(CH-13) — READ OQ-19 FIRST. Do NOT build the staff task card on this
+ *     label. It is not the house the guest booked: eZee holds 8 houses inside 3
+ *     room TYPES, a booking cannot name a house at all, and eZee auto-assigns
+ *     lowest-number-first. The label is eZee's GUESS, and a card routed on it
+ *     sends housekeeping to the wrong door. (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT
+ *     = false` for exactly this reason.) CH-13's villa routing is blocked on the
+ *     OQ-19 PMS re-model — one house = one bookable product — not on refresh
+ *     semantics. The stale-label problem below is real but SECONDARY: once a house
+ *     is genuinely bookable, hydration must re-fetch and overwrite, not fill-if-
+ *     null, because nothing today refreshes a label eZee later changes.
+ *     Full analysis: runbook §OQ-19 · docs/open-questions.md OQ-19.
  */
 import type { MirrorRowInput, UpsertMirrorOutcome } from '../db/bookings.js';
 import { normalizePhone } from '../lib/phone.js';

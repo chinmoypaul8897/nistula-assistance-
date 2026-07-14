@@ -21,6 +21,10 @@ export type GuardrailRule =
   | 'promise_integrity'
   // CH-11: the draft asserted a booking this guest does not hold.
   | 'stay_integrity'
+  // CH-11/OQ-19: the draft named a specific HOUSE as this guest's. eZee only
+  // guessed it, so this hit is the one signal that the AI tried to hand a guest
+  // a house that may not be theirs — it must be visible in the weekly review.
+  | 'unit_integrity'
   | 'negotiation_lock'
   | 'window'
   | 'identity'

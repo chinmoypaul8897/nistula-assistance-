@@ -19,6 +19,30 @@ For each question you will find four things:
 
 ---
 
+## 🚨 Read this one first — it is not a question, it is a defect, and it blocks the website launch
+
+*(Found 2026-07-14. Filed as OQ-19. It is different in kind from everything below: the rest of this document is us asking what your rule is. This one is us telling you that the booking system is set up in a way that will hand guests the wrong house.)*
+
+**A guest cannot actually book a specific house. eZee picks one for them — and it picks the same one nearly every time.**
+
+Here is what we found. In eZee, our 8 houses are not 8 bookable things. They are grouped into **3 "room types"** — so Apartment 06, Apartment 09 and Apartment 11 are, as far as eZee is concerned, *the same product*. When the website sends a booking to eZee, there is **no field in which to say which house the guest chose** — the booking form has nowhere to put it. So the guest's choice is dropped at that boundary, and **eZee assigns a house itself, lowest number first.** We proved it with two real test bookings: both said "Nistula Apartment", and eZee put both of them in **Apartment 06**.
+
+**Then it gets worse.** The website's confirmation page does not show the guest the house they picked. It reads the house back *from eZee* — and prints eZee's pick.
+
+**So a guest can choose Apartment 09, pay for Apartment 09, and be shown a confirmation that says Apartment 06.** Nobody has been hurt yet, because the website is not launched. If it launches like this, they will be.
+
+**Why it matters.** It is the kind of error a guest only discovers on arrival, standing at the wrong door with luggage — and every part of it is in our own voice, on our own confirmation page. It also silently blocks work downstream: the staff task cards (housekeeping, maintenance) were going to be routed on the house eZee recorded, which would send our own team to the wrong villa.
+
+**What we built meanwhile.** The assistant is safe. It will **never name a specific house** to a guest — not the one eZee recorded, and not even one the guest names first. It speaks about "your villa in Assagao" and fetches a person for anything house-specific. We verified this against the live system: the production database says the test guest is in "Apartment 06", and the assistant still refused to say so. That refusal is enforced in code, not merely asked of the AI.
+
+**What needs to happen — and it is not an engineering fix.** No amount of code can fix this: none of eZee's ~92 API endpoints can create a room type. **It has to be done in eZee's back office, by the account manager: make each house its own bookable product — one house = one room type.** Siolim is already set up that way, and Siolim is the one house eZee never gets wrong.
+
+**The cost, honestly:** rates and availability would then be maintained per house rather than per group — roughly 2.5× the recurring rate admin. The OTA channel mappings (Airbnb, Booking.com) would have to be remapped, and **that step has no undo**, so it needs planning rather than a quick afternoon.
+
+**The one thing we would like you to check today, because it may already be live:** on Airbnb, our apartment bookings cluster **27 out of 34 on Apartment 06** — the exact fingerprint of eZee auto-assigning — while other channels spread out normally. **If Airbnb lists the apartments as separate listings, then OTA guests may be getting the wrong apartment right now.** You have the eZee and Airbnb access; a single look settles it, and it is the difference between "a launch blocker" and "a live problem".
+
+---
+
 ## The five that worry me most
 
 If you read nothing else, read these. They are the ones where the honest default we shipped is *itself* a problem.

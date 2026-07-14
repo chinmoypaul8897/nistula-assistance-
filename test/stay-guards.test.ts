@@ -103,6 +103,18 @@ describe('unit assertions — the AI may name a house only when eZee gave us one
     'We have put you in Apartment 09.',
     'Your stay at Villa B1 starts on the 20th.',
     'Villa C3 is yours from the 20th.',
+    // --- the six the close-out audit walked straight through. The guard was
+    // written from four ASSERTION SHAPES rather than from the contract, which is
+    // this repo's signature failure class for the SIXTH time. Post-OQ-19 the
+    // contract is simply: never bind a house to this guest. These pin it.
+    'Your house is Apartment 09.', // copula
+    'You have been allocated Apartment 06.', // passive
+    'The house allocated to you is Apartment 11.', // relative clause
+    'I can see Apartment 06 against your booking.', // a claim to see it on our record
+    'Head to Apartment 11 on arrival.', // arrival directive
+    'That would be Apartment 06.', // echoing the guest's own guess back at them
+    'Yes, Apartment 09.',
+    'We have reserved Apartment 6 for you.', // eZee writes "06"; a model may not
   ])('blocks %j when the mirror assigned no unit', (draft) => {
     expect(scanUnitAssertions(draft, []).violations.length).toBeGreaterThan(0);
   });
@@ -126,8 +138,33 @@ describe('unit assertions — the AI may name a house only when eZee gave us one
     'The Siolim house is our only 4BHK.',
     'Apartment 09 is the quietest of the three.',
     'B1 and C1 are both free those nights.',
+    // Second person is NOT a binding cue on its own — naming villas is how we
+    // SELL. Only possession/occupancy/allocation/record/arrival binds one.
+    "You'll love Villa C3 — it has a private pool.",
+    'Our four-bedroom in Assagao is Villa C3.',
   ])('allows the pre-sales description %j', (draft) => {
     expect(scanUnitAssertions(draft, []).violations).toEqual([]);
+  });
+
+  // The pre-sales QUOTE is possessive AND names a villa — and it is the product's
+  // revenue path. It must survive. (This is the case that caught the first
+  // rewrite: it regenerated every quote in the tool-loop suite.)
+  it.each([
+    'Your two nights at Villa B3 come to ₹34,000, all in. Here is the link.',
+    'Your stay at Villa C3 would be ₹45,000 for those dates.',
+  ])('allows the pre-sales quote %j', (draft) => {
+    expect(scanUnitAssertions(draft, []).violations).toEqual([]);
+  });
+
+  // …and the CH-06 lesson, which this repo has already been bitten by once: a
+  // context-bound exemption must never be flattened into "a price cue anywhere
+  // makes a unit mention legal". Occupancy asserted outright is a violation no
+  // matter how much money shares the sentence.
+  it.each([
+    'You are in Apartment 06 and the total comes to ₹34,000.',
+    'We have put you in Villa B3; the rate is ₹17,000 per night.',
+  ])('a price cue does NOT rescue an outright assignment: %j', (draft) => {
+    expect(scanUnitAssertions(draft, []).violations.length).toBeGreaterThan(0);
   });
 
   it('is SKIPPED entirely when the caller supplies nothing (pre-CH-11 behaviour)', () => {

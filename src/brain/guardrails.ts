@@ -155,9 +155,13 @@ export async function runGuardrails(
           ? 'price_integrity'
           : first.promiseViolations.length > 0
             ? 'promise_integrity'
-            : first.identityViolation
-              ? 'identity'
-              : 'length_format',
+            : first.stayViolations.length > 0
+              ? 'stay_integrity'
+              : first.unitViolations.length > 0
+                ? 'unit_integrity'
+                : first.identityViolation
+                  ? 'identity'
+                  : 'length_format',
       action: 'sent_after_regen',
       draft: second.text,
     });
@@ -399,6 +403,15 @@ async function recordViolations(
       action,
       draft: evaluation.text,
       details: { violations: evaluation.stayViolations },
+    });
+  }
+  if (evaluation.unitViolations.length > 0) {
+    await deps.record?.({
+      kind: 'guardrail',
+      rule: 'unit_integrity',
+      action,
+      draft: evaluation.text,
+      details: { violations: evaluation.unitViolations },
     });
   }
   if (evaluation.identityViolation) {

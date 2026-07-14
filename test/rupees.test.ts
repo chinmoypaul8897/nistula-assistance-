@@ -48,6 +48,17 @@ describe('bare integers (the CH-05 fail-open, closed)', () => {
     expect(extractRupeeAmounts('That would be 30000 per night.')).toEqual([30000]);
   });
 
+  it('"comes to" is itself a price cue (close-out audit — a fabricated total shipped)', () => {
+    // These carry NO other cue: "booking"/"stay" are deliberately not cues (they
+    // introduce REFERENCE numbers). So the figure was never extracted, never
+    // checked against the backed set, and a made-up total went out unchallenged.
+    expect(extractRupeeAmounts('The booking comes to 45000 for the two nights.')).toEqual([45000]);
+    expect(extractRupeeAmounts('Your stay works out to 34000.')).toEqual([34000]);
+    expect(extractRupeeAmounts('It amounts to 18000 altogether.')).toEqual([18000]);
+    // …and the reference number in the same breath is still NOT money (CH-11).
+    expect(extractRupeeAmounts('Booking 953 comes to 45000.')).toEqual([45000]);
+  });
+
   it("'nightly' is a rate word, never a unit exclusion (CH-09 audit)", () => {
     // Before the \b anchor, UNIT_AFTER's `nights?` matched the prefix of
     // "nightly" and the figure was skipped as a count.

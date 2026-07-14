@@ -145,12 +145,30 @@ describe('the diff — "is our mirror complete?"', () => {
     expect(rows).toEqual([]);
   });
 
-  it('draws no conclusions when ArrivalList fails', async () => {
+  it('draws no conclusions when ArrivalList fails, and SAYS SO', async () => {
     const c = fakeClient({ fetchArrivals: async () => ({ status: 'unreachable' }) });
     const r = await reconcileMirror({ db, client: c, log }, RANGE);
 
     expect(r.atEzee).toEqual([]);
     expect(r.missing).toEqual([]); // never "everything is missing"
+    // …and this is the bit that was missing. `missing: []` ALSO means "the
+    // mirror is complete", so the fail-closed return was byte-identical to an
+    // all-clear: the summary printed MISSING: 0 and the process exited 0. This
+    // very test passed throughout, because it asserted only the ambiguous half.
+    // An operator would have been told the mirror was fine on the strength of a
+    // call that never happened — the exact FALSE ALL-CLEAR the branch prevents.
+    expect(r.aborted).toBe(true);
+  });
+
+  it('a genuinely clean range is NOT flagged as aborted', async () => {
+    // The other side of the same coin: `aborted` must separate "eZee answered,
+    // nothing is missing" from "eZee never answered".
+    await upsertMirrorRow(db, mirrorInput({ ezeeReservationNo: '953' }));
+    const c = fakeClient({ fetchArrivals: async () => ok([reservation('953')]) });
+    const r = await reconcileMirror({ db, client: c, log }, RANGE);
+
+    expect(r.aborted).toBe(false);
+    expect(r.missing).toEqual([]);
   });
 });
 

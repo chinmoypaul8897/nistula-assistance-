@@ -543,10 +543,15 @@ that is log-only until CH-17. A `MISSING > 0` on a FORWARD window is the detecto
 > WHERE guest_phone IS NULL AND status IN ('confirmed','modified','checked_in');
 > ```
 
-**Every production row has NO villa label.** BKG-02 poll payloads carry no RoomID
-at all, so the mirror cannot tell B3 from C1. `--apply` fixes this by fetching
-each booking via BKG-03 FetchSingleBooking, the only call that returns a room.
-CH-13's task cards need it — "send someone to a Nistula Villa" names four houses.
+**Villa labels: 143 rows now carry one — and the AI may not speak a single one of
+them.** BKG-02 poll payloads carry no RoomID at all, so the mirror could not tell
+B3 from C1; `--apply` hydrated the label via BKG-03 FetchSingleBooking, the only
+call that returns a room. **But the label is eZee's own arbitrary pick, not the
+house the guest booked (🚨 OQ-19 below).** It is kept for OPS and forensics — it
+tells you which door eZee has a booking against — and for nothing else.
+`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`, so the AI speaks the villa TYPE.
+**CH-13's task cards cannot be built on it either**: routing housekeeping on a
+guess sends them to the wrong house.
 
 ### What the AI may and may not say about a booking
 
@@ -558,7 +563,12 @@ the model without detail and escalated to a person.
 Never, by construction: the **amount** (our figure is one room's on a multi-room
 booking, and may be the OTA net rather than what the guest paid) · the eZee
 **guest name/email** (recycled Indian mobiles make that a leak) · the **meal
-plan** (an opaque code — see OQ-16) · a **villa unit** unless eZee assigned one.
+plan** (an opaque code — see OQ-16) · a **villa unit** — **ever, while OQ-19 is
+open.** Not even the one eZee "assigned", because eZee only guessed it; not even
+the one the GUEST names, because the website told them a house it could not
+reserve. The AI speaks the villa TYPE ("your villa in Assagao") and defers the
+house to a person. Enforced deterministically by `scanUnitAssertions`
+(`unit_integrity` in `raw_events`), not by prompt instruction alone.
 
 ### Reading the state
 

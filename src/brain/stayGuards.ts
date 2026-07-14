@@ -1,4 +1,5 @@
 import { VILLAS } from '../lib/villas.js';
+import { PRICE_CUE, splitSentences } from './rupees.js';
 
 /**
  * Stay-affirmation integrity (CH-11 — the D2 decision).
@@ -165,24 +166,91 @@ export function scanStayAffirmations(draft: string, hasLiveStay: boolean): StayA
  * "C3 wraps around its own pool" is a description and stays legal (it is a voice
  * -guide exemplar); "your stay is in C3" is a claim about who sleeps where.
  */
-const UNIT_TOKEN = String.raw`(?:villa\s+)?(?:B1|B3|C1|C3)\b|apartment\s+(?:06|09|11)\b|siolim(?:\s+4bhk)?\b`;
+const UNIT_TOKEN = String.raw`(?:villa\s+)?(?:B1|B3|C1|C3)\b|apartments?\s+(?:0?6|0?9|11)\b|siolim(?:\s+4bhk)?\b`;
+const UNIT_MENTION = new RegExp(String.raw`(?:${UNIT_TOKEN})`, 'i');
 
-const UNIT_ASSERTIONS: readonly RegExp[] = [
-  // "your Villa C3", "your stay at C3", "your villa, B3"
-  new RegExp(String.raw`\byour\s+(?:stay\s+(?:at|in)\s+)?(?:${UNIT_TOKEN})`, 'i'),
-  // "you're in C3", "you are staying in Villa B3", "you're booked into C1"
-  new RegExp(
-    String.raw`\byou(?:'re|\s+are|'ll|\s+will\s+be)\s+(?:in|staying\s+in|booked\s+into?|checked\s+into?)\s+(?:${UNIT_TOKEN})`,
-    'i',
-  ),
-  // "C3 is ready for you", "Villa B3 is yours"
-  new RegExp(String.raw`(?:${UNIT_TOKEN})\s+is\s+(?:ready|yours|all\s+set|waiting)`, 'i'),
-  // "we've put you in C3", "we have assigned you Villa B1"
-  new RegExp(
-    String.raw`\b(?:we(?:'ve|\s+have)?\s+)?(?:put|placed|assigned|allocated)\s+you\s+(?:in(?:to)?\s+)?(?:${UNIT_TOKEN})`,
-    'i',
-  ),
-];
+/**
+ * THE SHAPE OF THIS RULE — rewritten after the close-out audit, which is the
+ * SIXTH time this repo has shipped "an enumerated rule narrower than the
+ * contract it stands for". The first version listed four ASSERTION SHAPES
+ * ("you're in C3", "we've put you in C3", …). Six of twelve natural ways to
+ * name a guest's house walked straight through it:
+ *     "Your house is Apartment 09."            (copula, not a listed shape)
+ *     "You have been allocated Apartment 06."  (passive)
+ *     "The house allocated to you is Apt 11."  (relative clause)
+ *     "I can see Apartment 06 against your booking."
+ *     "Head to Apartment 11 on arrival."
+ *     "That would be Apartment 06."            (echoing the guest back)
+ *
+ * So the rule is now written from the CONTRACT, not from a list of sentences.
+ * Post-OQ-19 the contract is unusually clean, because `stayView` no longer
+ * emits a house label at all (TRUST_EZEE_ROOM_ASSIGNMENT = false): **the model
+ * has no source for "Apartment 06" except the guest's own message.** So:
+ *
+ *   naming a house  = LEGAL   — it is how we sell ("C3 wraps around its own pool")
+ *   BINDING a house to this guest = a violation, always, while OQ-19 is open.
+ *
+ * A violation is therefore a unit token co-occurring, IN ONE SENTENCE, with a
+ * cue that binds it to the guest — possession, occupancy, allocation, a claim
+ * to see it on our record, or an arrival directive. Pre-sales prose carries no
+ * such cue and stays untouched ("you'll love Villa C3" has second person but no
+ * BINDING — bare `you`/`you'll` is deliberately NOT a cue).
+ */
+const UNIT_BINDING_STRONG = new RegExp(
+  [
+    // occupancy — second person + a preposition of place
+    String.raw`\byou(?:'re|\s+are|'ll\s+be|\s+will\s+be|\s+are\s+going\s+to\s+be)?\s*(?:staying\s+)?(?:in|at|into)\b`,
+    // allocation — active, passive, or as a relative clause. Note "booked/checked
+    // INTO" and not a bare "booked": "C1 is booked those nights" is an
+    // AVAILABILITY answer (pre-sales, legal), not an assignment. Same reason
+    // bare `reserved`/`held` are absent — "we have reserved C3 FOR YOU" is
+    // already caught by possession, without costing us "C3 is reserved those
+    // nights".
+    String.raw`\b(?:assigned|allocated|given|put|placed)\b`,
+    String.raw`\b(?:booked|checked|moved)\s+(?:you\s+)?in(?:to)?\b`,
+    // a claim to see it on OUR record
+    String.raw`\b(?:can\s+see|i\s+see|we\s+see|shows?|showing|against\s+your)\b`,
+    // arrival directive
+    String.raw`\b(?:head|go|proceed)\s+(?:to|over|straight)\b|\bon\s+arrival\b|\bwhen\s+you\s+arrive\b`,
+  ].join('|'),
+  'i',
+);
+
+/**
+ * POSSESSION is the weak cue, and it needs the CH-06 treatment.
+ *
+ * "Your two nights at Villa B3 come to ₹34,000" is the product's core pre-sales
+ * sentence — the guest picked B3 on the website and we are pricing B3. It is not
+ * an assignment, and a guard that blocks it blocks the revenue path. But
+ * "Your stay at Villa B1 starts on the 20th" is the same possessive shape and IS
+ * an assignment. The discriminator is what the predicate asserts: a PRICE (a
+ * quote for a hypothetical stay) or the EXISTENCE of a booking.
+ *
+ * So possession alone is a violation UNLESS its sentence is a quote — and, per
+ * the CH-06 fee lesson that this repo has already been bitten by, the exemption
+ * is CONTEXT-BOUND to that sentence and can never rescue a STRONG cue. "You're
+ * in Apartment 06 and the total is ₹34,000" carries a price cue and is still a
+ * violation, because occupancy was asserted outright. Never flatten this back
+ * into "a price cue anywhere makes a unit mention legal".
+ */
+const UNIT_POSSESSION = /\byour\b|\byours\b|\bfor\s+you\b|\bto\s+you\b/i;
+
+/**
+ * The ECHO shape. The guest is the ONLY possible source of a house name (see
+ * above), so the likeliest way we hand them a wrong house is by agreeing with
+ * one they name themselves: *"am I in Apartment 06?" → "That would be
+ * Apartment 06."* No binding cue appears in that sentence at all.
+ *
+ * This is the one pattern that can misfire on pre-sales ("which villa has four
+ * bedrooms?" → "That would be Villa C3" → regenerate). We accept that cost
+ * knowingly: the regenerate produces a legal phrasing, whereas the false
+ * negative sends a guest to a house that is not theirs.
+ */
+const UNIT_ECHO = new RegExp(
+  String.raw`\b(?:that|it|this)\s+(?:would\s+be|will\s+be|is|'s)\s+(?:${UNIT_TOKEN})` +
+    String.raw`|\b(?:yes|correct|indeed|right)\b[^.!?]{0,24}?(?:${UNIT_TOKEN})`,
+  'i',
+);
 
 /** The canonical label a matched span refers to — so we can tell "the unit we
  * were actually given" from "some other house". */
@@ -212,17 +280,21 @@ export function scanUnitAssertions(
   assigned: readonly string[] | undefined,
 ): StayAffirmationScan {
   if (assigned === undefined) return { violations: [] };
-  // Deduped by the UNIT, not the span: several patterns legitimately match the
-  // same sentence ("your Villa C3" and "Villa C3 is ready"), and one wrong house
-  // is one violation — not two rows in the weekly review.
+  // Deduped by the UNIT, not the sentence: one wrong house is ONE violation in
+  // the weekly review, however many ways the draft managed to say it.
   const byUnit = new Map<string, string>();
-  for (const re of UNIT_ASSERTIONS) {
-    const match = re.exec(draft);
-    if (match === null) continue;
-    const span = match[0].trim();
-    const label = unitLabelOf(span);
+  for (const sentence of splitSentences(draft)) {
+    const mention = UNIT_MENTION.exec(sentence);
+    if (mention === null) continue; // no house named — nothing to bind
+    const bound =
+      UNIT_BINDING_STRONG.test(sentence) ||
+      UNIT_ECHO.test(sentence) ||
+      // Possession binds a house to the guest UNLESS the sentence is a quote.
+      (UNIT_POSSESSION.test(sentence) && !PRICE_CUE.test(sentence));
+    if (!bound) continue; // pure description, or a price quote: both legal
+    const label = unitLabelOf(mention[0]) ?? unitLabelOf(sentence);
     if (label !== null && assigned.includes(label)) continue; // it IS their villa
-    byUnit.set(label ?? span, span);
+    byUnit.set(label ?? sentence.trim(), sentence.trim());
   }
   return { violations: [...byUnit.values()] };
 }
