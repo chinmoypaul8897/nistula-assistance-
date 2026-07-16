@@ -191,28 +191,52 @@ describe('a body IS refused once its own claim has expired', () => {
     await openWindow();
   }
 
-  it('"looking forward to welcoming you" is skipped once the guest has ARRIVED', async () => {
+  it('"looking forward to welcoming you" is NOT SENT once the guest has arrived', async () => {
     await midStay();
     const { wa, sent } = makeWa();
 
     await runSender(senderDeps(wa));
 
     const prearrival = await rowOf('prearrival');
-    expect(prearrival?.status).toBe('skipped');
-    expect(prearrival?.skipReason).toBe('guest_already_arrived');
     expect(sent.some((s) => s.body.includes('looking forward to welcoming you'))).toBe(false);
+    // DEFERRED, not skipped: check_in is mutable, so "they have arrived" is a
+    // fact that can be taken back — and a terminal verdict could not be.
+    expect(prearrival?.status).toBe('pending');
+    expect(prearrival?.skipReason).toBe('guest_already_arrived');
   });
 
-  it('"ready for you today" is skipped once the arrival day has PASSED', async () => {
+  it('"ready for you today" is NOT SENT once the arrival day has passed', async () => {
     await midStay();
     const { wa, sent } = makeWa();
 
     await runSender(senderDeps(wa));
 
     const welcome = await rowOf('welcome');
-    expect(welcome?.status).toBe('skipped');
-    expect(welcome?.skipReason).toBe('arrival_day_passed');
     expect(sent.some((s) => s.body.includes('is ready for you today'))).toBe(false);
+    expect(welcome?.status).toBe('pending');
+    expect(welcome?.skipReason).toBe('arrival_day_passed');
+  });
+
+  it('...and once the stay is WHOLLY past, they are terminally skipped (the bound)', async () => {
+    // The fact that cannot come back. Deferring on check_in would otherwise leave
+    // these rows pending for ever — `stay_over` is what resolves them for real,
+    // and it is checked ABOVE TRUTH precisely so it can.
+    await handleBookingEvent(
+      deps(),
+      'created',
+      await seed({ checkIn: '2026-07-17', checkOut: '2026-07-19' }),
+    );
+    await db.execute(
+      sql`UPDATE bookings_mirror SET check_in = '2026-07-01', check_out = '2026-07-03'`,
+    );
+    await db.execute(sql`UPDATE scheduled_messages SET send_at = ${hoursBefore(1)}`);
+    await openWindow();
+    const { wa } = makeWa();
+
+    await runSender(senderDeps(wa));
+
+    expect((await rowOf('prearrival'))?.status).toBe('skipped');
+    expect((await rowOf('prearrival'))?.skipReason).toBe('stay_over');
   });
 
   it('the CONFIRMATION still goes stale at 36h — round 6’s guard is intact', async () => {
@@ -228,6 +252,41 @@ describe('a body IS refused once its own claim has expired', () => {
     const confirmation = await rowOf('confirmation');
     expect(confirmation?.status).toBe('skipped');
     expect(confirmation?.skipReason).toBe('stale');
+  });
+});
+
+/* ── 🚨 THE ELEVENTH INSTANCE ──────────────────────────────────────────────── */
+
+describe('🚨 a MISTYPED arrival date, corrected, must not have destroyed anything', () => {
+  it('a check_in typo that lived for one tick does not cost the guest their pre-arrival', async () => {
+    // The front desk amends the arrival and fat-fingers it into the past.
+    // check_in is a MIRROR_DIFF_FIELD, so the poller mirrors it within 60s and
+    // emits booking.modified; the re-plan drags prearrival/welcome send_at into
+    // the past and the sender picks them up on the next minutely tick — long
+    // before any human notices. check_out is untouched, so the stay_over
+    // backstop cannot fire. A TERMINAL verdict here was unrecoverable: the
+    // correcting event is a no-op, because the upsert only touches 'pending'.
+    const no = await seed({ checkIn: '2026-08-01', checkOut: '2026-08-05' });
+    await handleBookingEvent(deps(), 'created', no);
+    await openWindow();
+
+    await db.execute(sql`UPDATE bookings_mirror SET check_in = '2026-07-01'`); // the typo
+    await handleBookingEvent(deps(), 'modified', no);
+    const { wa: wa1 } = makeWa();
+    await runSender(senderDeps(wa1)); // the tick that used to kill them
+
+    expect((await rowOf('prearrival'))?.status).toBe('pending');
+    expect((await rowOf('welcome'))?.status).toBe('pending');
+
+    // The desk fixes it. The rows must still be alive to hear about it.
+    await db.execute(sql`UPDATE bookings_mirror SET check_in = '2026-08-01'`);
+    await handleBookingEvent(deps(), 'modified', no);
+
+    const prearrival = await rowOf('prearrival');
+    expect(prearrival?.status).toBe('pending');
+    // Re-planned back onto its true instant: check-in −3d = 29 Jul, 10:00 IST.
+    expect(prearrival?.sendAt.toISOString()).toBe('2026-07-29T04:30:00.000Z');
+    expect((await rowOf('welcome'))?.sendAt.toISOString()).toBe('2026-08-01T03:30:00.000Z');
   });
 });
 

@@ -74,8 +74,9 @@ interface TruthContext {
 const planAgeHours = (c: TruthContext): number =>
   (c.now.getTime() - c.row.sendAt.getTime()) / 3_600_000;
 
-const staleByPlanAge = (c: TruthContext, hours = STALE_AFTER_HOURS): string | null =>
-  planAgeHours(c) > hours ? 'stale' : null;
+/** Age only ever increases, so a plan-age verdict is safe to make TERMINAL. */
+const staleByPlanAge = (c: TruthContext, hours = STALE_AFTER_HOURS): Truth =>
+  planAgeHours(c) > hours ? skip('stale') : null;
 
 /**
  * HAS THIS MESSAGE STOPPED BEING TRUE? — the send-time guard's real contract.
@@ -95,29 +96,49 @@ const staleByPlanAge = (c: TruthContext, hours = STALE_AFTER_HOURS): string | nu
  * the claim its own body makes. IF YOU EDIT A BODY IN templates.ts, EDIT ITS
  * RULE HERE — the sentence and its expiry are one decision, not two.
  *
- * Skipping is TERMINAL (a resolved row is never rescheduled), so a rule may only
- * fire on a fact that cannot come back: a day that has passed, never a mutable
- * field. Anything transient defers instead, below.
+ * 🚨 AND A RULE'S VERB MATTERS AS MUCH AS ITS QUESTION. Skipping is TERMINAL — a
+ * resolved row is never rescheduled — so a rule may only SKIP on a fact that
+ * cannot come back: a day that has passed on an IMMUTABLE field. A rule reading a
+ * mutable, human-edited field must DEFER, which is reversible.
+ *
+ * The eleventh instance was exactly this, in these very rules: prearrival/welcome
+ * SKIPPED on `check_in`, which the front desk edits and which any poll can
+ * redeliver (it is a MIRROR_DIFF_FIELD, so a change emits booking.modified and
+ * the re-plan drags send_at into the past). A date mistyped for ONE MINUTE
+ * resolved both rows terminally, and the correction was a total no-op because the
+ * upsert only touches `pending`. That is the ninth instance's shape, and it
+ * contradicted the paragraph directly above — which I had just written.
  */
-const TRUTH: Record<ScheduledKind, (c: TruthContext) => string | null> = {
+type Truth = { verdict: 'skip' | 'defer'; reason: string } | null;
+
+const skip = (reason: string): Truth => ({ verdict: 'skip', reason });
+/** Reversible: the claim is false FOR NOW, on a fact that can change back. */
+const notYetTrue = (reason: string): Truth => ({ verdict: 'defer', reason });
+
+const TRUTH: Record<ScheduledKind, (c: TruthContext) => Truth> = {
   /** "your booking with Nistula is confirmed" — a receipt for a booking just
    * made, and its planned moment IS that mirror-insert, so plan-age is the
-   * honest measure here. */
+   * honest measure here. Age only ever increases: safe to skip. */
   confirmation: (c) => staleByPlanAge(c),
 
   /** "we are looking forward to welcoming you on {checkInDay}" — true right up
    * until they arrive, however late we are in saying it, and false the moment
-   * they have. Its plan-age says nothing about either. */
+   * they have. Its plan-age says nothing about either.
+   *
+   * DEFERS, never skips: `check_in` is mutable, so "they have arrived" is a fact
+   * that can be taken back. The TERMINAL bound is `stay_over` (check_out < today,
+   * checked ABOVE this) — the stay being wholly past is the fact that cannot
+   * come back, and it resolves these rows for real. */
   prearrival: (c) => {
     if (c.checkIn === null) return staleByPlanAge(c); // no stay to ask about
-    return c.checkIn < c.today ? 'guest_already_arrived' : null;
+    return c.checkIn < c.today ? notYetTrue('guest_already_arrived') : null;
   },
 
   /** "your {villaType} is ready for you today, from 3 pm" — it says TODAY, so it
-   * is true on the arrival day and on no other. */
+   * is true on the arrival day and on no other. Defers for the same reason. */
   welcome: (c) => {
     if (c.checkIn === null) return staleByPlanAge(c);
-    return c.checkIn < c.today ? 'arrival_day_passed' : null;
+    return c.checkIn < c.today ? notYetTrue('arrival_day_passed') : null;
   },
 
   /** "thank you for staying with us." Planned check-out +1d, so its moment is
@@ -270,10 +291,16 @@ export async function blockedBy(
     }
   }
 
-  // Has this particular sentence stopped being true? Asked per kind, of the
-  // claim the body actually makes — never of the plan's age. See TRUTH.
+  // Has this particular sentence stopped being true? Asked per kind, of the claim
+  // the body actually makes — never of the plan's age. The rule chooses its own
+  // verb: only a fact that cannot come back may resolve a row for ever. See TRUTH.
   const untrue = TRUTH[row.kind]({ row, now, today: deps.gates.today, checkIn });
-  if (untrue !== null) return { outcome: 'skipped', reason: untrue };
+  if (untrue !== null) {
+    return {
+      outcome: untrue.verdict === 'defer' ? 'deferred' : 'skipped',
+      reason: untrue.reason,
+    };
+  }
 
   // A past-due row can become due at any hour. Wait for a civil one. LAST of the
   // skip/defer checks, so a row that is already untrue is resolved now rather
