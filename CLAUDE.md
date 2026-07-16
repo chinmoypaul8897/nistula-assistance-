@@ -41,7 +41,10 @@ confirmation has been sent to and read on a real phone. What holds it back is fo
 gates — **epoch** (proven on production data: 199 pre-epoch mirror rows → **0** scheduled),
 **date**, **status**, **source**. `WA_TEMPLATE_MODE` is unset ⇒ `simulate`, so until Meta approves
 the templates a website guest who has never messaged us gets **nothing** (defers on a shut window,
-skipped at 36h) — correct, and `pnpm templates:pack` is the manual step that finishes it.
+skipped at 36h) — correct. **There is no manual step for you here** (plan §8 CH-12: "None now"):
+template approval belongs to the REAL number's WABA, which does not exist yet, so it happens at
+real-number cutover — an ops event between CH-18 and CH-19. `pnpm templates:pack` generates the
+exact bodies to paste THEN.
 
 **The fact that changes how you think about this system:** the comfortable belief that OTA phone
 numbers are masked — and that OTA guests are therefore unreachable by accident — is **FALSE**.
