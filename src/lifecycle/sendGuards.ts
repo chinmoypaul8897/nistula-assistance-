@@ -74,7 +74,17 @@ interface TruthContext {
 const planAgeHours = (c: TruthContext): number =>
   (c.now.getTime() - c.row.sendAt.getTime()) / 3_600_000;
 
-/** Age only ever increases, so a plan-age verdict is safe to make TERMINAL. */
+/** TERMINAL, so read this before reusing it. Age only ever increases *for a kind
+ * whose instant is immutable* — the confirmation's is `row.createdAt`, so it is
+ * safe. The poststay's is `check_out +1d`, and check_out is MUTABLE, so a
+ * backwards amendment re-plans its instant into the past and AGES it: a typo
+ * corrected too late costs the thank-you for ever.
+ * TODO(CH-17): re-anchor poststay's bound on row.createdAt (its own instant is
+ * not a safe clock). NOT by deferring — poststay is deliberately outside
+ * PRE_STAY_KINDS, so it has no stay_over backstop, and a permanently-deferring
+ * row is permanently the OLDEST (sender.ts orders by send_at, limit 10): a
+ * handful would own every batch for ever and starve every new guest's
+ * confirmation. Gated on OQ-22 — no `modified` row has ever been observed. */
 const staleByPlanAge = (c: TruthContext, hours = STALE_AFTER_HOURS): Truth =>
   planAgeHours(c) > hours ? skip('stale') : null;
 
@@ -127,8 +137,16 @@ const TRUTH: Record<ScheduledKind, (c: TruthContext) => Truth> = {
    *
    * DEFERS, never skips: `check_in` is mutable, so "they have arrived" is a fact
    * that can be taken back. The TERMINAL bound is `stay_over` (check_out < today,
-   * checked ABOVE this) — the stay being wholly past is the fact that cannot
-   * come back, and it resolves these rows for real. */
+   * checked ABOVE this), which resolves these rows for real.
+   *
+   * `check_out` is mutable TOO — so why may stay_over skip on it? Not because
+   * the field is immutable (it is not; do not repeat that claim), but because on
+   * any COHERENT stay the algebra makes it right: stay_over needs
+   * check_out < today, and check_out >= check_in gives check_in < today — where
+   * these rules are already deferring, and stay_over is their only way out. It
+   * could only fire wrongly on a stay that departs before it arrives, which no
+   * eZee form can express. If a check_out >= check_in sanity check ever lands in
+   * normalize/project, this becomes airtight rather than merely unrepresentable. */
   prearrival: (c) => {
     if (c.checkIn === null) return staleByPlanAge(c); // no stay to ask about
     return c.checkIn < c.today ? notYetTrue('guest_already_arrived') : null;

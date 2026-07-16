@@ -413,6 +413,22 @@ rather than delivered late and wrong. An un-mirrored change we cannot see.
 **What changes once they answer:** if amendments are made in a way that never reaches connectivity,
 that is a process fix at the front desk, not a code fix — and it must be fixed before go-live.
 
+**🚨 If the answer is "yes, amendments DO reach the feed", one known defect becomes live** (round 9
+found it, and deliberately deferred it because it sits entirely behind this question). **A date
+mistyped and then corrected can permanently cost the guest their thank-you.** `poststay`'s planned
+instant is `check_out +1d`, and `check_out` is a `MIRROR_DIFF_FIELD` — so a backwards typo emits
+`booking.modified`, the re-plan drags the instant into the past, its age exceeds
+`POSTSTAY_GRACE_HOURS` (7d), and it is skipped TERMINALLY. The correction is then a no-op, because
+the upsert only touches `pending` rows. It fails toward SILENCE (nothing wrong is ever sent) and
+costs the least consequential of the five bodies, which is why it did not block the merge.
+
+**The fix is NOT to make it defer** — that trap is recorded so nobody springs it. `poststay` is
+deliberately outside `PRE_STAY_KINDS`, so it has **no `stay_over` backstop**, and the sender selects
+`ORDER BY send_at LIMIT 10`: a permanently-deferring row is permanently the OLDEST, so a handful
+would own every batch for ever and **starve every new guest's confirmation** — harming every guest
+to save one thank-you. The bound must be **re-anchored on `row.createdAt`** (genuinely immutable),
+not removed. `TODO(CH-17)` in `sendGuards.ts` carries this.
+
 ### OQ-23 — The pre-arrival now asks every guest for their arrival time. Who sends the pin?
 **Status:** 🟡 (extends OQ-12 / team-question Q37.)
 
