@@ -62,8 +62,15 @@ const param = z
   // through a PARAM — and `villaType` is free text from eZee's back office. The
   // OQ-19 fix is a PMS re-model, which means somebody will edit those room-type
   // names; "Nistula Villa B1" must not sail through onto a guest's screen.
+  //
+  // Guard by the CONTRACT, not a shape enumeration: a villa TYPE is a bare word
+  // ("Nistula Apartment", "Nistula Villa") — a HOUSE is that word followed by a
+  // number, optionally via a letter ("Apartment 06", "Apartment 11", "Villa B3").
+  // The earlier `0?\d|[BC]\d` enumeration missed "Apartment 11" (a REAL house)
+  // because 0? matched empty and the trailing digit broke \b — the exact "guard
+  // by a list, not the contract" failure class this project keeps hitting.
   .refine(
-    (v) => !/\b(?:Apartment|Villa)\s*(?:0?\d|[BC]\d)\b/i.test(v) && !/\bSiolim 4BHK\b/i.test(v),
+    (v) => !/\b(?:Apartment|Villa)\s*[A-Za-z]?\d/i.test(v) && !/\bSiolim 4BHK\b/i.test(v),
     'template params may not name a physical house (OQ-19 — eZee only guessed it)',
   )
   .refine((v) => !/https?:\/\//i.test(v), 'template params may not carry a URL');

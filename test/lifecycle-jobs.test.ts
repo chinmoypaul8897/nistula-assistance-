@@ -18,10 +18,16 @@ import { scheduledMessages } from '../src/db/schema.js';
 import {
   BOOKING_CANCELLED_QUEUE,
   BOOKING_CREATED_QUEUE,
+  BOOKING_EVENT_QUEUES,
   LIFECYCLE_RECONCILE_QUEUE,
   LIFECYCLE_SEND_QUEUE,
 } from '../src/jobs/index.js';
-import { cancelForBooking, scheduleForBooking, type SchedulerDeps } from '../src/lifecycle/scheduler.js';
+import {
+  handleBookingEvent,
+  scheduleForBooking,
+  type BookingEventKind,
+  type SchedulerDeps,
+} from '../src/lifecycle/scheduler.js';
 import type { GateContext } from '../src/lifecycle/gates.js';
 import { createTestBoss, tickQueue, TEST_URL } from './helpers/boss.js';
 
@@ -70,23 +76,26 @@ beforeEach(async () => {
   });
 });
 
-/** The exact dispatch registerJobs performs, driven through the real queues. */
-const dispatch = async (kind: 'created' | 'modified' | 'cancelled', reservationNo: string) => {
-  if (kind === 'cancelled') await cancelForBooking(deps(), reservationNo);
-  else await scheduleForBooking(deps(), reservationNo);
-};
+/**
+ * Drive a queue through the SAME code registerJobs mounts: the kind is DERIVED
+ * from the real BOOKING_EVENT_QUEUES map (not hardcoded), then handed to the real
+ * handleBookingEvent. A regression that remaps the cancel queue or breaks the
+ * cancel branch fails here — which the old hardcoded reimplementation could not
+ * catch (the review's finding).
+ */
+const kindForQueue = (queue: string) =>
+  (Object.entries(BOOKING_EVENT_QUEUES).find(([, q]) => q === queue)?.[0] ??
+    'created') as BookingEventKind;
 
-describe('booking.* workers', () => {
+const drive = (queue: string) =>
+  tickQueue<{ reservationNo: string }>(boss, queue, async (data) =>
+    handleBookingEvent(deps(), kindForQueue(queue), data.reservationNo).then(() => undefined),
+  );
+
+describe('booking.* workers (through the real handleBookingEvent + queue map)', () => {
   it('a booking.created job schedules the five lifecycle rows', async () => {
     await boss.send(BOOKING_CREATED_QUEUE, { reservationNo: '953' });
-
-    const handled = await tickQueue<{ reservationNo: string }>(
-      boss,
-      BOOKING_CREATED_QUEUE,
-      async (data) => dispatch('created', data.reservationNo),
-    );
-
-    expect(handled).toBe(1);
+    expect(await drive(BOOKING_CREATED_QUEUE)).toBe(1);
     expect(await db.select().from(scheduledMessages)).toHaveLength(5);
   });
 
@@ -94,14 +103,18 @@ describe('booking.* workers', () => {
     await scheduleForBooking(deps(), '953');
     await boss.send(BOOKING_CANCELLED_QUEUE, { reservationNo: '953' });
 
-    await tickQueue<{ reservationNo: string }>(boss, BOOKING_CANCELLED_QUEUE, async (data) =>
-      dispatch('cancelled', data.reservationNo),
-    );
+    await drive(BOOKING_CANCELLED_QUEUE);
 
     const rows = await db.select().from(scheduledMessages);
     expect(rows).toHaveLength(5);
     expect(rows.every((r) => r.status === 'cancelled')).toBe(true);
     expect(rows.every((r) => r.skipReason === 'booking_cancelled')).toBe(true);
+  });
+
+  it('the cancel queue maps to the cancel action, by construction', () => {
+    // Pins the map itself: BOOKING_EVENT_QUEUES.cancelled must be the cancel queue.
+    expect(kindForQueue(BOOKING_CANCELLED_QUEUE)).toBe('cancelled');
+    expect(kindForQueue(BOOKING_CREATED_QUEUE)).toBe('created');
   });
 
   it('the payload carries only {reservationNo} — everything else is read from the mirror', async () => {

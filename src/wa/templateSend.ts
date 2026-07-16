@@ -16,6 +16,7 @@ import { windowStateFor } from '../db/windows.js';
 import { ALL_TEMPLATES, templateComponents, type TemplateDef, type TemplateKey } from '../lifecycle/templates.js';
 import { summarizeError } from '../lib/logger.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
+import type { SendResult } from './sendFailure.js';
 
 /**
  * Whether real Meta templates are sent, or simulated as free-form (plan CH-12
@@ -65,10 +66,7 @@ export interface TemplateSenderContext {
   dispatchToGraph: (
     args: { messageId: string; toE164: string; body: string; conversationId: string | null },
     payload: unknown,
-  ) => Promise<
-    | { ok: true; messageId: string; waMessageId: string }
-    | { ok: false; messageId: string | null; error: string }
-  >;
+  ) => Promise<SendResult>;
 }
 
 export function createTemplateSender(ctx: TemplateSenderContext) {
@@ -177,7 +175,9 @@ export function createTemplateSender(ctx: TemplateSenderContext) {
   ) {
     const planned = await planTemplatedSend(toE164, send, opts);
     if (!planned.ok) {
-      return { ok: false as const, messageId: null, error: planned.error, usedTemplate: false };
+      // A shut window (simulate mode) will reopen; a param rejection will not.
+      const retryable = planned.error === 'WINDOW_CLOSED_SIMULATED';
+      return { ok: false as const, messageId: null, error: planned.error, usedTemplate: false, retryable };
     }
     let message: Message;
     try {
@@ -193,6 +193,7 @@ export function createTemplateSender(ctx: TemplateSenderContext) {
         messageId: null,
         error: summarizeError(error),
         usedTemplate: false,
+        retryable: true, // a DB insert failure is transient
       };
     }
     const result = await dispatchTemplated(

@@ -32,9 +32,9 @@ import { createEzeePoller } from '../ezee/poller.js';
 import type { GateContext } from '../lifecycle/gates.js';
 import { runReconcile } from '../lifecycle/reconcile.js';
 import {
-  cancelForBooking,
+  handleBookingEvent,
   LIFECYCLE,
-  scheduleForBooking,
+  type BookingEventKind,
   type SchedulerDeps,
 } from '../lifecycle/scheduler.js';
 import { runSender } from '../lifecycle/sender.js';
@@ -388,24 +388,22 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
       fromSweep,
     });
 
-    for (const [kind, queue] of Object.entries(BOOKING_EVENT_QUEUES)) {
+    for (const [kind, queue] of Object.entries(BOOKING_EVENT_QUEUES) as [BookingEventKind, string][]) {
       await deps.boss.work<{ reservationNo: string }>(queue, workOptions, async (jobs) => {
         for (const job of jobs) {
-          if (kind === 'cancelled') {
-            await cancelForBooking(schedulerDeps(), job.data.reservationNo);
-          } else {
-            await scheduleForBooking(schedulerDeps(), job.data.reservationNo);
-          }
+          await handleBookingEvent(schedulerDeps(), kind, job.data.reservationNo);
         }
       });
     }
 
     await deps.boss.work(LIFECYCLE_SEND_QUEUE, workOptions, async () => {
+      // today is re-derived per tick (never captured) so the stay-over backstop
+      // cannot rot open on a long-lived process.
       await runSender({
         db: deps.db,
         log: deps.log,
         wa: deps.wa,
-        gates: { sources: gates.sources },
+        gates: { sources: gates.sources, today: istCalendarDay(nowIST()) },
         enabled: sendEnabled,
       });
     });

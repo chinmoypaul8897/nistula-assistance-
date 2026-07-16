@@ -94,7 +94,7 @@ describe('a guest replying to a lifecycle message', () => {
       db,
       log,
       wa,
-      gates: { sources: GATES.sources },
+      gates: { sources: GATES.sources, today: GATES.today },
       enabled: true,
     };
     expect(await runSender(senderDeps)).toMatchObject({ sent: 1 });

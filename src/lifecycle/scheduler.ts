@@ -154,14 +154,22 @@ export async function scheduleForBooking(
   const siblings = await siblingRows(deps.db, row);
   const stay = project(row, siblings, deps.gates.today);
   if (!stay.describable) {
-    logSkip(deps, row, `undescribable:${stay.reason}`);
-    // WHY only from the event path: the hourly sweep re-examines the same rows
-    // forever, so alerting here would page ops every hour for one bad booking.
+    // SYMMETRIC WITH THE GATE-FAIL BRANCH (review fix): a booking that WAS
+    // describable and later is not — the classic case is a multi-room booking
+    // whose first sibling (877-1) was scheduled and its confirmation sent before
+    // the second sibling (877-2) arrived and made it multi_room — must have its
+    // pending rows WITHDRAWN, not merely skipped. Otherwise the guest keeps a
+    // single-room lifecycle for a multi-room stay.
+    const revoked = await revokePending(deps, row.ezeeReservationNo, `undescribable:${stay.reason}`);
+    logSkip(deps, row, `undescribable:${stay.reason}`, revoked);
+    // WHY the alert only from the event path: the hourly sweep re-examines the
+    // same rows forever, so alerting here would page ops every hour for one bad
+    // booking.
     if (!deps.fromSweep) {
       void alertOps(deps.log, {
         kind: 'lifecycle_undescribable',
         summary: 'Booking passed the gates but cannot be safely described — no lifecycle',
-        detail: { reservationNo: row.ezeeReservationNo, reason: stay.reason },
+        detail: { reservationNo: row.ezeeReservationNo, reason: stay.reason, revoked },
       });
     }
     return { scheduled: 0, skipped: `undescribable:${stay.reason}` };
@@ -246,4 +254,22 @@ export async function cancelForBooking(
     deps.log.info({ reservationNo, cancelled }, '[lifecycle] pending sends cancelled');
   }
   return { cancelled };
+}
+
+export type BookingEventKind = 'created' | 'modified' | 'cancelled';
+
+/**
+ * The single mapping from a booking.* event to its action — the ONE place a
+ * cancel is distinguished from a create/modify. registerJobs' worker loop and
+ * the wiring test both go through here, so a mis-wired cancel (the review's
+ * "a cancel that schedules" hazard) cannot pass green while diverging in prod.
+ */
+export function handleBookingEvent(
+  deps: SchedulerDeps,
+  kind: BookingEventKind,
+  reservationNo: string,
+): Promise<unknown> {
+  return kind === 'cancelled'
+    ? cancelForBooking(deps, reservationNo)
+    : scheduleForBooking(deps, reservationNo);
 }

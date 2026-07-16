@@ -90,7 +90,7 @@ const senderDeps = (wa: ReturnType<typeof makeWa>['wa'], enabled = true): Sender
   db,
   log,
   wa,
-  gates: { sources: GATES.sources },
+  gates: { sources: GATES.sources, today: GATES.today },
   enabled,
 });
 
@@ -268,9 +268,12 @@ describe('runSender', () => {
     const [row] = await db.select().from(scheduledMessages).where(sql`kind = 'confirmation'`);
     expect(row?.status).toBe('pending'); // still deliverable
     expect(row?.skipReason).toBe('window_closed');
-    // BACKED OFF, not left at the front of the queue: 25 undeliverable rows are
-    // permanently the OLDEST, so without this they starve every newer message.
-    expect(row?.sendAt.getTime()).toBeGreaterThan(Date.now());
+    // BACKED OFF via deferred_until — NOT send_at, which stays the planned time
+    // so the stale guard keeps the row's true age. This is what stops 25
+    // undeliverable rows from starving the batch AND keeps the 36h guard working.
+    expect(row?.deferredUntil).not.toBeNull();
+    expect(row?.deferredUntil!.getTime()).toBeGreaterThan(Date.now());
+    expect(row?.sendAt.getTime()).toBeLessThanOrEqual(Date.now()); // planned time untouched
   });
 
   it('does not send the same row twice across two ticks', async () => {

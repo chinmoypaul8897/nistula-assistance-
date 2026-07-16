@@ -381,7 +381,15 @@ export const scheduledMessages = pgTable(
     /** Rendered template params — villa TYPE only, never a house (OQ-19), and
      * never a ₹ figure (§3.4 money rule). */
     params: jsonb('params').notNull(),
+    /** The PLANNED moment (§2.3). Immutable except on a genuine reschedule — the
+     * staleness guard measures against it, so backoff must NOT live here. */
     sendAt: timestamp('send_at', { withTimezone: true }).notNull(),
+    /** Backoff clock, separate from send_at (CH-12 review fix): a transient defer
+     * (window shut, a human holding the thread, a Meta 429) parks the row here so
+     * it leaves the due batch without moving its planned time — otherwise the
+     * 36h stale guard, which reads send_at, could never fire for a row that
+     * actually waited. Null once it is genuinely due. */
+    deferredUntil: timestamp('deferred_until', { withTimezone: true }),
     status: scheduledMessageStatusEnum('status').notNull().default('pending'),
     /** `${kind}:${referenceBase(reservationNo)}` — the idempotency key. A modify
      * UPDATEs send_at through this while still pending; it never duplicates. */

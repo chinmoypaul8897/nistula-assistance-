@@ -24,6 +24,10 @@ import { bookingsMirror, guests, scheduledMessages } from '../db/schema.js';
 import { hasPhone, passesSource, type GateContext } from './gates.js';
 import { LIFECYCLE_TEMPLATES, type ScheduledKind } from './templates.js';
 
+/** Kinds that belong BEFORE/DURING the stay — meaningless once it is over. The
+ * post-stay kinds (poststay, winback) are supposed to fire after check-out. */
+const PRE_STAY_KINDS: readonly ScheduledKind[] = ['confirmation', 'prearrival', 'welcome'];
+
 /** §2.3: "fewer than 2 win-backs sent in the trailing 365 days". */
 const WINBACK_CAP = 2;
 const WINBACK_WINDOW_DAYS = 365;
@@ -43,8 +47,11 @@ export type Outcome = 'sent' | 'skipped' | 'deferred' | 'failed';
 
 export interface BlockContext {
   db: Db;
-  gates: Pick<GateContext, 'sources'>;
+  /** sources re-applied at send time; today for the stay-over backstop. */
+  gates: Pick<GateContext, 'sources' | 'today'>;
 }
+
+const backoff = (): Date => new Date(Date.now() + DEFER_MINUTES * 60_000);
 
 /** Terminal: resolve the row, it will never be sent. */
 export async function resolve(
@@ -59,15 +66,31 @@ export async function resolve(
     .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'pending')));
 }
 
-/** Transient: keep it pending, look again later. THIS is the retry mechanism. */
+/** Transient: keep it pending, look again after the backoff. THE retry mechanism.
+ * Parks the row on deferred_until — NEVER send_at, which is the planned time the
+ * stale guard reads. */
 export async function defer(db: Db, row: ScheduledRow, reason: string): Promise<void> {
   await db
     .update(scheduledMessages)
-    .set({
-      sendAt: new Date(Date.now() + DEFER_MINUTES * 60_000),
-      skipReason: reason.slice(0, 100), // why it is waiting; the row stays pending
-    })
+    .set({ deferredUntil: backoff(), skipReason: reason.slice(0, 100) })
     .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'pending')));
+}
+
+/**
+ * A transient GRAPH failure (a Meta 429, a 5xx, a network error) — the message
+ * provably did NOT go, so re-arm the already-claimed row for another attempt.
+ *
+ * This is the BLOCKER fix: before it, any non-ok Graph response resolved the row
+ * to 'failed' terminally, so a rate-limit during a batch permanently lost a real
+ * guest's confirmation. The row was claimed 'sent' before the Graph call (the
+ * send-intent pattern), so re-arming means sent → pending; the failed message
+ * row stays as the audit of the attempt, and the next tick writes a fresh intent.
+ */
+export async function retryAfterFailedSend(db: Db, row: ScheduledRow, reason: string): Promise<void> {
+  await db
+    .update(scheduledMessages)
+    .set({ status: 'pending', sentMessageId: null, deferredUntil: backoff(), skipReason: reason.slice(0, 100) })
+    .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'sent')));
 }
 
 /**
@@ -160,12 +183,22 @@ export async function blockedBy(
     }
     // The SOURCE and PHONE gates are re-applied — eZee changes both fields, and
     // a booking re-sourced to an OTA after it was scheduled must not send (Q13).
-    // The DATE gate is deliberately NOT re-applied: check_in is in the past by
-    // the time a thank-you is due, which is the entire point of a thank-you.
     if (!passesSource(booking, deps.gates.sources)) {
       return { outcome: 'skipped', reason: 'source_not_allowed' };
     }
     if (!hasPhone(booking)) return { outcome: 'skipped', reason: 'no_phone' };
+    // The DATE gate is NOT re-applied wholesale — check_in is in the past by the
+    // time a thank-you is due, which is the point of a thank-you. But a PRE-stay
+    // message is a lie once the stay is entirely over: if the dates were amended
+    // into the past (and the sweep never revokes a now-failing booking), the
+    // welcome/pre-arrival must not fire. Post-stay kinds are exempt by design.
+    if (
+      PRE_STAY_KINDS.includes(row.kind) &&
+      booking.checkOut !== null &&
+      booking.checkOut < deps.gates.today
+    ) {
+      return { outcome: 'skipped', reason: 'stay_over' };
+    }
   }
 
   const marketing = await marketingBlock(deps.db, row, row.kind);

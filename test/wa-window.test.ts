@@ -125,7 +125,7 @@ describe('sendText — refuses a closed window BEFORE the Graph call', () => {
       sender: 'system',
     });
 
-    expect(result).toEqual({ ok: false, messageId: null, error: 'WINDOW_CLOSED' });
+    expect(result).toEqual({ ok: false, messageId: null, error: 'WINDOW_CLOSED', retryable: false });
     expect(sent).toHaveLength(0);
     expect(await db.select().from(schema.messages)).toHaveLength(0);
     expect(log.error).toHaveBeenCalledWith(

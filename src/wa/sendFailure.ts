@@ -27,7 +27,18 @@ export interface SendFailure {
 
 export type SendResult =
   | { ok: true; messageId: string; waMessageId: string }
-  | { ok: false; messageId: string | null; error: string };
+  | { ok: false; messageId: string | null; error: string; retryable: boolean };
+
+/**
+ * Did Meta plausibly NOT receive it, so a re-send is safe and worthwhile?
+ * A 429 rate-limit and any 5xx are transient rejections — Meta did not deliver.
+ * A network error before any response (httpStatus undefined) is the same. A 4xx
+ * (bad param, closed window) is permanent; a 2xx-without-id may have been
+ * accepted, so re-sending risks a duplicate — both are treated as terminal.
+ */
+export function isRetryable(httpStatus: number | undefined): boolean {
+  return httpStatus === undefined || httpStatus === 429 || httpStatus >= 500;
+}
 
 /** Settles a committed intent row as 'failed' and alerts ops. Never throws. */
 export async function failSend(
@@ -63,7 +74,7 @@ export async function failSend(
       httpStatus: failure.httpStatus,
     },
   });
-  return { ok: false, messageId, error: failure.errorText };
+  return { ok: false, messageId, error: failure.errorText, retryable: isRetryable(failure.httpStatus) };
 }
 
 /** Token-free failure from a Graph error response: status + Meta's own code/type/message. */

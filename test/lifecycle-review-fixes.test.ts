@@ -75,7 +75,7 @@ const senderDeps = (wa: ReturnType<typeof makeWa>['wa']): SenderDeps => ({
   db,
   log,
   wa,
-  gates: { sources: GATES.sources },
+  gates: { sources: GATES.sources, today: GATES.today },
   enabled: true,
 });
 

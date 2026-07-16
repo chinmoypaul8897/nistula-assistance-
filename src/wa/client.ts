@@ -231,7 +231,7 @@ export function createWaClient(deps: WaClientDeps) {
         summary: 'Free-form send refused — the 24h window is closed',
         detail: { conversationId: opts.conversationId, windowSource: window.source },
       });
-      return { ok: false, messageId: null, error: 'WINDOW_CLOSED' };
+      return { ok: false, messageId: null, error: 'WINDOW_CLOSED', retryable: false };
     }
 
     let message: Message;
@@ -246,7 +246,7 @@ export function createWaClient(deps: WaClientDeps) {
         summary: 'WhatsApp send-intent insert failed',
         detail: { conversationId: opts.conversationId },
       });
-      return { ok: false, messageId: null, error: summarizeError(error) };
+      return { ok: false, messageId: null, error: summarizeError(error), retryable: true };
     }
     return dispatchText({
       messageId: message.id,

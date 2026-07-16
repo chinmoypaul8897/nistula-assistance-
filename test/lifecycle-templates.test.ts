@@ -40,8 +40,28 @@ describe('every template body', () => {
 
   it.each(entries)('%s names no HOUSE — eZee only guessed it (OQ-19)', (_key, d) => {
     // Not even as a literal. The params carry the villa TYPE, from stayView.
-    expect(metaBody(d)).not.toMatch(/\b(?:Apartment|Villa)\s*(?:0?\d|[BC]\d)\b/i);
+    expect(metaBody(d)).not.toMatch(/\b(?:Apartment|Villa)\s*[A-Za-z]?\d/i);
     expect(metaBody(d)).not.toMatch(/\bSiolim 4BHK\b/);
+  });
+
+  it('the param guard rejects EVERY real house — including "Apartment 11" (regression)', () => {
+    // The earlier 0?\d guard let "Apartment 11" (a real house) through. Guard by
+    // the contract: Apartment/Villa followed by any number is a house.
+    for (const house of [
+      'Nistula Apartment 06',
+      'Nistula Apartment 09',
+      'Nistula Apartment 11', // the one the old regex missed
+      'Villa B1',
+      'Villa B3',
+      'Villa C1',
+      'Villa C3',
+    ]) {
+      expect(() => renderTemplate('welcome', { firstName: 'A', villaType: house })).toThrow();
+    }
+    // ...but the TYPE strings (no number) pass.
+    for (const type of ['Nistula Apartment', 'Nistula Villa', 'Nistula 4BHK']) {
+      expect(() => renderTemplate('welcome', { firstName: 'A', villaType: type })).not.toThrow();
+    }
   });
 
   it.each(entries)('%s uses no banned vocabulary', (_key, d) => {

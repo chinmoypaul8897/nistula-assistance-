@@ -30,7 +30,7 @@
  * of them the winner. A crash after the commit: the message row sits 'queued'
  * and CH-17's stale-queued sweep reconciles it — it is never blindly re-sent.
  */
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, isNull, lte, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { insertCostEvents } from '../db/repos.js';
 import { conversations, guests, scheduledMessages } from '../db/schema.js';
@@ -38,8 +38,14 @@ import { istCalendarDay, nowIST } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import type { GateContext } from './gates.js';
-import { blockedBy, defer, resolve, type Outcome, type ScheduledRow } from './sendGuards.js';
-
+import {
+  blockedBy,
+  defer,
+  resolve,
+  retryAfterFailedSend,
+  type Outcome,
+  type ScheduledRow,
+} from './sendGuards.js';
 
 export interface SenderLogger extends AlertLogger {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -50,9 +56,10 @@ export interface SenderDeps {
   db: Db;
   log: SenderLogger;
   wa: Pick<WaClient, 'planTemplatedSend' | 'dispatchTemplated' | 'createSendIntent'>;
-  /** The same gates the scheduler used — re-applied at send time, because a
-   * booking can stop qualifying between the two (see `stillQualifies`). */
-  gates: Pick<GateContext, 'sources'>;
+  /** The same gates the scheduler used — sources re-applied at send time (a
+   * booking can be re-sourced between schedule and send), and today for the
+   * stay-over backstop. */
+  gates: Pick<GateContext, 'sources' | 'today'>;
   /** LIFECYCLE_SEND_ENABLED. Off ⇒ rows accrue as 'pending' and NOTHING is sent.
    * Merging this chunk to main must not, by itself, start messaging people. */
   enabled: boolean;
@@ -78,10 +85,20 @@ export async function runSender(deps: SenderDeps): Promise<SenderResult> {
     return result;
   }
 
+  // Due = pending, its planned time has come, and it is not currently backed off.
+  // deferred_until is the backoff clock; send_at is the immutable planned time
+  // (so an excluded deferred row keeps its true age for the stale guard).
+  const now = new Date();
   const due = await deps.db
     .select()
     .from(scheduledMessages)
-    .where(and(eq(scheduledMessages.status, 'pending'), lt(scheduledMessages.sendAt, new Date())))
+    .where(
+      and(
+        eq(scheduledMessages.status, 'pending'),
+        lte(scheduledMessages.sendAt, now),
+        or(isNull(scheduledMessages.deferredUntil), lte(scheduledMessages.deferredUntil, now)),
+      ),
+    )
     .orderBy(scheduledMessages.sendAt)
     .limit(deps.batchSize ?? 10);
 
@@ -209,16 +226,28 @@ async function sendOne(deps: SenderDeps, row: ScheduledRow): Promise<Outcome> {
   );
 
   if (!sendResult.ok) {
-    // The row is already claimed 'sent' and the message row carries the failure —
-    // that is the send-intent contract, and it is what stops a retry from
-    // double-sending. CH-17's stale-queued sweep owns the reconciliation.
+    // TRANSIENT vs TERMINAL, on the POST-Graph path (the BLOCKER the review
+    // found). A 429 rate-limit, a 5xx, or a network error means Meta did NOT
+    // deliver — so re-arm the claimed row for another attempt rather than burn
+    // the message for ever. Only a permanent failure (a rejected template param,
+    // a 2xx with no id) resolves terminally. The message row already carries the
+    // failure as the audit of the attempt.
+    if (sendResult.retryable) {
+      await retryAfterFailedSend(deps.db, row, `retry:${sendResult.error.slice(0, 80)}`);
+      await alertOps(deps.log, {
+        kind: 'lifecycle_send_deferred',
+        summary: 'A lifecycle message hit a transient send failure — will retry',
+        detail: { scheduledId: row.id, kind: row.kind, messageId },
+      });
+      return 'deferred';
+    }
     await deps.db
       .update(scheduledMessages)
       .set({ status: 'failed', skipReason: sendResult.error.slice(0, 100) })
       .where(eq(scheduledMessages.id, row.id));
     await alertOps(deps.log, {
       kind: 'lifecycle_send_failed',
-      summary: 'A lifecycle message failed to send',
+      summary: 'A lifecycle message failed to send permanently',
       detail: { scheduledId: row.id, kind: row.kind, messageId },
     });
     return 'failed';
