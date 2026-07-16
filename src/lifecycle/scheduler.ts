@@ -177,7 +177,12 @@ export async function scheduleForBooking(
 
   const { sends, issue } = planSends(row, stay, nowIST(), deps.quiet);
   if (issue !== null) {
-    logSkip(deps, row, issue);
+    // Symmetric with the gate-fail and undescribable branches: a booking that
+    // WAS schedulable and now hits a planSends issue (eZee renamed the room type
+    // to something unmappable, so villaType/locality no longer resolves) must
+    // have its pending rows WITHDRAWN, not merely skipped.
+    const revoked = await revokePending(deps, row.ezeeReservationNo, issue);
+    logSkip(deps, row, issue, revoked);
     return { scheduled: 0, skipped: issue };
   }
 

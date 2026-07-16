@@ -30,14 +30,33 @@ export type SendResult =
   | { ok: false; messageId: string | null; error: string; retryable: boolean };
 
 /**
+ * WhatsApp Cloud API rate/throughput limits that arrive as HTTP 400 with the
+ * reason in error.code — genuinely TRANSIENT (they clear when the cap resets),
+ * so classifying by httpStatus alone (as the first version did) permanently
+ * burned a real guest's message on a go-live messaging-cap 400. Guard by the
+ * full contract — status AND code — not an incomplete signal.
+ */
+const TRANSIENT_META_CODES = new Set([
+  130429, // Rate limit hit
+  131048, // Spam rate limit hit
+  131056, // (business/recipient pair) rate limit hit
+  80007, // Rate limit issues
+  133016, // temporary throttle / account paused, resumes automatically
+]);
+
+/**
  * Did Meta plausibly NOT receive it, so a re-send is safe and worthwhile?
  * A 429 rate-limit and any 5xx are transient rejections — Meta did not deliver.
- * A network error before any response (httpStatus undefined) is the same. A 4xx
- * (bad param, closed window) is permanent; a 2xx-without-id may have been
- * accepted, so re-sending risks a duplicate — both are treated as terminal.
+ * A network error before any response (httpStatus undefined) is the same. Meta
+ * also signals messaging-tier and throughput caps as HTTP 400 + a rate-limit
+ * code — also transient. Anything else 4xx (bad param, closed window) is
+ * permanent; a 2xx-without-id may have been accepted, so re-sending risks a
+ * duplicate — both are treated as terminal.
  */
-export function isRetryable(httpStatus: number | undefined): boolean {
-  return httpStatus === undefined || httpStatus === 429 || httpStatus >= 500;
+export function isRetryable(httpStatus: number | undefined, errorCode?: number): boolean {
+  if (httpStatus === undefined || httpStatus === 429 || httpStatus >= 500) return true;
+  if (errorCode !== undefined && TRANSIENT_META_CODES.has(errorCode)) return true;
+  return false;
 }
 
 /** Settles a committed intent row as 'failed' and alerts ops. Never throws. */
@@ -74,7 +93,12 @@ export async function failSend(
       httpStatus: failure.httpStatus,
     },
   });
-  return { ok: false, messageId, error: failure.errorText, retryable: isRetryable(failure.httpStatus) };
+  return {
+    ok: false,
+    messageId,
+    error: failure.errorText,
+    retryable: isRetryable(failure.httpStatus, failure.errorCode),
+  };
 }
 
 /** Token-free failure from a Graph error response: status + Meta's own code/type/message. */

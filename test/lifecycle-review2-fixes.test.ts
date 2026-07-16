@@ -148,6 +148,22 @@ describe('🚨 a transient Graph failure DEFERS and retries — it does not burn
     );
   });
 
+  it.each([130429, 131048, 131056, 80007])(
+    'a TRANSIENT rate-limit as HTTP 400 + code %s DEFERS (not terminal) — the second-review blocker',
+    async (code) => {
+      // Meta returns messaging-tier / throughput caps as HTTP 400 with the reason
+      // in the error CODE. Classifying by httpStatus alone burned these.
+      await scheduleForBooking(deps(), await seed());
+      await openWindow();
+      const wa = makeWa('simulate', async () => graphErr(400, code));
+      const result = await runSender(senderDeps(wa));
+
+      expect(result).toMatchObject({ deferred: 1, failed: 0 });
+      const [row] = await db.select().from(scheduledMessages).where(sql`kind = 'confirmation'`);
+      expect(row?.status).toBe('pending'); // survives the cap; retries when it resets
+    },
+  );
+
   it('a deferred-after-429 row actually re-sends on the next tick (recovery, end to end)', async () => {
     await scheduleForBooking(deps(), await seed());
     await openWindow();
@@ -170,6 +186,37 @@ describe('🚨 a transient Graph failure DEFERS and retries — it does not burn
     expect(second).toMatchObject({ sent: 1 });
     const [row] = await db.select().from(scheduledMessages).where(sql`kind = 'confirmation'`);
     expect(row?.status).toBe('sent');
+  });
+});
+
+/* ── the REAL production path: a closed window + a real template ───────────── */
+
+describe('the closed-window TEMPLATE send (WA_TEMPLATE_MODE=send) — the production path', () => {
+  it('sends a real Meta template Graph payload to a guest who never messaged us', async () => {
+    // The whole premise of lifecycle: the guest has a CLOSED window. In
+    // production (mode=send) that means a real approved template. The dev test
+    // number cannot prove this path (no approved templates), and the tests must.
+    await scheduleForBooking(deps(), await seed());
+    // NO openWindow() — the guest has never written to us.
+    const sent: unknown[] = [];
+    const wa = makeWa('send', async (_url, options) => {
+      sent.push(JSON.parse(options?.body ?? '{}'));
+      return new Response(JSON.stringify({ messages: [{ id: 'wamid.TPL' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    const result = await runSender(senderDeps(wa));
+
+    expect(result).toMatchObject({ sent: 1 });
+    // A real TEMPLATE payload (not free-form text) went on the wire.
+    expect(sent[0]).toMatchObject({ type: 'template', template: { name: 'nst_confirmation_v1' } });
+    const [row] = await db.select().from(scheduledMessages).where(sql`kind = 'confirmation'`);
+    expect(row?.status).toBe('sent');
+    // ...and Meta will bill it, so a wa_template cost event is metered.
+    const [cost] = await db.select().from(schema.costEvents);
+    expect(cost?.kind).toBe('wa_template');
   });
 });
 
