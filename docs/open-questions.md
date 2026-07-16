@@ -400,6 +400,40 @@ get lifecycle at all, so nothing historical can fire; plus the status allowlist 
 a source string, a name convention) and add a fifth gate.
 
 ### OQ-22 — What do you do in eZee when a booking changes, and how fast?
+**Status:** 🔴 (team-question Q38.) **We have still never seen a `Modify` arrive down the LIVE FEED.**
+
+**A retraction, and the correction of the retraction (2026-07-16).** On the day CH-12 shipped this
+was briefly flipped to "half-answered — eZee's feed DOES deliver Modify". **That was wrong, on both
+its pieces of evidence, and it is withdrawn:**
+- Booking **969** carried `status='modified'` — but that was a **hand-edit made to the mirror during
+  the live demo** to prove the reschedule path. eZee's own payload for 969 says `Status: "New"`. It
+  proves nothing about the feed.
+- Bookings **811, 741, 845, 915** DO carry `Status: "Modify"` in eZee's own payload — but all four
+  were created 2026-07-14 07:13–07:16 UTC, which is **CH-11's `--apply` reconcile**. They were
+  fetched with `FetchSingleBooking`, not delivered by the queue. That field is eZee's RECORD that the
+  booking was once amended; it is not the queue telling us so.
+
+**What those four DO establish, and it is worth having:** amendments genuinely happen in this
+business — four real OTA bookings were amended. So the question is not academic. **What is still
+unknown is the only thing that matters to us: whether an amendment ever arrives on the feed we
+actually listen to.** Every `Status` eZee has ever pushed us live is `New` (161) or a cancel
+tombstone (42). Zero `Modify`.
+
+**The lesson, and it is the one this codebase keeps relearning:** *a fact read out of a row is only
+as good as the row's provenance.* Our own `status` column can be hand-edited; a reconcile-hydrated
+payload is not a feed observation. Check where the row came from before you believe what it says.
+
+**Why it matters:** the lifecycle sends to whatever phone the booking carries. A maintenance block
+with the caretaker's number gets a warm "we look forward to welcoming you".
+
+**What we shipped meanwhile:** `LIFECYCLE_EPOCH` — only bookings mirrored AFTER the cutover instant
+get lifecycle at all, so nothing historical can fire; plus the status allowlist (`confirmed` /
+`modified` only — an unconfirmed hold is never congratulated).
+
+**What changes once they answer:** if such rows exist, we need a way to recognise them (a rate plan,
+a source string, a name convention) and add a fifth gate.
+
+### OQ-22 — What do you do in eZee when a booking changes, and how fast?
 **Status:** 🟡 **HALF-ANSWERED BY OBSERVATION, 2026-07-16 — eZee's feed DOES deliver `Modify`.**
 A booking re-dated in the eZee UI during CH-12's live demo mirrored as `modified` and correctly
 re-planned its `send_at` (booking 969; see the CH-12 post-deploy verification in progress.md). A
@@ -423,11 +457,11 @@ rather than delivered late and wrong. An un-mirrored change we cannot see.
 **What changes once they answer:** if amendments are made in a way that never reaches connectivity,
 that is a process fix at the front desk, not a code fix — and it must be fixed before go-live.
 
-**🚨 AMENDMENTS DO REACH THE FEED (observed 2026-07-16), SO THIS DEFECT IS REACHABLE TODAY — it is
-not hypothetical.** Round 9 deferred it on the explicit belief that no `modified` row had ever been
-seen. **That belief is now false, so re-weigh the priority before CH-17.** (It still fails toward
-silence and still costs only the thank-you — the deferral is defensible, but it must be re-made on
-the true premise, not the old one.) **A date
+**🚨 If the answer is "yes, amendments DO reach the feed", one known defect becomes live** (round 9
+found it and deliberately deferred it, because it sits entirely behind this question). **Round 9's
+premise still stands** — no `Modify` has ever been seen on the feed — but note it is a statement
+about a queue we have watched for three days, not a law of nature. **If the front desk says they
+amend bookings in eZee, treat this defect as reachable and fix it before CH-17 closes.** **A date
 mistyped and then corrected can permanently cost the guest their thank-you.** `poststay`'s planned
 instant is `check_out +1d`, and `check_out` is a `MIRROR_DIFF_FIELD` — so a backwards typo emits
 `booking.modified`, the re-plan drags the instant into the past, its age exceeds

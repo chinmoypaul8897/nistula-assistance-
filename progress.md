@@ -1026,12 +1026,7 @@ the ONLY thing that can resolve those rows. It fires exactly when the stay is ge
 **The other three are REAL, reachable, and deliberately deferred** — `poststay`'s terminal bound is
 plan-age, but its instant derives from mutable `check_out`, so a >7d-backwards typo, corrected too
 late, costs the thank-you for ever. Deferred because it fails toward SILENCE, breaches no
-non-negotiable, sat behind **OQ-22** — but that premise is now FALSIFIED. Round 9 deferred it because no
-`modified` row had ever been observed; **the post-deploy verification below found one** (booking 969,
-re-dated in the eZee UI), and a `modified` row is reachable only via `verb === 'modify'`. **The defect
-is therefore reachable today.** The deferral still stands — it fails toward silence and costs only the
-thank-you — but it was re-made on the true premise, not the old one. Logged in OQ-22 and as
-`TODO(CH-17)`.
+non-negotiable, sits behind **OQ-22** and the deferral STANDS. *(A same-day correction: this briefly read "the premise is falsified — eZee does deliver Modify". **Wrong, twice over.** Booking 969's `modified` status was a HAND-EDIT made to the mirror during the demo, and the four rows whose eZee payload does say `Status: Modify` were all hydrated by CH-11's `--apply` reconcile via `FetchSingleBooking` on 14 Jul — eZee's record that they were once amended, NOT the queue delivering one. Every status eZee has ever PUSHED us is `New` or a cancel. **A fact read out of a row is only as good as the row's provenance.**)* It also costs only the thank-you and fails toward silence. Logged in OQ-22 and as `TODO(CH-17)`.
 
 **🚨 AND THE JUDGE CAUGHT THE TRAP IN THE OBVIOUS FIX — record it, because it would have been
 instance 13.** Flipping `poststay`/`stay_over` to defer looks like the consistent move. It is not:

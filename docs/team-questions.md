@@ -772,7 +772,7 @@ If a guest tells us they are allergic to shellfish or nuts, or that they are dia
 
 **The question.** When a guest changes a booking — new dates, an extra night, an extra guest — do you edit the existing booking in eZee ('Amend Stay'), or cancel it and create a new one? And when you agree a change with a guest on WhatsApp, is eZee updated straight away, or later, or sometimes not at all?
 
-*(The technical half is already answered — do not ask them this. On 2026-07-16 we amended a test booking ourselves and watched the change reach us correctly, so eZee's feed DOES deliver amendments. What we cannot see from here is the HUMAN half: whether a phone amendment reliably gets entered at all, and how fast. That is the only part they can answer.)*
+*(Please DO ask this — it is still open. We have never seen an amendment arrive on eZee's live feed: every record it has pushed us is a new booking or a cancellation. But eZee's own files show four of your past bookings WERE amended, so it is happening somewhere we cannot see. The most useful thing you could do: amend one booking in eZee and tell us when, so we can watch whether it reaches us at all.)*
 
 **Why it matters.** eZee gives us no way to ask 'what changed' — we only learn about a change if it comes down the booking feed, and we have never once seen an amendment. If a guest moves their stay from the 20th to the 27th and that never reaches us, the assistant will send a welcome message on the 20th, tell the guest the wrong dates, and hand staff the wrong dates — with complete confidence. And if the desk agrees a change on Tuesday and only updates eZee on Friday, then for three days the assistant gives that guest the wrong check-in date and schedules their pre-arrival message for the wrong day.
 
