@@ -15,10 +15,8 @@
 import type { BookingMirror } from '../db/bookings.js';
 import { referenceBase, type DescribedStay } from '../brain/stayView.js';
 import {
-  atISTHour,
   formatDayDisplay,
   formatStayDates,
-  isNightIST,
   istWallClockToInstant,
   shiftDay,
 } from '../lib/time.js';
@@ -77,42 +75,34 @@ export function firstNameOf(row: BookingMirror): string | null {
 }
 
 /**
- * Nothing may land on a guest's phone in the small hours. The §2.3 send times
- * (09:00–11:00 IST) were chosen with that in mind, but `atOrNow` collapses an
- * already-past plan to "now" — so a booking made at 23:30 for a stay two days
- * out would have fired its pre-arrival at 23:30.
- *
- * A CONFIRMATION is exempt: the guest just pressed Book and is waiting for it.
- * Everything else waits for the morning.
- */
-function outOfQuietHours(instant: Date, nightStart: string, nightEnd: string): Date {
-  if (!isNightIST(instant, nightStart, nightEnd)) return instant;
-  const morning = atISTHour(instant, nightEnd);
-  return morning.getTime() > instant.getTime()
-    ? morning
-    : atISTHour(new Date(instant.getTime() + 24 * 3600_000), nightEnd);
-}
-
-/**
  * The §2.3 timing matrix, as a pure function of (booking, now) — no DB, no
  * clock, no I/O, so the whole matrix is table-testable.
  *
- * confirmation  now
- * prearrival    check-in −3d, 10:00 IST   (already inside 3 days ⇒ send now)
- * welcome       check-in day, 09:00 IST   (already past ⇒ send now)
+ * confirmation  the moment the booking entered OUR MIRROR (row.created_at)
+ * prearrival    check-in −3d, 10:00 IST
+ * welcome       check-in day, 09:00 IST
  * poststay      check-out +1d, 11:00 IST
  * winback       check-out +75d, 11:00 IST (opt-in is checked at SEND time)
  *
- * WHY a past send_at becomes "now" rather than being dropped: a guest who books
- * two days before arrival must still get a pre-arrival, and one who books on the
- * morning of check-in must still be welcomed. Dropping them would silently
- * punish the most valuable bookings — the last-minute ones.
- */
+ * 🚨 EVERY INSTANT IS DERIVED FROM AN IMMUTABLE FACT OF THE BOOKING — never from
+ * `now`. That is not a style choice; it is the whole reason the staleness guard
+ * can work. send_at IS the message's moment, the scheduler rewrites it on every
+ * re-plan, and the hourly sweep re-plans everything: when these instants were
+ * computed from `now` (the confirmation literally, the rest via an `atOrNow`
+ * that collapsed a past plan to `now`), each sweep silently reset every pending
+ * row's age to zero. The 36h guard could then never fire, and a guest who
+ * finally opened their window received their confirmation, pre-arrival AND
+ * welcome together, days late — exactly what the guard exists to prevent.
+ *
+ * A planned instant in the PAST is not moved here: the sender's due query is
+ * `send_at <= now`, so a past instant is simply due immediately — the
+ * last-minute booking still gets its pre-arrival, without lying about when that
+ * pre-arrival was for. Whether it is still TRUE by then is the stale guard's
+ * job, and whether 3 a.m. is a civil hour to say it is the sender's.
+  */
 export function planSends(
   row: BookingMirror,
   stay: DescribedStay,
-  now: Date,
-  quiet: { nightStart: string; nightEnd: string } = { nightStart: '20:00', nightEnd: '10:00' },
 ): { sends: PlannedSend[]; issue: string | null } {
   // stayView would only ever set isUnit when TRUST_EZEE_ROOM_ASSIGNMENT flips to
   // true. If that day comes, `villa` becomes a HOUSE ("Villa B3") — and a
@@ -130,13 +120,7 @@ export function planSends(
   const base = referenceBase(row.ezeeReservationNo);
   const typeName = typeWithoutPlace(villaType, place);
   const dates = formatStayDates(stay.checkIn, stay.checkOut);
-  // A planned instant in the past means "the moment has already come" — send now,
-  // but never in the middle of the night.
-  const atOrNow = (day: string, hhmm: string): Date => {
-    const planned = istWallClockToInstant(`${day}T${hhmm}`);
-    if (planned.getTime() >= now.getTime()) return planned;
-    return outOfQuietHours(now, quiet.nightStart, quiet.nightEnd);
-  };
+  const at = (day: string, hhmm: string): Date => istWallClockToInstant(`${day}T${hhmm}`);
 
   const plan = (
     kind: ScheduledKind,
@@ -153,20 +137,21 @@ export function planSends(
   return {
     issue: null,
     sends: [
-      plan('confirmation', now, {
+      // The booking's arrival in OUR mirror — immutable, so a re-plan is a no-op.
+      plan('confirmation', row.createdAt, {
         firstName,
         villaType: typeName,
         locality: place,
         dates,
         reference: base,
       }),
-      plan('prearrival', atOrNow(shiftDay(stay.checkIn, -3), '10:00'), {
+      plan('prearrival', at(shiftDay(stay.checkIn, -3), '10:00'), {
         firstName,
         checkInDay: formatDayDisplay(stay.checkIn),
       }),
-      plan('welcome', atOrNow(stay.checkIn, '09:00'), { firstName, villaType: typeName }),
-      plan('poststay', atOrNow(shiftDay(stay.checkOut, 1), '11:00'), { firstName }),
-      plan('winback', atOrNow(shiftDay(stay.checkOut, 75), '11:00'), {
+      plan('welcome', at(stay.checkIn, '09:00'), { firstName, villaType: typeName }),
+      plan('poststay', at(shiftDay(stay.checkOut, 1), '11:00'), { firstName }),
+      plan('winback', at(shiftDay(stay.checkOut, 75), '11:00'), {
         firstName,
         villaType: typeName,
         locality: place,

@@ -20,12 +20,30 @@
 import { and, eq, gte, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { bookingsMirror, guests, scheduledMessages } from '../db/schema.js';
+import { isNightIST, nowIST } from '../lib/time.js';
 import { bookingState, hasPhone, passesSource, type GateContext } from './gates.js';
 import { LIFECYCLE_TEMPLATES, type ScheduledKind } from './templates.js';
 
 /** Kinds that belong BEFORE/DURING the stay — meaningless once it is over. The
  * post-stay kinds (poststay, winback) are supposed to fire after check-out. */
 const PRE_STAY_KINDS: readonly ScheduledKind[] = ['confirmation', 'prearrival', 'welcome'];
+
+/**
+ * Nothing lands on a guest's phone in the small hours.
+ *
+ * DELIBERATELY NOT NIGHT_START/NIGHT_END (20:00–10:00): those are STAFF hours —
+ * when the front desk is in — and §2.3 puts the welcome at 09:00, a perfectly
+ * civil hour to message a guest but squarely inside staff-night. Two different
+ * questions, two different windows.
+ *
+ * Checked HERE and not in planSends because planned instants must stay immutable
+ * (a plan-time shift rewrote send_at and destroyed the staleness clock). The
+ * §2.3 times are all daytime anyway; this only ever catches a PAST-due row that
+ * became due at an uncivil hour — a guest who booked at 2 a.m. for a stay two
+ * days out. The confirmation is exempt: they just pressed Book and are waiting.
+ */
+const GUEST_QUIET_START = '22:00';
+const GUEST_QUIET_END = '08:00';
 
 /** §2.3: "fewer than 2 win-backs sent in the trailing 365 days". */
 const WINBACK_CAP = 2;
@@ -48,6 +66,9 @@ export interface BlockContext {
   db: Db;
   /** sources re-applied at send time; today for the stay-over backstop. */
   gates: Pick<GateContext, 'sources' | 'today'>;
+  /** ONE clock for both the staleness age and the quiet-hours check — two
+   * clocks would disagree. Test seam; defaults to real time. */
+  now?: () => Date;
 }
 
 const backoff = (): Date => new Date(Date.now() + DEFER_MINUTES * 60_000);
@@ -127,10 +148,17 @@ export async function blockedBy(
   deps: BlockContext,
   row: ScheduledRow,
 ): Promise<{ outcome: Exclude<Outcome, 'sent'>; reason: string } | null> {
-  // Too old to be true. A pre-arrival delivered a week late is a lie.
-  const ageHours = (Date.now() - row.sendAt.getTime()) / 3_600_000;
+  const now = deps.now?.() ?? nowIST();
+  // Too old to be true. A pre-arrival delivered a week late is a lie. send_at is
+  // the message's immutable planned moment, so this age is the real one.
+  const ageHours = (now.getTime() - row.sendAt.getTime()) / 3_600_000;
   if (ageHours > STALE_AFTER_HOURS) {
     return { outcome: 'skipped', reason: 'stale' };
+  }
+
+  // A past-due row can become due at any hour. Wait for a civil one.
+  if (row.kind !== 'confirmation' && isNightIST(now, GUEST_QUIET_START, GUEST_QUIET_END)) {
+    return { outcome: 'deferred', reason: 'quiet_hours' };
   }
 
   if (row.bookingId !== null) {

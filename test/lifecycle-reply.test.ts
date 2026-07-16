@@ -65,8 +65,10 @@ describe('a guest replying to a lifecycle message', () => {
       status: 'confirmed',
       source: 'Internet Booking Engine',
       raw: {},
-      syncedAt: new Date('2026-07-14T13:00:00Z'),
-      createdAt: new Date('2026-07-14T13:00:00Z'),
+      // A FRESH booking: the confirmation's planned moment is the mirror-insert
+      // time, so a fixed past createdAt would (correctly) make it stale.
+      syncedAt: new Date(),
+      createdAt: new Date(),
     });
     const deps: SchedulerDeps = { db, log, gates: GATES };
     await scheduleForBooking(deps, '953');

@@ -24,7 +24,6 @@ import { createWaClient, type TemplateMode } from '../src/wa/client.js';
 import { TEST_URL } from './helpers/boss.js';
 
 const TODAY = '2026-07-14';
-const NOW = new Date('2026-07-14T12:00:00Z'); // 17:30 IST
 const GATES: GateContext = {
   epoch: new Date('2026-07-14T00:00:00Z'),
   today: TODAY,
@@ -92,8 +91,8 @@ async function seed(over: Partial<BookingMirror> = {}): Promise<string> {
       status: 'confirmed',
       source: 'Internet Booking Engine',
       raw: {},
-      syncedAt: NOW,
-      createdAt: NOW,
+      syncedAt: new Date(),
+      createdAt: new Date(),
       ...over,
     })
     .returning();
@@ -380,7 +379,7 @@ describe('guest-facing text', () => {
     } as unknown as BookingMirror;
     const stay = project(row, [row], TODAY);
     if (!stay.describable) throw new Error('fixture undescribable');
-    const { sends } = planSends(row, stay, NOW);
+    const { sends } = planSends(row, stay);
     const confirmation = sends.find((s) => s.kind === 'confirmation');
     expect(confirmation?.params.villaType).toBe('Nistula 4BHK');
     expect(confirmation?.params.locality).toBe('Siolim');
@@ -399,36 +398,12 @@ describe('guest-facing text', () => {
     const shouting = { ...base, guestName: 'RAJESH KUMAR' } as unknown as BookingMirror;
     const stay = project(shouting, [shouting], TODAY);
     if (!stay.describable) throw new Error('undescribable');
-    expect(planSends(shouting, stay, NOW).sends[0]?.params.firstName).toBe('Rajesh');
+    expect(planSends(shouting, stay).sends[0]?.params.firstName).toBe('Rajesh');
 
     const placeholder = { ...base, guestName: 'Walk in guest' } as unknown as BookingMirror;
-    expect(planSends(placeholder, stay, NOW).issue).toBe('no_guest_name');
+    expect(planSends(placeholder, stay).issue).toBe('no_guest_name');
   });
 
-  it('never lands in the small hours — a 23:30 booking waits for the morning', () => {
-    // 23:30 IST = 18:00 UTC. The pre-arrival's planned instant is already past
-    // (check-in is 2 days out), so it collapses to "now" — which must not be now.
-    const night = new Date('2026-07-14T18:00:00Z');
-    const row = {
-      ezeeReservationNo: '999',
-      guestName: 'Rahul Mehta',
-      roomTypeName: 'Nistula Villa',
-      checkIn: '2026-07-16',
-      checkOut: '2026-07-18',
-      status: 'confirmed',
-      raw: {},
-      physicalRoomLabel: null,
-    } as unknown as BookingMirror;
-    const stay = project(row, [row], TODAY);
-    if (!stay.describable) throw new Error('undescribable');
-    const { sends } = planSends(row, stay, night);
-
-    // The confirmation IS immediate — the guest just pressed Book and is waiting.
-    expect(sends.find((s) => s.kind === 'confirmation')?.sendAt).toEqual(night);
-    // Everything else waits until 10:00 IST (04:30 UTC) the next morning.
-    const prearrival = sends.find((s) => s.kind === 'prearrival');
-    expect(prearrival?.sendAt.toISOString()).toBe('2026-07-15T04:30:00.000Z');
-  });
 });
 
 describe('phone_windows', () => {

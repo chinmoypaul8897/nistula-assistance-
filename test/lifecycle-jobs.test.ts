@@ -71,8 +71,8 @@ beforeEach(async () => {
     status: 'confirmed',
     source: 'Internet Booking Engine',
     raw: {},
-    syncedAt: new Date('2026-07-14T13:00:00Z'),
-    createdAt: new Date('2026-07-14T13:00:00Z'),
+    syncedAt: new Date(),
+    createdAt: new Date(),
   });
 });
 

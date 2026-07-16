@@ -379,12 +379,10 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     // `today` is re-derived on EVERY run, never captured at boot: a process that
     // stays up for a week would otherwise keep scheduling against the day it
     // booted, and the date gate would rot open.
-    const quiet = { nightStart: deps.nightStart ?? '20:00', nightEnd: deps.nightEnd ?? '10:00' };
     const schedulerDeps = (fromSweep = false): SchedulerDeps => ({
       db: deps.db,
       log: deps.log,
       gates: { ...gates, today: istCalendarDay(nowIST()) },
-      quiet,
       fromSweep,
     });
 

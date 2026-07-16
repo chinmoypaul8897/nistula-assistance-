@@ -64,6 +64,8 @@ export interface SenderDeps {
    * Merging this chunk to main must not, by itself, start messaging people. */
   enabled: boolean;
   batchSize?: number;
+  /** Test seam: the one clock blockedBy judges staleness and quiet hours by. */
+  now?: () => Date;
 }
 
 export interface SenderResult {

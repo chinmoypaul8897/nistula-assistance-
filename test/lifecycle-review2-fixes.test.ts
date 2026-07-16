@@ -63,12 +63,13 @@ function makeWa(
     httpImpl,
   });
 }
-const senderDeps = (wa: ReturnType<typeof makeWa>): SenderDeps => ({
+const senderDeps = (wa: ReturnType<typeof makeWa>, now?: () => Date): SenderDeps => ({
   db,
   log,
   wa,
   gates: { sources: GATES.sources, today: GATES.today },
   enabled: true,
+  now,
 });
 
 async function seed(over: Partial<BookingMirror> = {}): Promise<string> {
@@ -84,8 +85,8 @@ async function seed(over: Partial<BookingMirror> = {}): Promise<string> {
       status: 'confirmed',
       source: 'Internet Booking Engine',
       raw: {},
-      syncedAt: new Date('2026-07-14T13:00:00Z'),
-      createdAt: new Date('2026-07-14T13:00:00Z'),
+      syncedAt: new Date(),
+      createdAt: new Date(),
       ...over,
     })
     .returning();
@@ -221,6 +222,56 @@ describe('the closed-window TEMPLATE send (WA_TEMPLATE_MODE=send) — the produc
     // ...and Meta will bill it, so a wa_template cost event is metered.
     const [cost] = await db.select().from(schema.costEvents);
     expect(cost?.kind).toBe('wa_template');
+  });
+});
+
+/* ── nothing lands on a guest's phone in the small hours ───────────────────── */
+
+describe('quiet hours are enforced at SEND time (planned instants stay immutable)', () => {
+  const at2am = () => new Date('2026-07-16T20:30:00Z'); // 02:00 IST next day
+
+  it('a past-due pre-arrival that comes due at 2 a.m. waits for a civil hour', async () => {
+    // check-in 19 Jul => pre-arrival planned 16 Jul 10:00 IST, which is ~16h
+    // before the injected 02:00 IST clock: past-due (so it IS picked up) but not
+    // yet stale (so the quiet guard, not the stale guard, is what stops it).
+    await scheduleForBooking(deps(), await seed({ checkIn: '2026-07-19', checkOut: '2026-07-21' }));
+    await openWindow();
+    const sent: unknown[] = [];
+    const wa = makeWa('simulate', async (_u, o) => {
+      sent.push(JSON.parse(o?.body ?? '{}'));
+      return new Response(JSON.stringify({ messages: [{ id: 'w' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    // Only the pre-arrival is under test: resolve the confirmation out of the way.
+    await db.execute(sql`UPDATE scheduled_messages SET status = 'sent' WHERE kind = 'confirmation'`);
+
+    await runSender(senderDeps(wa, at2am));
+
+    const [row] = await db.select().from(scheduledMessages).where(sql`kind = 'prearrival'`);
+    expect(row?.status).toBe('pending');
+    expect(row?.skipReason).toBe('quiet_hours');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('...but the CONFIRMATION is exempt — the guest just pressed Book and is waiting', async () => {
+    await scheduleForBooking(deps(), await seed());
+    await openWindow();
+    const sent: unknown[] = [];
+    const wa = makeWa('simulate', async (_u, o) => {
+      sent.push(JSON.parse(o?.body ?? '{}'));
+      return new Response(JSON.stringify({ messages: [{ id: 'w' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    await runSender(senderDeps(wa, at2am));
+
+    const [row] = await db.select().from(scheduledMessages).where(sql`kind = 'confirmation'`);
+    expect(row?.status).toBe('sent');
+    expect(sent).toHaveLength(1);
   });
 });
 

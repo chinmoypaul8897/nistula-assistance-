@@ -16,7 +16,6 @@ import type { Db } from '../db/client.js';
 import { getOrCreateConversation, upsertGuestFromBooking } from '../db/repos.js';
 import { bookingsMirror, scheduledMessages } from '../db/schema.js';
 import { project, referenceBase } from '../brain/stayView.js';
-import { nowIST } from '../lib/time.js';
 import { firstNameOf, planSends } from './plan.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import {
@@ -47,8 +46,6 @@ export interface SchedulerDeps {
   db: Db;
   log: SchedulerLogger;
   gates: GateContext;
-  /** NIGHT_START/NIGHT_END — nothing lands on a guest's phone at 3 am. */
-  quiet?: { nightStart: string; nightEnd: string };
   /** The hourly sweep re-examines every booking forever, so it must not raise a
    * fresh ops alert each time for the same unchanged problem. */
   fromSweep?: boolean;
@@ -242,7 +239,7 @@ export async function scheduleForBooking(
     return { scheduled: 0, skipped: `undescribable:${stay.reason}` };
   }
 
-  const { sends, issue } = planSends(row, stay, nowIST(), deps.quiet);
+  const { sends, issue } = planSends(row, stay);
   if (issue !== null) {
     // Deliberately does NOT revoke — and that is the contract, not an oversight.
     // A planSends issue means "I cannot compute a FRESH plan" (eZee renamed the

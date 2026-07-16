@@ -67,9 +67,8 @@ const stayOf = (r: BookingMirror): DescribedStay => {
   return v;
 };
 
-const plan = (r: BookingMirror, now = NOW) => planSends(r, stayOf(r), now);
-const byKind = (r: BookingMirror, now = NOW) =>
-  Object.fromEntries(plan(r, now).sends.map((s) => [s.kind, s]));
+const plan = (r: BookingMirror) => planSends(r, stayOf(r));
+const byKind = (r: BookingMirror) => Object.fromEntries(plan(r).sends.map((s) => [s.kind, s]));
 
 describe('planSends — the §2.3 timing matrix (pure)', () => {
   it('schedules all five kinds', () => {
@@ -82,8 +81,20 @@ describe('planSends — the §2.3 timing matrix (pure)', () => {
     ]);
   });
 
-  it('confirmation goes now', () => {
-    expect(byKind(row()).confirmation?.sendAt).toEqual(NOW);
+  it("confirmation's moment is when the booking entered our mirror — NOT `now`", () => {
+    // Immutable: a re-plan (every hourly sweep) must compute the same instant, or
+    // the staleness clock resets for ever and the 36h guard can never fire.
+    expect(byKind(row()).confirmation?.sendAt).toEqual(NOW); // the fixture's createdAt
+    expect(byKind(row({ createdAt: new Date('2026-07-14T04:00:00Z') })).confirmation?.sendAt).toEqual(
+      new Date('2026-07-14T04:00:00Z'),
+    );
+  });
+
+  it('is IDEMPOTENT — re-planning the same booking yields identical instants', () => {
+    const r = row();
+    const a = plan(r).sends.map((s) => s.sendAt.toISOString());
+    const b = plan(r).sends.map((s) => s.sendAt.toISOString());
+    expect(a).toEqual(b); // nothing is derived from `now`
   });
 
   it('pre-arrival is check-in −3d at 10:00 IST (= 04:30 UTC)', () => {
@@ -104,16 +115,20 @@ describe('planSends — the §2.3 timing matrix (pure)', () => {
     expect(byKind(row()).winback?.sendAt.toISOString()).toBe('2027-03-07T05:30:00.000Z');
   });
 
-  it('a booking made INSIDE the 3-day window sends its pre-arrival now, not in the past', () => {
-    // Books on 14 Jul for a 16 Jul arrival: T−3 was 13 Jul, already gone.
+  it('a booking made INSIDE the 3-day window keeps its TRUE pre-arrival moment (already past)', () => {
+    // Books on 14 Jul for a 16 Jul arrival: T−3 was 13 Jul, already gone. The
+    // instant is NOT rewritten to `now` — the sender's `send_at <= now` query
+    // makes it due immediately anyway, and keeping the true moment is what lets
+    // the stale guard know how late it is. (Rewriting it reset the clock and
+    // let a guest receive the whole pre-stay sequence at once, days late.)
     const r = row({ checkIn: '2026-07-16', checkOut: '2026-07-18' });
-    expect(byKind(r).prearrival?.sendAt).toEqual(NOW);
+    expect(byKind(r).prearrival?.sendAt.toISOString()).toBe('2026-07-13T04:30:00.000Z');
+    expect(byKind(r).prearrival!.sendAt.getTime()).toBeLessThan(NOW.getTime()); // due now
   });
 
-  it('a booking made ON the arrival morning still gets welcomed', () => {
-    // 09:00 IST today has passed (it is 17:30 IST) — send now rather than drop.
+  it('a booking made ON the arrival morning keeps the 09:00 welcome moment', () => {
     const r = row({ checkIn: TODAY, checkOut: '2026-07-16' });
-    expect(byKind(r).welcome?.sendAt).toEqual(NOW);
+    expect(byKind(r).welcome?.sendAt.toISOString()).toBe('2026-07-14T03:30:00.000Z');
   });
 
   it('dedupe keys are kind:reference, on the reference BASE', () => {
