@@ -30,6 +30,16 @@ import { runSender, type SenderDeps } from '../src/lifecycle/sender.js';
 import { createWaClient, type TemplateMode } from '../src/wa/client.js';
 import { TEST_URL } from './helpers/boss.js';
 
+/**
+ * ONE FIXED INSTANT, and every fixture time derived from it.
+ *
+ * blockedBy judges the guest-quiet window (22:00-08:00 IST) by the sender's
+ * clock, so a suite that let that clock read real time passed or failed BY THE
+ * HOUR IT WAS RUN: green at 6 p.m., red every night from ten. The 1235-green
+ * that cleared round 6 was partly an artifact of the hour. Fixture times in SQL
+ * `now()` cannot mix with an injected clock either, so both move here.
+ */
+const NOW = new Date('2026-07-14T06:30:00Z'); // 12:00 IST — a civil hour
 const TODAY = '2026-07-14';
 const EPOCH = new Date('2026-07-14T00:00:00Z');
 const GATES: GateContext = {
@@ -92,7 +102,14 @@ const senderDeps = (wa: ReturnType<typeof makeWa>['wa'], enabled = true): Sender
   wa,
   gates: { sources: GATES.sources, today: GATES.today },
   enabled,
+  now: () => NOW,
 });
+
+/** An instant N minutes before the suite's clock — what `now() - interval` used
+ * to say, but on the clock the sender actually reads. ISO: the driver binds a
+ * timestamptz as a string, not a Date. */
+const minutesBefore = (n: number): string =>
+  new Date(NOW.getTime() - n * 60_000).toISOString();
 
 async function seedBooking(over: Partial<BookingMirror> = {}): Promise<string> {
   const r = {
@@ -107,8 +124,10 @@ async function seedBooking(over: Partial<BookingMirror> = {}): Promise<string> {
     source: 'Internet Booking Engine',
     amount: '13854.75',
     raw: {},
-    syncedAt: new Date(),
-    createdAt: new Date(),
+    // The confirmation's planned moment IS the mirror-insert time, so seeding
+    // createdAt at the suite's clock makes it exactly due, with age zero.
+    syncedAt: NOW,
+    createdAt: NOW,
     ...over,
   };
   const [row] = await db.insert(schema.bookingsMirror).values(r).returning();
@@ -208,7 +227,7 @@ describe('runSender', () => {
     await scheduleForBooking(schedulerDeps(), no);
     await openWindow();
     // Make the win-back due now.
-    await db.execute(sql`UPDATE scheduled_messages SET send_at = now() - interval '1 minute'`);
+    await db.execute(sql`UPDATE scheduled_messages SET send_at = ${minutesBefore(1)}`);
 
     const { wa } = makeWa();
     await runSender(senderDeps(wa));
@@ -226,7 +245,7 @@ describe('runSender', () => {
     // why opt-in is judged now and not back then.
     await db.execute(sql`UPDATE guests SET marketing_opt_in = true`);
     await db.execute(
-      sql`UPDATE scheduled_messages SET send_at = now() - interval '1 minute' WHERE kind = 'winback'`,
+      sql`UPDATE scheduled_messages SET send_at = ${minutesBefore(1)} WHERE kind = 'winback'`,
     );
 
     const { wa } = makeWa();

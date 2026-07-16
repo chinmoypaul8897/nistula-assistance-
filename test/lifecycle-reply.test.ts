@@ -28,6 +28,11 @@ import { buildWaApp, signBody } from './helpers/wa.js';
 const EZEE_PHONE = '+917700900601';
 const WA_FROM = '917700900601';
 
+/** Fixed, and at a civil hour: the sender's guest-quiet window (22:00-08:00
+ * IST) is judged by this clock, so reading real time would fail the suite by
+ * night and pass it by day. */
+const NOW = new Date('2026-07-14T06:30:00Z'); // 12:00 IST
+
 const GATES: GateContext = {
   epoch: new Date('2026-07-14T00:00:00Z'),
   today: '2026-07-14',
@@ -67,8 +72,8 @@ describe('a guest replying to a lifecycle message', () => {
       raw: {},
       // A FRESH booking: the confirmation's planned moment is the mirror-insert
       // time, so a fixed past createdAt would (correctly) make it stale.
-      syncedAt: new Date(),
-      createdAt: new Date(),
+      syncedAt: NOW,
+      createdAt: NOW,
     });
     const deps: SchedulerDeps = { db, log, gates: GATES };
     await scheduleForBooking(deps, '953');
@@ -98,6 +103,7 @@ describe('a guest replying to a lifecycle message', () => {
       wa,
       gates: { sources: GATES.sources, today: GATES.today },
       enabled: true,
+      now: () => NOW,
     };
     expect(await runSender(senderDeps)).toMatchObject({ sent: 1 });
 

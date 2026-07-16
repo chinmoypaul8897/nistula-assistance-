@@ -53,11 +53,87 @@ const WINBACK_WINDOW_DAYS = 365;
  * permanently occupies the batch — 25 of them starve every newer message for
  * ever, while alerting once a minute each. */
 export const DEFER_MINUTES = 15;
-/** Past this age a lifecycle message has stopped being true. "We look forward to
- * welcoming you on Sunday" is worse than silence when Sunday was last week — and
- * a guest who finally opens their window on arrival day must not receive their
- * confirmation, pre-arrival and welcome all at once. */
+/** How long after its planned moment a message whose moment IS the event it
+ * narrates stays true. See TRUTH — this is NOT a general staleness rule. */
 export const STALE_AFTER_HOURS = 36;
+/** A thank-you a few days late is still a thank-you; a week late it is an
+ * admission that we forgot. */
+export const POSTSTAY_GRACE_HOURS = 7 * 24;
+
+interface TruthContext {
+  row: ScheduledRow;
+  now: Date;
+  /** IST calendar day (gates.today), compared against the stay's date strings. */
+  today: string;
+  /** The stay, when there is a booking row to read it from. */
+  checkIn: string | null;
+}
+
+/** Hours since the message's planned moment. HONEST ONLY for a body whose
+ * planned moment is the event it narrates — see TRUTH. */
+const planAgeHours = (c: TruthContext): number =>
+  (c.now.getTime() - c.row.sendAt.getTime()) / 3_600_000;
+
+const staleByPlanAge = (c: TruthContext, hours = STALE_AFTER_HOURS): string | null =>
+  planAgeHours(c) > hours ? 'stale' : null;
+
+/**
+ * HAS THIS MESSAGE STOPPED BEING TRUE? — the send-time guard's real contract.
+ *
+ * 🚨 THAT IS NOT THE SAME QUESTION AS "is the plan old?". The two coincide only
+ * for a body whose planned moment IS the event it narrates, and they diverge BY
+ * CONSTRUCTION for one whose moment is anchored BEFORE it. The pre-arrival is
+ * planned check-in −3d: a booking made inside that window is born with a send_at
+ * days in the past, so a plan-age rule skipped it on the first tick — while "we
+ * look forward to welcoming you on Friday" was still entirely true. That
+ * silently destroyed the pre-arrival for every last-minute booking (the valuable
+ * ones), which plan.md §8 — "no prearrival if booking already <3d out (send now
+ * instead)" — and runbook.md expressly forbid.
+ *
+ * This is the TENTH time this codebase has written a rule from the SHAPE of the
+ * data rather than the CONTRACT it stands for. So each rule below is stated as
+ * the claim its own body makes. IF YOU EDIT A BODY IN templates.ts, EDIT ITS
+ * RULE HERE — the sentence and its expiry are one decision, not two.
+ *
+ * Skipping is TERMINAL (a resolved row is never rescheduled), so a rule may only
+ * fire on a fact that cannot come back: a day that has passed, never a mutable
+ * field. Anything transient defers instead, below.
+ */
+const TRUTH: Record<ScheduledKind, (c: TruthContext) => string | null> = {
+  /** "your booking with Nistula is confirmed" — a receipt for a booking just
+   * made, and its planned moment IS that mirror-insert, so plan-age is the
+   * honest measure here. */
+  confirmation: (c) => staleByPlanAge(c),
+
+  /** "we are looking forward to welcoming you on {checkInDay}" — true right up
+   * until they arrive, however late we are in saying it, and false the moment
+   * they have. Its plan-age says nothing about either. */
+  prearrival: (c) => {
+    if (c.checkIn === null) return staleByPlanAge(c); // no stay to ask about
+    return c.checkIn < c.today ? 'guest_already_arrived' : null;
+  },
+
+  /** "your {villaType} is ready for you today, from 3 pm" — it says TODAY, so it
+   * is true on the arrival day and on no other. */
+  welcome: (c) => {
+    if (c.checkIn === null) return staleByPlanAge(c);
+    return c.checkIn < c.today ? 'arrival_day_passed' : null;
+  },
+
+  /** "thank you for staying with us." Planned check-out +1d, so its moment is
+   * after the stay it thanks them for and plan-age is honest — just gentler. */
+  poststay: (c) => staleByPlanAge(c, POSTSTAY_GRACE_HOURS),
+
+  /** "the season is turning in Goa" — planned 75 days out and deliberately
+   * unhurried. There is no moment at which it stops being true; consent and the
+   * 2-per-365d cap govern it, and a plan-age rule here could only ever destroy a
+   * perfectly valid win-back. */
+  winback: () => null,
+
+  /** CH-15's; not scheduled by this chunk yet. Its claim is about an enquiry we
+   * answered, so its moment is that event. */
+  lead_followup: (c) => staleByPlanAge(c),
+};
 
 export type ScheduledRow = typeof scheduledMessages.$inferSelect;
 export type Outcome = 'sent' | 'skipped' | 'deferred' | 'failed';
@@ -149,24 +225,18 @@ export async function blockedBy(
   row: ScheduledRow,
 ): Promise<{ outcome: Exclude<Outcome, 'sent'>; reason: string } | null> {
   const now = deps.now?.() ?? nowIST();
-  // Too old to be true. A pre-arrival delivered a week late is a lie. send_at is
-  // the message's immutable planned moment, so this age is the real one.
-  const ageHours = (now.getTime() - row.sendAt.getTime()) / 3_600_000;
-  if (ageHours > STALE_AFTER_HOURS) {
-    return { outcome: 'skipped', reason: 'stale' };
-  }
+  let checkIn: string | null = null;
 
-  // A past-due row can become due at any hour. Wait for a civil one.
-  if (row.kind !== 'confirmation' && isNightIST(now, GUEST_QUIET_START, GUEST_QUIET_END)) {
-    return { outcome: 'deferred', reason: 'quiet_hours' };
-  }
-
+  // The MIRROR first: it is the truth, the schedule only an intention (§3.4) —
+  // and every question below is asked OF the booking, so it has to be read
+  // before any of them can be answered honestly.
   if (row.bookingId !== null) {
     const [booking] = await deps.db
       .select()
       .from(bookingsMirror)
       .where(eq(bookingsMirror.id, row.bookingId));
     if (booking === undefined) return { outcome: 'skipped', reason: 'booking_missing' };
+    checkIn = booking.checkIn;
 
     const state = bookingState(booking);
     if (state === 'terminal') {
@@ -198,6 +268,18 @@ export async function blockedBy(
     ) {
       return { outcome: 'skipped', reason: 'stay_over' };
     }
+  }
+
+  // Has this particular sentence stopped being true? Asked per kind, of the
+  // claim the body actually makes — never of the plan's age. See TRUTH.
+  const untrue = TRUTH[row.kind]({ row, now, today: deps.gates.today, checkIn });
+  if (untrue !== null) return { outcome: 'skipped', reason: untrue };
+
+  // A past-due row can become due at any hour. Wait for a civil one. LAST of the
+  // skip/defer checks, so a row that is already untrue is resolved now rather
+  // than deferred to a morning at which it will only be resolved anyway.
+  if (row.kind !== 'confirmation' && isNightIST(now, GUEST_QUIET_START, GUEST_QUIET_END)) {
+    return { outcome: 'deferred', reason: 'quiet_hours' };
   }
 
   const marketing = await marketingBlock(deps.db, row, row.kind);

@@ -31,6 +31,13 @@
  *
  * Voice (kb/source/voice-guide.md v1.1): British English, 1–3 short sentences,
  * no exclamation marks, no discount language, never "dear guest".
+ *
+ * 🚨 EDITING A BODY? Every sentence below makes a claim that STOPS BEING TRUE at
+ * some moment — "welcoming you on Friday" once they have arrived, "ready for you
+ * today" tomorrow — and the sender refuses to send an untrue one. That expiry is
+ * part of the same decision as the words, so it is stated per kind in TRUTH
+ * (lifecycle/sendGuards.ts). Change a claim here, change its rule there. Judging
+ * them all by one clock instead cost the last-minute booking its pre-arrival.
  */
 import { z } from 'zod';
 import type { scheduledMessageKindEnum } from '../db/schema.js';

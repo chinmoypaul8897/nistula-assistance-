@@ -23,6 +23,21 @@ import { renderTemplate } from '../src/lifecycle/templates.js';
 import { createWaClient, type TemplateMode } from '../src/wa/client.js';
 import { TEST_URL } from './helpers/boss.js';
 
+/**
+ * ONE FIXED INSTANT, and every fixture time derived from it.
+ *
+ * blockedBy judges the guest-quiet window (22:00-08:00 IST) by the sender's
+ * clock, so a suite that let that clock read real time passed or failed BY THE
+ * HOUR IT WAS RUN: green at 6 p.m., red every night from ten. The 1235-green
+ * that cleared round 6 was partly an artifact of the hour. Fixture times in SQL
+ * `now()` cannot mix with an injected clock either, so both move here.
+ */
+const NOW = new Date('2026-07-14T06:30:00Z'); // 12:00 IST — a civil hour
+/** Fixture instants relative to the suite's clock. ISO, because the driver
+ * binds a timestamptz as a string, not a Date. */
+const hoursBefore = (n: number): string =>
+  new Date(NOW.getTime() - n * 3_600_000).toISOString();
+const hoursAfter = (n: number): string => hoursBefore(-n);
 const TODAY = '2026-07-14';
 const GATES: GateContext = {
   epoch: new Date('2026-07-14T00:00:00Z'),
@@ -76,6 +91,7 @@ const senderDeps = (wa: ReturnType<typeof makeWa>['wa']): SenderDeps => ({
   wa,
   gates: { sources: GATES.sources, today: GATES.today },
   enabled: true,
+  now: () => NOW,
 });
 
 async function seed(over: Partial<BookingMirror> = {}): Promise<string> {
@@ -91,8 +107,8 @@ async function seed(over: Partial<BookingMirror> = {}): Promise<string> {
       status: 'confirmed',
       source: 'Internet Booking Engine',
       raw: {},
-      syncedAt: new Date(),
-      createdAt: new Date(),
+      syncedAt: NOW,
+      createdAt: NOW,
       ...over,
     })
     .returning();
@@ -273,7 +289,12 @@ describe('🚨 a transient fault must never destroy a message', () => {
     const no = await seed();
     await scheduleForBooking(deps(), no);
     await openWindow();
-    await db.execute(sql`UPDATE scheduled_messages SET send_at = now() - interval '40 hours'`);
+    // ONLY the confirmation: its planned moment IS the booking event, so age is
+    // what makes it untrue. A pre-arrival's is anchored 3 days BEFORE the
+    // arrival it narrates, so age says nothing about it — see TRUTH.
+    await db.execute(
+      sql`UPDATE scheduled_messages SET send_at = ${hoursBefore(40)} WHERE kind = 'confirmation'`,
+    );
 
     const { wa, sent } = makeWa();
     const result = await runSender(senderDeps(wa));
@@ -291,7 +312,7 @@ describe('🚨 a human holding the thread pauses the lifecycle too', () => {
     await scheduleForBooking(deps(), no);
     await openWindow();
     await db.execute(
-      sql`UPDATE conversations SET human_active_until = now() + interval '2 hours', status = 'human_active'`,
+      sql`UPDATE conversations SET human_active_until = ${hoursAfter(2)}, status = 'human_active'`,
     );
 
     const { wa, sent } = makeWa();
@@ -326,7 +347,7 @@ describe('the win-back cap (§2.3: fewer than 2 in the trailing 365 days)', () =
       });
     }
     await db.execute(
-      sql`UPDATE scheduled_messages SET send_at = now() - interval '1 minute' WHERE kind = 'winback' AND dedupe_key = 'winback:953'`,
+      sql`UPDATE scheduled_messages SET send_at = ${hoursBefore(1)} WHERE kind = 'winback' AND dedupe_key = 'winback:953'`,
     );
 
     const { wa } = makeWa();

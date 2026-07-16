@@ -22,6 +22,20 @@ import { runSender, type SenderDeps } from '../src/lifecycle/sender.js';
 import { createWaClient, type TemplateMode } from '../src/wa/client.js';
 import { TEST_URL } from './helpers/boss.js';
 
+/**
+ * ONE FIXED INSTANT, and every fixture time derived from it.
+ *
+ * blockedBy judges the guest-quiet window (22:00-08:00 IST) by the sender's
+ * clock, so a suite that let that clock read real time passed or failed BY THE
+ * HOUR IT WAS RUN: green at 6 p.m., red every night from ten. The 1235-green
+ * that cleared round 6 was partly an artifact of the hour. Fixture times in SQL
+ * `now()` cannot mix with an injected clock either, so both move here.
+ */
+const NOW = new Date('2026-07-16T06:30:00Z'); // 12:00 IST — a civil hour
+/** Fixture instants relative to the suite's clock. ISO, because the driver
+ * binds a timestamptz as a string, not a Date. */
+const hoursBefore = (n: number): string =>
+  new Date(NOW.getTime() - n * 3_600_000).toISOString();
 const TODAY = '2026-07-14';
 const GATES: GateContext = {
   epoch: new Date('2026-07-14T00:00:00Z'),
@@ -63,7 +77,7 @@ function makeWa(
     httpImpl,
   });
 }
-const senderDeps = (wa: ReturnType<typeof makeWa>, now?: () => Date): SenderDeps => ({
+const senderDeps = (wa: ReturnType<typeof makeWa>, now: () => Date = () => NOW): SenderDeps => ({
   db,
   log,
   wa,
@@ -85,8 +99,8 @@ async function seed(over: Partial<BookingMirror> = {}): Promise<string> {
       status: 'confirmed',
       source: 'Internet Booking Engine',
       raw: {},
-      syncedAt: new Date(),
-      createdAt: new Date(),
+      syncedAt: NOW,
+      createdAt: NOW,
       ...over,
     })
     .returning();
@@ -185,7 +199,7 @@ describe('🚨 a transient Graph failure DEFERS and retries — it does not burn
 
     await runSender(senderDeps(wa)); // 429 -> deferred
     // clear the backoff so the row is due again (simulates 15 min later)
-    await db.execute(sql`UPDATE scheduled_messages SET deferred_until = now() - interval '1 minute'`);
+    await db.execute(sql`UPDATE scheduled_messages SET deferred_until = ${hoursBefore(1)}`);
     const second = await runSender(senderDeps(wa)); // now succeeds
 
     expect(second).toMatchObject({ sent: 1 });
@@ -289,7 +303,7 @@ describe('the 36h stale guard survives repeated deferral', () => {
     // (deferred_until set) — but now due again. Because defer never touched
     // send_at, the age is measured true and it is stale.
     await db.execute(
-      sql`UPDATE scheduled_messages SET send_at = now() - interval '40 hours', deferred_until = now() - interval '1 minute' WHERE kind = 'confirmation'`,
+      sql`UPDATE scheduled_messages SET send_at = ${hoursBefore(40)}, deferred_until = ${hoursBefore(1)} WHERE kind = 'confirmation'`,
     );
 
     const result = await runSender(senderDeps(okWa));
@@ -311,7 +325,7 @@ describe('a pre-stay message is skipped once the stay is entirely over', () => {
     await scheduleForBooking(deps(), no);
     await openWindow();
     await db.execute(sql`UPDATE bookings_mirror SET check_in = '2026-07-01', check_out = '2026-07-03'`);
-    await db.execute(sql`UPDATE scheduled_messages SET send_at = now() - interval '1 minute'`);
+    await db.execute(sql`UPDATE scheduled_messages SET send_at = ${hoursBefore(1)}`);
 
     const okWa = makeWa('simulate', async () =>
       new Response(JSON.stringify({ messages: [{ id: 'w' }] }), { status: 200, headers: { 'content-type': 'application/json' } }),

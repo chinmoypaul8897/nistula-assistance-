@@ -90,7 +90,12 @@ export async function runSender(deps: SenderDeps): Promise<SenderResult> {
   // Due = pending, its planned time has come, and it is not currently backed off.
   // deferred_until is the backoff clock; send_at is the immutable planned time
   // (so an excluded deferred row keeps its true age for the stale guard).
-  const now = new Date();
+  //
+  // ONE clock for the whole tick, injectable. Read the wall clock separately in
+  // each guard and they disagree — and a suite that reads it at all passes or
+  // fails by the hour it is run, which is how a quiet-hours guard turned main
+  // red every night while looking green at 6 p.m.
+  const now = deps.now?.() ?? nowIST();
   const due = await deps.db
     .select()
     .from(scheduledMessages)
@@ -107,7 +112,7 @@ export async function runSender(deps: SenderDeps): Promise<SenderResult> {
   for (const row of due) {
     result.attempted += 1;
     try {
-      result[await sendOne(deps, row)] += 1;
+      result[await sendOne(deps, row, now)] += 1;
     } catch (error) {
       // A DB wobble is NOT a decision that this guest must not be messaged.
       // Leave it pending; the next tick is a free retry.
@@ -124,7 +129,7 @@ export async function runSender(deps: SenderDeps): Promise<SenderResult> {
   return result;
 }
 
-async function sendOne(deps: SenderDeps, row: ScheduledRow): Promise<Outcome> {
+async function sendOne(deps: SenderDeps, row: ScheduledRow, now: Date): Promise<Outcome> {
   const blocked = await blockedBy(deps, row);
   if (blocked !== null) {
     if (blocked.outcome === 'deferred') {
@@ -162,7 +167,7 @@ async function sendOne(deps: SenderDeps, row: ScheduledRow): Promise<Outcome> {
   // rule is "human replies pause the AI" — and CH-12 is the one chunk that
   // speaks first, so it is the one that most needs to honour it. Wait.
   const humanActive =
-    conversation.humanActiveUntil !== null && conversation.humanActiveUntil.getTime() > Date.now();
+    conversation.humanActiveUntil !== null && conversation.humanActiveUntil.getTime() > now.getTime();
   if (humanActive || conversation.status === 'human_active') {
     await defer(deps.db, row, 'human_active');
     deps.log.info({ scheduledId: row.id }, '[lifecycle] deferred — a human holds the thread');
