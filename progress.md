@@ -1140,6 +1140,28 @@ blast radius of getting that gate wrong is far larger than the demo suggested.
 Nothing is due-but-stuck (`pending AND send_at <= now()` → none), and the `booking.*` queue holds
 **no `created` backlog** — the purge held and the poller is consuming normally.
 
+**🚨 THE MIRROR HOLDS ONE ROW I CORRUPTED BY HAND — booking 969. Do not trust it.** During the live
+demo I proved the reschedule path by UPDATE-ing 969's mirror row directly: `check_in` → 30 Aug,
+`check_out` → 1 Sep, `status` → `modified`. **eZee never said any of that.** Its own latest payload
+for 969 says `Status: New`, `CurrentStatus: Confirmed Reservation`, nights of **23–24 Aug**. The
+poller writes `check_in` and `raw` together from one object, so they CANNOT diverge on their own —
+the divergence IS the fingerprint of the edit. The row will never self-heal, because the poller only
+sees un-ACKed queue entries and 969's were ACKed long ago. **Its four pending lifecycle rows are
+aimed at dates that never existed.** Cancelling 969 in eZee (look for it on **23–25 Aug**, not 30
+Aug) emits a real cancel, and the revocation kills them — which is the clean exit.
+
+**What this cost, beyond the row:** I then read my own edit back as evidence and briefly "proved"
+that eZee's feed delivers `Modify` (see the OQ-22 withdrawal). **Never hand-edit production data you
+intend to draw conclusions from.** If a demo needs a state the world will not give you, drive it
+through the real event path or do not claim it.
+
+**✅ And a genuine production observation, found while untangling that:** booking 970 shows
+`status='cancelled'` while its `raw` says `Status: New` / `Confirmed Reservation` — which looks like
+corruption and is not. It is **the resurrection guard working live** (`upsertMirrorRow`): a stale
+"New" redelivery landed AFTER the cancel, `resurrectionBlocked` held the status at `cancelled`, and
+`raw` was replaced as it is on every pass. The close-out audit's allowlist fix is doing its job on
+real data. **So `raw` is eZee's latest word, but `status` may deliberately outrank it — read both.**
+
 **⚠️ A note on the verification itself, because it is the failure class again.** My first pass
 flagged "5 STATUS leaks — scheduled rows for cancelled bookings" and it was **the query that was
 wrong, not the code**: four were rows *correctly revoked BECAUSE* the booking was cancelled, and one
