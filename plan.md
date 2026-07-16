@@ -327,7 +327,7 @@ Sends (`POST {GRAPH_BASE_URL}/{WA_PHONE_NUMBER_ID}/messages`, bearer `WA_ACCESS_
 | Villa C3 | 5220300000000000013 | 5220300000000000003 | Nistula Villa |
 | Siolim 4BHK | 5220300000000000015 | 5220300000000000009 | Nistula 4BHK Siolim |
 
-Rules: bookings are held at **type** level (eZee assigns the unit) → pre-arrival the AI says "your 3BHK villa in Assagao", never promises a specific unit unless `physical_room_label` is already assigned in the mirror. Occupancy: Apartment base 4/max 5+2c · Villa base 6/max 7+4c · Siolim max 8+6c (refresh from RoomTypeList in CH-06).
+Rules: bookings are held at **type** level (eZee assigns the unit) → pre-arrival the AI says "your 3BHK villa in Assagao", **never promises a specific unit at all. 🚨 SUPERSEDED BY OQ-19 (CH-11): the old "unless `physical_room_label` is already assigned" clause is INVERTED and must not be followed — that label is eZee's GUESS (it holds 8 houses in 3 room types and auto-assigns lowest-first), not the house the guest booked. Shipped as `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`.** Occupancy: Apartment base 4/max 5+2c · Villa base 6/max 7+4c · Siolim max 8+6c (refresh from RoomTypeList in CH-06).
 
 ### 5.5 Anthropic API
 
@@ -688,7 +688,7 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 1. Linking completion: on ANY inbound message, after guest upsert → match mirror rows by phone → upsert guest_stays; on mirror upsert (CH-10 hook) → match existing guests. Reference-claim flow (hardened per §6.4): guest states a reservation no → code requires them to also STATE the full booking name AND check-in date (or booking email) → exact-normalised match against the mirror in code (the WhatsApp profile name is NEVER used); match → link `matched_by:'reference_in_chat'`; partial mismatch → escalate for human approval, reveal nothing; 3 failed attempts/day per phone → hard escalate + polite refusal. Also wire the real stay-context flag into CH-07's COMPLAINT_SUSPECT.
 2. `get_booking` tool per §6.4 with the privacy rule hard-coded (only this guest's linked rows; reference path as above).
 3. Stays section of block [5]: active stay (villa label — physical if assigned, else type phrasing, dates, plan), upcoming (countdown), recent past (for callbacks). Stage flag: `lead|prearrival|inhouse|postguest` derived and put in [6] — the model's tone anchor.
-4. Unit-promise rule into block [4]: named unit only when `physical_room_label` exists (mirrors §5.4).
+4. Unit-promise rule into block [4]: **🚨 SUPERSEDED BY OQ-19 — the AI names NO house, ever. Shipped as `TRUST_EZEE_ROOM_ASSIGNMENT = false`, not as written here.**
 
 **Tests.** Phone-match linking both directions; masked-phone OTA guest links on first message; reference verification happy/mismatch; stage derivation matrix (today vs dates).
 
@@ -720,6 +720,15 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 ### CH-13 · Staff tasks (roster, notifier, DONE loop, SLA nudger)
 
 **Context.** "Villa B3 · Rahul · 2 towels" — the AI's hands (§6.4 create_staff_task). Staff get task cards on their own WhatsApp numbers (normal user numbers — we message them from the business line; their replies come back as inbound webhooks on the same line).
+
+> **🚨 READ OQ-19 BEFORE WRITING STEP 2 — and note this Context line is itself stale: the card may NOT say "Villa B3".**
+> `bookings_mirror.physical_room_label` is **eZee's auto-assignment, not the house the guest booked**
+> (8 houses inside only 3 room types; eZee picks lowest-number-first — reservations 953 AND 957 both
+> landed in Apartment 06). `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`. **The `<villa>` slot in step 2
+> and `assignFor(kind, villa)` in step 1 may NOT be filled from that label — it would send housekeeping
+> to the wrong door.** A type-only card matches no role+villa and falls back to the frontdesk lead,
+> which is the correct fail-closed default. **CH-13's villa ROUTING is blocked on the OQ-19 PMS
+> re-model, not on code.** Full analysis: CLAUDE.md 🚨 OQ-19 · `docs/open-questions.md` OQ-19.
 
 **Goal.** Tasks flow: created → notified → staff replies DONE → closed → guest informed; overdue tasks nudge staff and update the AI's honesty.
 

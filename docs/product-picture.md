@@ -45,7 +45,10 @@ Precondition: Rahul linked to an ACTIVE stay in Villa B3.
 
 - G 15:20 — "hi, can we get 2 extra towels"
 - A 15:20 — "Of course — two fresh towels are on their way to Villa B3. Anything else you need this afternoon?"
-- STAFF 15:20 — task card: `NISTULA TASK #<id> · Villa B3 · Rahul · 2 extra towels · Reply DONE <id>`
+- STAFF 15:20 — task card: `NISTULA TASK #<id> · Nistula Villa (Assagao) · Rahul · 2 extra towels · Reply DONE <id>`
+  **🚨 OQ-19 amendment (2026-07-16): the card names the villa TYPE, never a house, and routes to the
+  frontdesk lead until the PMS re-model lands. CH-19 asserts THIS, not "Villa B3" — eZee only GUESSED
+  that label, so a card built on it sends housekeeping to the wrong door.**
 - G 15:52 — "where are those?"
 - A 15:52 — HONEST wording: references the open task and the nudge — "I've just nudged housekeeping — your towels are marked on the way. Sorry for the wait, Rahul." (Never "I checked with housekeeping" — it checked the task record.)
 - STAFF 15:52 — SLA nudge (task open 32 min > 30-min SLA): re-ping + cc lead.

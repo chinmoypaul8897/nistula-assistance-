@@ -400,8 +400,18 @@ get lifecycle at all, so nothing historical can fire; plus the status allowlist 
 a source string, a name convention) and add a fifth gate.
 
 ### OQ-22 — What do you do in eZee when a booking changes, and how fast?
-**Status:** 🔴 (team-question Q38.) **We have never once seen a `Modify` come down the feed** — the
-mirror holds **zero** `modified` rows.
+**Status:** 🟡 **HALF-ANSWERED BY OBSERVATION, 2026-07-16 — eZee's feed DOES deliver `Modify`.**
+A booking re-dated in the eZee UI during CH-12's live demo mirrored as `modified` and correctly
+re-planned its `send_at` (booking 969; see the CH-12 post-deploy verification in progress.md). A
+`modified` row is reachable ONLY through `verb === 'modify'` in `ezee/normalize.ts`, so **the row IS
+the proof.** The earlier reading — *"we have never once seen a `Modify`; the mirror holds zero
+`modified` rows"* — was a 2026-07-14 measurement and is **RETRACTED**: it was true of the data that
+day, and it was a statement about a queue we had not yet watched long enough. *(The CH-10 lesson,
+again: a poll against a backlogged eZee queue proves nothing.)*
+
+**What remains 🔴 is the PROCESS half** (team-question Q38): when a guest changes a booking **by
+phone**, does the front desk always enter it in eZee, and how fast? The API leg works; the human leg
+is unmeasured.
 
 **Why it matters:** if a guest moves their stay from the 20th to the 27th by phone and that never
 reaches eZee's connectivity queue, we will send the welcome on the 20th and state the wrong dates.
@@ -413,8 +423,11 @@ rather than delivered late and wrong. An un-mirrored change we cannot see.
 **What changes once they answer:** if amendments are made in a way that never reaches connectivity,
 that is a process fix at the front desk, not a code fix — and it must be fixed before go-live.
 
-**🚨 If the answer is "yes, amendments DO reach the feed", one known defect becomes live** (round 9
-found it, and deliberately deferred it because it sits entirely behind this question). **A date
+**🚨 AMENDMENTS DO REACH THE FEED (observed 2026-07-16), SO THIS DEFECT IS REACHABLE TODAY — it is
+not hypothetical.** Round 9 deferred it on the explicit belief that no `modified` row had ever been
+seen. **That belief is now false, so re-weigh the priority before CH-17.** (It still fails toward
+silence and still costs only the thank-you — the deferral is defensible, but it must be re-made on
+the true premise, not the old one.) **A date
 mistyped and then corrected can permanently cost the guest their thank-you.** `poststay`'s planned
 instant is `check_out +1d`, and `check_out` is a `MIRROR_DIFF_FIELD` — so a backwards typo emits
 `booking.modified`, the re-plan drags the instant into the past, its age exceeds
