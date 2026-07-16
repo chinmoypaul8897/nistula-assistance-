@@ -103,6 +103,65 @@ export function passesStatus(row: BookingMirror): boolean {
 }
 
 /**
+ * 🚨 A COMPLETELY DIFFERENT QUESTION FROM passesStatus ABOVE — do not conflate
+ * them. This distinction has now cost this codebase EIGHT bugs.
+ *
+ *   passesStatus  = "would we CREATE a schedule for this booking today?"
+ *                   (a scheduling gate: only a confirmed/modified booking)
+ *   bookingState  = "is this STILL a booking we may message at all?"
+ *                   (the lifecycle CONTRACT — it governs keeping and sending)
+ *
+ * A booking that has been LIVED — `checked_in`, then `checked_out` — is still a
+ * booking. Its welcome, thank-you and win-back are the whole point. It merely
+ * would not be scheduled *fresh* today. A booking that was CANCELLED is not a
+ * booking any more, and nothing further may go to that guest.
+ *
+ * The eighth instance of the recurring class was giving `passesStatus` — a
+ * scheduling predicate — the authority to DESTROY an existing schedule: eZee
+ * marks a real arrival `checked_in`, which is a diff field, which emits
+ * booking.modified, which re-ran the gates, which failed on `checked_in`, which
+ * revoked every pending row. Every stay that actually happened lost its
+ * thank-you and win-back, permanently. Guard keeping/sending by THIS, never by
+ * the scheduling enum.
+ */
+export function bookingState(row: BookingMirror): 'ok' | 'terminal' | 'transient' {
+  switch (row.status) {
+    case 'confirmed':
+    case 'modified':
+    case 'checked_in':
+    case 'checked_out':
+      return 'ok';
+    case 'cancelled':
+    case 'no_show':
+      return 'terminal';
+    // An unconfirmed hold, or a status eZee has not shown us before. It may well
+    // resolve on the next poll, so it must NOT burn or revoke the message.
+    case 'unknown':
+    default:
+      return 'transient';
+  }
+}
+
+/**
+ * Why an EXISTING schedule must be WITHDRAWN — the contract, not the gates.
+ *
+ * Revoke only when the booking has genuinely stopped being messageable. NOT
+ * because it advanced (`checked_in`/`checked_out`), NOT because its check-in has
+ * passed, NOT because it predates the epoch, and NOT because a status is
+ * momentarily `unknown` — those are the ordinary life of a real stay, and the
+ * remaining lifecycle must survive them.
+ */
+export function revocationReason(
+  row: BookingMirror,
+  ctx: Pick<GateContext, 'sources'>,
+): string | null {
+  if (bookingState(row) === 'terminal') return `booking_${row.status}`;
+  if (!passesSource(row, ctx.sources)) return 'source_not_allowed';
+  if (!hasPhone(row)) return 'no_phone';
+  return null;
+}
+
+/**
  * GATE 4 — SOURCE. We may only message guests from channels the business has
  * sanctioned.
  *

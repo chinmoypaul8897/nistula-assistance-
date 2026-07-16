@@ -152,7 +152,10 @@ describe('🚨 a gate that starts failing REVOKES what it already allowed', () =
     const scheduled = await rows();
     // Skipping the NEW schedule was never enough: the OLD one had to die.
     expect(scheduled.every((r) => r.status === 'cancelled')).toBe(true);
-    expect(scheduled[0]?.skipReason).toBe('gate:source_not_allowed');
+    // The reason is the CONTRACT's ("this booking stopped being messageable"),
+    // not an echo of the gate that happened to fail — revocation is no longer
+    // driven by the scheduling gates (see the 8th-instance fix).
+    expect(scheduled[0]?.skipReason).toBe('source_not_allowed');
   });
 
   it('and the sender refuses one anyway, if it somehow survives', async () => {

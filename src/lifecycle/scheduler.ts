@@ -19,7 +19,7 @@ import { project, referenceBase } from '../brain/stayView.js';
 import { nowIST } from '../lib/time.js';
 import { firstNameOf, planSends } from './plan.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
-import { checkGates, type GateContext, type SkipReason } from './gates.js';
+import { checkGates, revocationReason, type GateContext, type SkipReason } from './gates.js';
 import { LIFECYCLE_TEMPLATES, type ScheduledKind } from './templates.js';
 
 export { planSends, type PlannedSend } from './plan.js';
@@ -131,14 +131,22 @@ export async function scheduleForBooking(
 
   const gate = checkGates(row, deps.gates);
   if (!gate.ok) {
-    // A GATE THAT STARTS FAILING MUST REVOKE WHAT IT ALREADY ALLOWED.
-    // The gates are re-evaluated on every booking.modified, and eZee really does
-    // change these fields (`source` and `guest_phone` are both in
-    // MIRROR_DIFF_FIELDS). A booking mirrored as 'Internet Booking Engine' and
-    // later re-sourced to 'Airbnb' would otherwise keep the five rows it was
-    // granted while it still qualified — and send them. Skipping the new schedule
-    // was never enough; the old schedule has to die.
-    const revoked = await revokePending(deps, row.ezeeReservationNo, `gate:${gate.reason}`);
+    // 🚨 REVOKE BY THE CONTRACT, NEVER BY THE GATE THAT JUST FAILED.
+    //
+    // A gate failure means "we would not SCHEDULE this fresh today". That is NOT
+    // the same as "withdraw what this booking already has". Conflating them was
+    // the eighth instance of the recurring class, and it was the worst: a real
+    // arrival sets eZee's status to `checked_in`, which is a diff field, which
+    // emits booking.modified, which re-ran the gates, which failed on
+    // `status_not_live` — and revoked the guest's welcome, thank-you and
+    // win-back. Permanently, for every stay that actually happened.
+    //
+    // A booking that has been lived, or whose check-in has passed, is still a
+    // real booking. Only one that stopped being messageable at all — cancelled,
+    // no-show, re-sourced to an unsanctioned channel, or stripped of its phone —
+    // loses what it was granted.
+    const reason = revocationReason(row, deps.gates);
+    const revoked = reason === null ? 0 : await revokePending(deps, row.ezeeReservationNo, reason);
     logSkip(deps, row, gate.reason, revoked);
     return { scheduled: 0, skipped: gate.reason };
   }
@@ -177,12 +185,14 @@ export async function scheduleForBooking(
 
   const { sends, issue } = planSends(row, stay, nowIST(), deps.quiet);
   if (issue !== null) {
-    // Symmetric with the gate-fail and undescribable branches: a booking that
-    // WAS schedulable and now hits a planSends issue (eZee renamed the room type
-    // to something unmappable, so villaType/locality no longer resolves) must
-    // have its pending rows WITHDRAWN, not merely skipped.
-    const revoked = await revokePending(deps, row.ezeeReservationNo, issue);
-    logSkip(deps, row, issue, revoked);
+    // Deliberately does NOT revoke — and that is the contract, not an oversight.
+    // A planSends issue means "I cannot compute a FRESH plan" (eZee renamed the
+    // room type to something unmappable). The rows already scheduled carry
+    // params that are still perfectly valid, so destroying them because a future
+    // plan cannot be computed would lose a good message for a PMS rename. The
+    // "make every branch look alike" symmetry argument is exactly the enum-shaped
+    // thinking that caused the eighth bug; revoke by the contract only.
+    logSkip(deps, row, issue);
     return { scheduled: 0, skipped: issue };
   }
 

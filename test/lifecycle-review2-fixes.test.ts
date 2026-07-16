@@ -13,7 +13,11 @@ import * as schema from '../src/db/schema.js';
 import { scheduledMessages } from '../src/db/schema.js';
 import { touchPhoneWindow } from '../src/db/windows.js';
 import type { GateContext } from '../src/lifecycle/gates.js';
-import { scheduleForBooking, type SchedulerDeps } from '../src/lifecycle/scheduler.js';
+import {
+  handleBookingEvent,
+  scheduleForBooking,
+  type SchedulerDeps,
+} from '../src/lifecycle/scheduler.js';
 import { runSender, type SenderDeps } from '../src/lifecycle/sender.js';
 import { createWaClient, type TemplateMode } from '../src/wa/client.js';
 import { TEST_URL } from './helpers/boss.js';
@@ -148,8 +152,8 @@ describe('🚨 a transient Graph failure DEFERS and retries — it does not burn
     );
   });
 
-  it.each([130429, 131048, 131056, 80007])(
-    'a TRANSIENT rate-limit as HTTP 400 + code %s DEFERS (not terminal) — the second-review blocker',
+  it.each([130429, 131048, 131056, 80007, 4, 613, 99999])(
+    'a non-permanent HTTP 400 + code %s DEFERS — retry is the DEFAULT now (incl. code 4 and codes we have never met)',
     async (code) => {
       // Meta returns messaging-tier / throughput caps as HTTP 400 with the reason
       // in the error CODE. Classifying by httpStatus alone burned these.
@@ -267,6 +271,81 @@ describe('a pre-stay message is skipped once the stay is entirely over', () => {
     expect(welcome?.skipReason).toBe('stay_over');
     const [poststay] = await db.select().from(scheduledMessages).where(sql`kind = 'poststay'`);
     expect(poststay?.status).toBe('sent'); // post-stay is meant to fire after checkout
+  });
+});
+
+/* ── 🚨 THE 8th INSTANCE: a real arrival must not destroy the lifecycle ─────── */
+
+describe('🚨 a stay that ACTUALLY HAPPENS keeps its lifecycle — through the REAL event path', () => {
+  // The bug this pins was invisible because the test that claimed to cover it
+  // (lifecycle-review-fixes "a stay that actually HAPPENS...") mutated the mirror
+  // and called runSender DIRECTLY — proving the door that was fixed and skipping
+  // the door in front of it. These drive handleBookingEvent, as production does.
+  it.each(['checked_in', 'checked_out'] as const)(
+    'eZee marking the booking %s emits booking.modified — the rows must SURVIVE',
+    async (status) => {
+      const no = await seed();
+      await handleBookingEvent(deps(), 'created', no);
+      expect(await db.select().from(scheduledMessages)).toHaveLength(5);
+
+      // The guest arrives. eZee sets Arrived/Checked Out; `status` is a diff
+      // field, so the poller emits booking.modified — guaranteed, not hypothetical.
+      await db.execute(sql`UPDATE bookings_mirror SET status = ${status}`);
+      await handleBookingEvent(deps(), 'modified', no);
+
+      const rows = await db.select().from(scheduledMessages);
+      // NOT cancelled. A booking that has been LIVED is still a booking.
+      expect(rows.filter((r) => r.status === 'cancelled')).toHaveLength(0);
+      expect(rows.filter((r) => r.status === 'pending')).toHaveLength(5);
+    },
+  );
+
+  it('a modify AFTER check-in has passed (a folio tweak) must not destroy poststay/winback', async () => {
+    const no = await seed();
+    await handleBookingEvent(deps(), 'created', no);
+    // The stay is now in the past — but `amount` is a diff field, so any folio
+    // adjustment emits booking.modified and re-runs the gates (stay_in_past).
+    await db.execute(sql`UPDATE bookings_mirror SET check_in = '2026-07-01', check_out = '2026-07-03'`);
+    await handleBookingEvent(deps(), 'modified', no);
+
+    const rows = await db.select().from(scheduledMessages);
+    expect(rows.filter((r) => r.status === 'cancelled')).toHaveLength(0);
+    // The thank-you and win-back are the whole point of a completed stay.
+    expect(rows.find((r) => r.kind === 'poststay')?.status).toBe('pending');
+    expect(rows.find((r) => r.kind === 'winback')?.status).toBe('pending');
+  });
+
+  it('an "unknown" (flapping hold) must not revoke either', async () => {
+    const no = await seed();
+    await handleBookingEvent(deps(), 'created', no);
+    await db.execute(sql`UPDATE bookings_mirror SET status = 'unknown'`);
+    await handleBookingEvent(deps(), 'modified', no);
+    const rows = await db.select().from(scheduledMessages);
+    expect(rows.filter((r) => r.status === 'cancelled')).toHaveLength(0);
+  });
+
+  it('...but a booking that genuinely stops being messageable STILL revokes', async () => {
+    for (const [field, value] of [
+      ['status', 'cancelled'],
+      ['status', 'no_show'],
+      ['source', 'Airbnb'],
+      ['guest_phone', null],
+    ] as const) {
+      await db.execute(
+        sql`TRUNCATE scheduled_messages, guest_stays, bookings_mirror, messages, conversations, guests CASCADE`,
+      );
+      const no = await seed();
+      await handleBookingEvent(deps(), 'created', no);
+      await db.execute(
+        value === null
+          ? sql`UPDATE bookings_mirror SET guest_phone = NULL`
+          : sql`UPDATE bookings_mirror SET ${sql.raw(field)} = ${value}`,
+      );
+      await handleBookingEvent(deps(), 'modified', no);
+
+      const rows = await db.select().from(scheduledMessages);
+      expect(rows.every((r) => r.status === 'cancelled')).toBe(true);
+    }
   });
 });
 

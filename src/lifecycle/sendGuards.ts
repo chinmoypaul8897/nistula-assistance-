@@ -18,10 +18,9 @@
  * rescheduled — the scheduler's upsert only touches `pending` rows.
  */
 import { and, eq, gte, sql } from 'drizzle-orm';
-import type { BookingMirror } from '../db/bookings.js';
 import type { Db } from '../db/client.js';
 import { bookingsMirror, guests, scheduledMessages } from '../db/schema.js';
-import { hasPhone, passesSource, type GateContext } from './gates.js';
+import { bookingState, hasPhone, passesSource, type GateContext } from './gates.js';
 import { LIFECYCLE_TEMPLATES, type ScheduledKind } from './templates.js';
 
 /** Kinds that belong BEFORE/DURING the stay — meaningless once it is over. The
@@ -91,39 +90,6 @@ export async function retryAfterFailedSend(db: Db, row: ScheduledRow, reason: st
     .update(scheduledMessages)
     .set({ status: 'pending', sentMessageId: null, deferredUntil: backoff(), skipReason: reason.slice(0, 100) })
     .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'sent')));
-}
-
-/**
- * The send-time contract: **is this still a real booking?** — NOT "would we
- * schedule it today?".
- *
- * Getting this wrong is the codebase's own recurring failure class, and it bit
- * here: the first version re-used the SCHEDULING allowlist (confirmed|modified),
- * so the moment a real stay advanced to `checked_in` or `checked_out` — which is
- * exactly what happens to every stay that actually occurs — the welcome, the
- * thank-you and the win-back were all killed, permanently. The file even
- * explained at length why re-applying the DATE gate would do that, and then did
- * the same thing with the status.
- *
- * A booking that has been *lived* is still a booking. A booking that was
- * cancelled is not.
- */
-function bookingState(booking: BookingMirror): 'ok' | 'terminal' | 'transient' {
-  switch (booking.status) {
-    case 'confirmed':
-    case 'modified':
-    case 'checked_in':
-    case 'checked_out':
-      return 'ok';
-    case 'cancelled':
-    case 'no_show':
-      return 'terminal';
-    // An unconfirmed hold, or a status eZee has not shown us before. It may well
-    // resolve on the next poll, so it must NOT burn the message.
-    case 'unknown':
-    default:
-      return 'transient';
-  }
 }
 
 /** Marketing may only go to a guest who asked for it (§4, CH-15's consent). */
