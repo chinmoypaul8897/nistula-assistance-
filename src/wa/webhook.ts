@@ -16,6 +16,7 @@ import {
   upsertGuestByPhone,
   type NewMessage,
 } from '../db/repos.js';
+import { inboundTimestamp, touchPhoneWindow } from '../db/windows.js';
 import { summarizeError } from '../lib/logger.js';
 import { normalizePhone } from '../lib/phone.js';
 import { alertOps } from '../ops/alerts.js';
@@ -192,6 +193,17 @@ async function handleInbound(
     log.warn({ waMessageId: message.id }, 'inbound phone not normalisable — skipped, raw stored');
     return;
   }
+  // CH-12 (§5.3): EVERY inbound opens a 24h window, whoever sent it. Guests keep
+  // theirs on the conversation, but staff and ops numbers have no conversation
+  // at all — and Meta's window binds them identically. Written before the dedupe
+  // check on purpose: a redelivery is still evidence that they wrote to us, and
+  // touchPhoneWindow never moves a window backwards.
+  // Meta's OWN timestamp, not our receipt time. Meta retries webhooks for hours
+  // after an outage, so stamping now() would re-open a window Meta itself closed
+  // — and the next free-form send would take a 131047 we inflicted on ourselves.
+  // It is also what makes touchPhoneWindow's greatest() guard mean anything.
+  await touchPhoneWindow(db, phone, inboundTimestamp(message.timestamp));
+
   const profileName = value.contacts?.find((c) => c.wa_id === message.from)?.profile?.name;
   const guest = await upsertGuestByPhone(db, phone, profileName);
   const conversation = await getOrCreateConversation(db, guest.id);

@@ -18,7 +18,8 @@
     "ezee:backfill": "tsx scripts/ezee-backfill.ts",
     "ezee:capture": "tsx scripts/ezee-capture.ts",
     "ezee:reconcile": "tsx scripts/ezee-reconcile.ts",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "templates:pack": "tsx scripts/template-pack.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

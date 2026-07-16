@@ -3,7 +3,7 @@
  * helper is one statement or an upsert-then-read; business logic lives in the
  * feature modules, never here.
  */
-import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Db, DbLike } from './client.js';
 import { conversations, costEvents, guests, messages, rawEvents } from './schema.js';
 
@@ -31,6 +31,38 @@ export async function upsertGuestByPhone(
     .onConflictDoUpdate({ target: guests.phone, set })
     .returning();
   if (row === undefined) throw new Error('guest upsert returned no row');
+  return row;
+}
+
+/**
+ * Creates (or finds) a guest from BOOKING data — CH-12's scheduler, explicitly
+ * superseding CH-10's no-auto-creation rule (plan CH-12 step 3).
+ *
+ * WHY it exists alongside upsertGuestByPhone: a guest who booked on the website
+ * has never messaged us, so nobody else would ever create their row — and the
+ * name we have is eZee's, not a WhatsApp profile name. The two sources are kept
+ * strictly apart: this writes first_name/last_name, and NEVER wa_profile_name,
+ * because the WhatsApp pushname is attacker-chosen and §6.4 forbids matching on
+ * it. Existing names are not overwritten — a name the guest gave us themselves
+ * outranks the one an OTA typed for them.
+ */
+export async function upsertGuestFromBooking(
+  db: DbLike,
+  guest: { phone: string; firstName: string | null; lastName: string | null },
+): Promise<Guest> {
+  const [row] = await db
+    .insert(guests)
+    .values({ phone: guest.phone, firstName: guest.firstName, lastName: guest.lastName })
+    .onConflictDoUpdate({
+      target: guests.phone,
+      set: {
+        firstName: sql`coalesce(${guests.firstName}, excluded.first_name)`,
+        lastName: sql`coalesce(${guests.lastName}, excluded.last_name)`,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  if (row === undefined) throw new Error('guest upsert (from booking) returned no row');
   return row;
 }
 
@@ -169,7 +201,24 @@ export async function getRecentMessages(
   const rows = await db
     .select()
     .from(messages)
-    .where(and(eq(messages.conversationId, conversationId), ne(messages.sender, 'system')))
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        ne(messages.sender, 'system'),
+        // THE TRANSCRIPT IS WHAT THE GUEST ACTUALLY SAW (CH-12 review fix).
+        // An outbound row that never reached them — 'failed', or 'queued' and
+        // still in flight — must never be replayed to the model as something we
+        // said: it would believe it had already answered, apologised, or sent a
+        // confirmation that the guest never received. Inbound is always real.
+        // This became acute when CH-12's sender began retrying transient Graph
+        // failures: each attempt writes its own audit row, and 144 of them would
+        // otherwise flood a 30-message window and poison the rolling summary.
+        or(
+          eq(messages.direction, 'in'),
+          inArray(messages.status, ['sent', 'delivered', 'read']),
+        ),
+      ),
+    )
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit);
   return rows.reverse();

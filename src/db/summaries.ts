@@ -7,7 +7,7 @@
  * and boundary rows are resolved SERVER-side (an id-join), never through a JS
  * Date round-trip.
  */
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import type { Message, MessageCursor } from './repos.js';
 import { conversations, messages } from './schema.js';
@@ -117,6 +117,16 @@ export async function getSummarisableMessages(
       and(
         eq(messages.conversationId, args.conversationId),
         sql`(${messages.createdAt}, ${messages.id}) < (SELECT w.created_at, w.id FROM messages w WHERE w.id = ${args.beforeId}::uuid)`,
+        // THE SUMMARY IS WHAT THE GUEST ACTUALLY SAW — the same rule as the live
+        // window (getRecentMessages), and it must be applied HERE too or the fix
+        // is only half done: a failed send excluded from the window would still
+        // be compacted into [EARLIER CONTEXT] and become PERMANENT, letting the
+        // AI tell a real guest "as I mentioned, I've sent your confirmation"
+        // about a message that never left. Inbound is always real.
+        or(
+          eq(messages.direction, 'in'),
+          inArray(messages.status, ['sent', 'delivered', 'read']),
+        ),
         afterGuard,
       ),
     )

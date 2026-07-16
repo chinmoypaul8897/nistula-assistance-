@@ -32,6 +32,7 @@
  */
 import type { BookingMirror } from '../db/bookings.js';
 import { toArray, type EzeeBookingTran } from '../ezee/types.js';
+import { shiftDay } from '../lib/time.js';
 
 /**
  * Statuses a stay may be DESCRIBED in. `modified` is an event verb stored as a
@@ -286,14 +287,6 @@ export function needsHuman(views: readonly StayView[], today: string): boolean {
   return views.some(
     (v) => !v.describable && v.checkIn !== null && v.checkIn >= from && v.checkIn <= to,
   );
-}
-
-/** Calendar-day arithmetic on a YYYY-MM-DD string. Constructed at UTC midnight
- * on both sides, so it is pure day maths — no timezone can shift it. */
-function shiftDay(day: string, days: number): string {
-  const d = new Date(`${day}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
 }
 
 /** Live stays, for the guardrail gate and block [5]. */

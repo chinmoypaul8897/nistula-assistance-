@@ -632,9 +632,141 @@ nothing (the CH-07 lesson).
    allowlisted recipients, so either add a second number to the Meta app's
    allow-list, or assert this leg in the DB/logs rather than by delivery.
 
+## Lifecycle engine (CH-12)
+
+### What runs
+
+Two crons, `Asia/Kolkata`. **`lifecycle.send`** every minute sends due
+`scheduled_messages`. **`lifecycle.reconcile`** every hour re-derives the schedule
+from `bookings_mirror` (the atomicity net — the mirror is the truth, `booking.*`
+events are only wake-ups). Three workers consume `booking.created|modified|
+cancelled`, which carry `{reservationNo}` and nothing else, so everything is read
+back from the mirror.
+
+Timings (§2.3): confirmation now · pre-arrival check-in −3d 10:00 IST · welcome
+check-in day 09:00 · thank-you check-out +1d 11:00 · win-back check-out +75d 11:00.
+A time already past sends **now** rather than being dropped — otherwise the
+last-minute bookings, the valuable ones, would be the ones silently skipped.
+
+### 🚨 THE FOUR GATES — this is the chunk that speaks FIRST
+
+Everything before CH-12 only ever *replied* to someone who had messaged us. From
+here, a booking landing in eZee makes us WhatsApp a **stranger**. A booking gets
+lifecycle messages only if it passes **all four** (`src/lifecycle/gates.ts`):
+
+| Gate | Env | Rule |
+|---|---|---|
+| **Epoch** | `LIFECYCLE_EPOCH` | mirrored at/after the cutover **instant**. **Unset ⇒ NOTHING is scheduled.** |
+| **Date** | — | `check_in >= today` (IST) |
+| **Status** | — | `confirmed` or `modified` — an allowlist |
+| **Source** | `LIFECYCLE_SOURCES` | direct only by default (`Internet Booking Engine,Walk-in`) |
+
+Plus `guest_phone` must exist, and `LIFECYCLE_SEND_ENABLED=1` must be set or
+nothing is ever sent (rows still accrue as `pending`, and stay deliverable).
+
+**Why each one is real, from the production measurement on 2026-07-14:**
+
+- **The epoch is what makes history inert.** The mirror holds **124 `checked_out`
+  rows** and CH-11's reconcile hydrated **123 historical bookings** straight into
+  it. The hourly sweep reads the MIRROR — so *purging the queued jobs does not
+  protect anyone*: the sweep would recreate the work within the hour. Only the
+  epoch survives it. It is an **instant, not a date**, because 134 of the mirror's
+  rows were created on the cutover day itself.
+- **The source gate is not theoretical.** The comfortable belief was that OTA
+  numbers are masked and therefore harmless. **makemytrip and go-mmt do mask them.
+  Airbnb and Booking.com DO NOT.** Production holds **12 real OTA guests, arriving
+  soon, with real phone numbers**. Nobody at Nistula has said we may write to them
+  (team-question **Q13**, open 🔴). Until they do, we don't.
+
+### Turning it on (the order matters)
+
+1. **Measure the backlog** — never trust a number written down; it grows daily.
+   ```sql
+   SELECT name, state, count(*) FROM pgboss.job WHERE name LIKE 'booking.%' GROUP BY 1,2;
+   ```
+2. **Purge it.** These jobs predate the engine; firing them would message guests
+   about months-old and cancelled bookings. (The gates make them no-ops anyway —
+   this is belt-and-braces, and it keeps the logs readable.)
+   ```sql
+   DELETE FROM pgboss.job WHERE name LIKE 'booking.%' AND state = 'created';
+   ```
+3. **Set `LIFECYCLE_EPOCH` to now** (IST wall clock, e.g. `2026-07-14T21:30`), on
+   Railway, with **Node — never a PowerShell pipe** (it prepends a UTF-8 BOM).
+4. Leave `LIFECYCLE_SEND_ENABLED=0` for a cycle and read the logs: `[lifecycle]
+   scheduled` / `booking skipped` lines tell you exactly what the gates decided.
+5. Flip `LIFECYCLE_SEND_ENABLED=1` when the decisions look right.
+
+### Reading the state
+
+```sql
+-- what is queued to go out, and what got refused and why
+SELECT kind, status, skip_reason, send_at FROM scheduled_messages ORDER BY send_at;
+-- who would be messaged if the gates were dropped (sanity check before changing them)
+SELECT source, count(*), count(guest_phone) AS reachable FROM bookings_mirror
+WHERE status IN ('confirmed','modified') AND check_in >= current_date GROUP BY 1;
+```
+
+### The 24h window, now enforced (§5.3)
+
+`wa/client.ts` is the single chokepoint and it now refuses a free-form send
+outside Meta's 24h window — for **staff and ops numbers too**, whose window lives
+in `phone_windows` (written on every inbound) because they have no conversation
+row. This is not a regression: Meta rejects those sends with **131047** anyway;
+we now fail locally, before burning the call, and say why.
+
+- `sendText` — free-form. Closed window ⇒ refused (`window_closed_blocked`).
+- `sendTemplated` — free-form while the window is open; the **template** path when
+  it is shut. **This is the only way to reach someone who has not written to us.**
+
+**Three honest limits, so nobody is surprised:**
+1. **A guest's AI reply still goes silent on a closed window.** There is no
+   template for an arbitrary conversational reply and there never can be. CH-12
+   did not fix that and could not — it fixed *lifecycle* messages, which do have
+   templates.
+2. **The dev test number cannot prove the closed-window path.** With
+   `WA_TEMPLATE_MODE=simulate` a "template" is physically a free-form text, so
+   Meta blocks it exactly like any other. Those rows are left **pending** (not
+   failed) and go out the moment the guest writes. Only the real WABA, with
+   approved templates and `WA_TEMPLATE_MODE=send`, exercises it for real.
+3. **CH-07's interim ops escalation** goes to OPS numbers as free-form, so it is
+   now subject to the same rule. If an ops number has not messaged the line in 24h
+   the send is refused — and **the AI will then NOT tell the guest the team has
+   been informed** (the guardrail-2 evidence row is only written after a card
+   actually lands; `ops_escalation_undelivered` fires instead). That is the honest
+   behaviour, but it means **an ops number that goes quiet for a day stops
+   receiving escalations.** ⚠️ **"Every staff/ops number messages the line once"
+   is NOT sufficient — one message buys 24 hours.** The real fix is
+   **TODO(CH-13/14): move staff sends onto `sendTemplated` + `nst_escalation_card`**,
+   which reaches a shut window. Until then, watch for `ops_escalation_undelivered`.
+
+### Alerts you may see
+
+`lifecycle_no_phone` (a real booking we cannot reach — OTA masked the number; a
+human must pick it up) · `lifecycle_undescribable` (passed the gates but
+`stayView` will not describe it — multi-room, sibling rows, missing dates — so we
+say nothing rather than guess) · `lifecycle_send_failed` · `wa_template_invalid`
+(params Meta would reject: newlines, 4+ spaces, empty) · `wa_template_unsendable`
+(closed window while simulating) · `window_closed_blocked`.
+
+### Templates
+
+`pnpm templates:pack` prints the **exact bodies to submit to Meta**, with
+categories and sample values. It is GENERATED from `src/lifecycle/templates.ts` —
+the same `render()` the sender uses — so the approved template and the message we
+actually send cannot drift apart. Do not hand-copy the bodies anywhere.
+
+Submit at real-number cutover (plan §10). **Utility** = service (confirmation,
+pre-arrival, welcome, thank-you, and all four staff cards). **Marketing** =
+win-back and lead follow-up, which additionally require `marketing_opt_in`.
+
+**What a body may never contain**, and each of these is a rule someone bled for:
+a **house** ("Villa B3" — eZee only *guessed* it, 🚨 OQ-19) · any **₹ figure** (the
+booking amount may be the OTA net, and no deposit figure is published) · the
+**meal plan** (an opaque code, OQ-16) · an **address or map pin** (none exists —
+OQ-12; the pre-arrival asks for an arrival time and promises a human sends one).
+
 ## Sections to come
 
-- Template approval pack for the real number — CH-12
 - Staff command sheet: `DONE <id>` · `TASKS` · `AI ON/OFF <last4>` — CH-13/14
 - Draft-mode unlock ritual — CH-16
 - Incidents: webhook silent · eZee down · degraded mode · cost spike — CH-17/18

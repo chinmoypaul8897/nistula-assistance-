@@ -2,23 +2,50 @@
  * The single WhatsApp send chokepoint (plan.md CH-02 step 3, §5.3). BINDING
  * from CH-02 (decision D2): EVERY outbound anywhere — worker replies, ops
  * alerts, lifecycle sends, staff cards, draft dispatch — goes through this
- * client, so the CH-12 window upgrade captures every path at once.
+ * client, which is what let CH-12's window upgrade capture every path at once.
  *
- * WHY window logic is deliberately absent here: window state is only written
- * from CH-03 and enforced from CH-07/CH-12; every pre-CH-12 send is an
- * immediate reply (window trivially open) and Meta's 131047 error is the
- * physical backstop, landing as status 'failed' + error on the row.
+ * THE 24H WINDOW (CH-12 — the TODO that stood here since CH-02 is now closed).
+ * Meta allows a free-form send only within 24h of the counterparty's last
+ * inbound. Outside it, only an approved TEMPLATE may go. The rule binds staff
+ * and ops numbers exactly as it binds guests (§5.3), so both window sources are
+ * read here — conversations for guests, phone_windows for everyone else.
+ *
+ *   sendText      free-form. Closed window ⇒ REFUSED before the Graph call.
+ *   sendTemplated free-form when the window is open (warmer, and free); the
+ *                 TEMPLATE path when it is shut. This is the only way to reach
+ *                 someone who has not written to us — i.e. the whole of CH-12.
+ *
+ * WHY refusing a closed-window sendText is not a regression: Meta rejects it
+ * anyway with 131047, so the message never arrived in that case either. We now
+ * fail locally, before burning the call, and say why on the row.
+ *
+ * WHY the guest's AI reply still goes silent on a closed window: there is no
+ * template for an arbitrary conversational reply and there never can be — a
+ * template is pre-approved fixed text. That deviation (recorded in CH-07) is
+ * therefore permanent and inherent to Meta's rule, NOT something CH-12 fixed.
+ * What CH-12 fixes is that LIFECYCLE messages, which do have templates, can now
+ * reach a guest whose window is shut. That is the honest scope of the change.
  */
-// TODO(CH-12): enforce the 24h window here — free-form only in-window,
-// closed window → template path, 131047 → failed + ops alert (§5.3).
 import { and, eq } from 'drizzle-orm';
 import type { Db, DbLike } from '../db/client.js';
 import { insertMessage, type Message } from '../db/repos.js';
 import { messages } from '../db/schema.js';
+import { windowStateFor } from '../db/windows.js';
 import { http as defaultHttp } from '../lib/http.js';
 import { summarizeError } from '../lib/logger.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
+import { failSend as settleFailed, graphFailure, type SendResult } from './sendFailure.js';
+import { createTemplateSender, type TemplateMode } from './templateSend.js';
 import type { WaSendResponse } from './types.js';
+
+export type { SendResult } from './sendFailure.js';
+
+export type {
+  PlannedTemplatedSend,
+  PlannedTemplatedSendOk,
+  TemplateMode,
+  TemplatedSend,
+} from './templateSend.js';
 
 /** Outbound rows can never claim guest authorship (§4 sender semantics). */
 export type OutboundSender = Exclude<Message['sender'], 'guest'>;
@@ -31,10 +58,6 @@ export interface SendOptions {
   conversationId: string | null;
   sender: OutboundSender;
 }
-
-export type SendResult =
-  | { ok: true; messageId: string; waMessageId: string }
-  | { ok: false; messageId: string | null; error: string };
 
 /** Dispatch of a committed intent row — messages has no phone column, so the caller restates the target. */
 export interface DispatchArgs {
@@ -54,13 +77,20 @@ export interface WaClientDeps {
   graphBaseUrl: string;
   phoneNumberId: string;
   accessToken: string;
+  /** Defaults to 'simulate' — the safe end. A missing config may never silently
+   * start firing un-approved templates at Meta. */
+  templateMode?: TemplateMode;
   /** Tests inject a fake fetch via lib/http's wrapper shape (§3.5). */
   httpImpl?: typeof defaultHttp;
+  /** Test seam only: the clock the window is judged against. */
+  now?: () => Date;
 }
 
 /** Builds the send client; boot wires live deps, tests inject fakes. */
 export function createWaClient(deps: WaClientDeps) {
   const httpFn = deps.httpImpl ?? defaultHttp;
+  const templateMode: TemplateMode = deps.templateMode ?? 'simulate';
+  const now = deps.now ?? (() => new Date());
   const endpoint = `${deps.graphBaseUrl}/${deps.phoneNumberId}/messages`;
   const headers = {
     authorization: `Bearer ${deps.accessToken}`,
@@ -81,7 +111,8 @@ export function createWaClient(deps: WaClientDeps) {
     // CH-05: an AI reply carries its tool-run audit (raw.toolRuns) for the
     // guardrail record + weekly review. Optional + additive — no other caller
     // changes; the single chokepoint stays intact (D2).
-    extra?: { raw?: unknown },
+    // CH-12: type/templateName widen the same seam for the template path.
+    extra?: { raw?: unknown; type?: Message['type']; templateName?: string },
   ): Promise<Message> {
     // WHY 'queued': it is the §4 enum's spelling of §3.4's 'sending' — no
     // other use assigns messages.status='queued' anywhere in the plan
@@ -90,8 +121,12 @@ export function createWaClient(deps: WaClientDeps) {
       conversationId: opts.conversationId,
       direction: 'out',
       sender: opts.sender,
-      type: 'text',
+      type: extra?.type ?? 'text',
+      // The RENDERED text is always stored, even for a real template send, so
+      // the transcript (and therefore the model, and therefore a human reading
+      // the thread) sees what the guest actually received — not a template id.
       body,
+      templateName: extra?.templateName,
       status: 'queued',
       raw: extra?.raw,
     });
@@ -108,6 +143,17 @@ export function createWaClient(deps: WaClientDeps) {
    * and callers own their failure policy.
    */
   async function dispatchText(args: DispatchArgs): Promise<SendResult> {
+    return dispatchToGraph(args, {
+      messaging_product: 'whatsapp',
+      to: args.toE164,
+      type: 'text',
+      text: { body: args.body },
+    });
+  }
+
+  /** The Graph call + settle, shared by the text and template paths so the
+   * send-intent guarantees (§3.4) cannot diverge between them. */
+  async function dispatchToGraph(args: DispatchArgs, payload: unknown): Promise<SendResult> {
     // TODO(CH-17): stale-'queued' reconciliation sweep + alert (§3.4 —
     // a crash between the intent commit and here leaves an inert intent row).
     //
@@ -120,21 +166,16 @@ export function createWaClient(deps: WaClientDeps) {
       const response = await httpFn(endpoint, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: args.toE164,
-          type: 'text',
-          text: { body: args.body },
-        }),
+        body: JSON.stringify(payload),
       });
       httpStatus = response.status;
       if (!response.ok) {
-        return await failSend(args.messageId, args.conversationId, await graphFailure(response));
+        return await settleFailed(deps.db, deps.log, args.messageId, args.conversationId, await graphFailure(response));
       }
       const parsed = (await response.json().catch(() => ({}))) as WaSendResponse;
       waMessageId = parsed.messages?.[0]?.id;
       if (waMessageId === undefined) {
-        return await failSend(args.messageId, args.conversationId, {
+        return await settleFailed(deps.db, deps.log, args.messageId, args.conversationId, {
           errorText: 'Graph 2xx without a message id',
           httpStatus,
         });
@@ -154,7 +195,9 @@ export function createWaClient(deps: WaClientDeps) {
     } catch (error) {
       // summarizeError, never raw messages: a thrown DB error embeds bound
       // params (§3.3) — and this row/alert text must stay content-free.
-      return await failSend(
+      return await settleFailed(
+        deps.db,
+        deps.log,
         args.messageId,
         args.conversationId,
         { errorText: summarizeError(error), httpStatus },
@@ -166,8 +209,31 @@ export function createWaClient(deps: WaClientDeps) {
   /**
    * Sends a free-form text (§5.3): createSendIntent then dispatchText — the
    * §3.4 send-intent pattern. Returns a result, never throws.
+   *
+   * CH-12: refuses outside the 24h window. §5.3 calls an out-of-window
+   * free-form attempt a BUG, and it is right — Meta would reject it with
+   * 131047, so the only thing sending anyway buys is a wasted call and a
+   * mystery. Callers who need to reach a closed window use sendTemplated.
    */
   async function sendText(toE164: string, body: string, opts: SendOptions): Promise<SendResult> {
+    const window = await windowStateFor(
+      deps.db,
+      { conversationId: opts.conversationId, phone: toE164 },
+      now(),
+    );
+    if (!window.open) {
+      deps.log.warn(
+        { conversationId: opts.conversationId, windowSource: window.source },
+        'free-form send refused — 24h window closed',
+      );
+      await alertOps(deps.log, {
+        kind: 'window_closed_blocked',
+        summary: 'Free-form send refused — the 24h window is closed',
+        detail: { conversationId: opts.conversationId, windowSource: window.source },
+      });
+      return { ok: false, messageId: null, error: 'WINDOW_CLOSED', retryable: false };
+    }
+
     let message: Message;
     try {
       message = await createSendIntent(deps.db, body, opts);
@@ -180,7 +246,7 @@ export function createWaClient(deps: WaClientDeps) {
         summary: 'WhatsApp send-intent insert failed',
         detail: { conversationId: opts.conversationId },
       });
-      return { ok: false, messageId: null, error: summarizeError(error) };
+      return { ok: false, messageId: null, error: summarizeError(error), retryable: true };
     }
     return dispatchText({
       messageId: message.id,
@@ -188,52 +254,6 @@ export function createWaClient(deps: WaClientDeps) {
       body,
       conversationId: opts.conversationId,
     });
-  }
-
-  interface SendFailure {
-    errorText: string;
-    errorCode?: number;
-    errorTitle?: string;
-    httpStatus?: number;
-  }
-
-  async function failSend(
-    messageId: string,
-    conversationId: string | null,
-    failure: SendFailure,
-    waMessageId?: string,
-  ): Promise<SendResult> {
-    try {
-      // Writing waMessageId when known keeps a post-2xx failure healable:
-      // the later delivered/read webhook matches the row and the D3 lattice
-      // (failed < delivered) corrects the false 'failed'.
-      await deps.db
-        .update(messages)
-        .set({
-          status: 'failed',
-          error: failure.errorText,
-          ...(waMessageId === undefined ? {} : { waMessageId }),
-        })
-        .where(and(eq(messages.id, messageId), eq(messages.status, 'queued')));
-    } catch {
-      // DB gone mid-failure: the row stays 'queued' — inert by design; the
-      // TODO(CH-17) stale-queued sweep is the recovery net. Alert regardless.
-    }
-    // Structured fields per D4 (CH-17 dedupe keys off them); free error text
-    // stays on the message row, never in logs.
-    await alertOps(deps.log, {
-      kind: 'wa_send_failed',
-      summary: 'WhatsApp send failed',
-      detail: {
-        messageId,
-        conversationId,
-        waMessageId,
-        errorCode: failure.errorCode,
-        errorTitle: failure.errorTitle,
-        httpStatus: failure.httpStatus,
-      },
-    });
-    return { ok: false, messageId, error: failure.errorText };
   }
 
   /** Marks an inbound message read (§5.3, optional nicety) — no message row. */
@@ -254,35 +274,27 @@ export function createWaClient(deps: WaClientDeps) {
     }
   }
 
-  return { sendText, markRead, createSendIntent, dispatchText };
+  // The TEMPLATE half of the chokepoint (§5.3), split into its own file for the
+  // ~300-line rule. It is handed THIS client's internals rather than
+  // re-implementing them, so there is still exactly one door out (D2).
+  const templates = createTemplateSender({
+    db: deps.db,
+    log: deps.log,
+    now,
+    templateMode,
+    createSendIntent,
+    dispatchToGraph,
+  });
+
+  return {
+    sendText,
+    markRead,
+    createSendIntent,
+    dispatchText,
+    sendTemplated: templates.sendTemplated,
+    planTemplatedSend: templates.planTemplatedSend,
+    dispatchTemplated: templates.dispatchTemplated,
+  };
 }
 
 export type WaClient = ReturnType<typeof createWaClient>;
-
-/** Token-free failure from a Graph error response: status + Meta's own code/type/message. */
-async function graphFailure(response: Response): Promise<{
-  errorText: string;
-  errorCode?: number;
-  errorTitle?: string;
-  httpStatus: number;
-}> {
-  let detail = '';
-  let errorCode: number | undefined;
-  let errorTitle: string | undefined;
-  try {
-    const parsed = (await response.json()) as WaSendResponse;
-    if (parsed.error !== undefined) {
-      errorCode = parsed.error.code;
-      errorTitle = parsed.error.type;
-      detail = ` ${parsed.error.code ?? ''} ${parsed.error.message ?? ''}`.trimEnd();
-    }
-  } catch {
-    // Non-JSON error body — the status code alone still tells the story.
-  }
-  return {
-    errorText: `Graph ${response.status}${detail}`.slice(0, 300),
-    errorCode,
-    errorTitle,
-    httpStatus: response.status,
-  };
-}

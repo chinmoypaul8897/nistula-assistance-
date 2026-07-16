@@ -85,7 +85,7 @@ Guest WhatsApp ⇄ Meta Cloud API (coexistence with front-desk app)
 ### 2.4 The six acceptance scenarios (condensed — full versions live in the product picture)
 
 1. **Midnight enquiry:** 23:42 "3bhk 20–22 dec rate?" → exact website price in seconds, discount ask deflected with pride, booking link. No human involved.
-2. **Booking made:** website/OTA booking appears in eZee → confirmation immediately, pre-arrival T−3, welcome on the day — untouched by staff.
+2. **Booking made:** a **direct** (website/walk-in) booking appears in eZee → confirmation immediately, pre-arrival T−3, welcome on the day — untouched by staff. *(CH-12 amendment, Paul-approved: **OTA bookings are mirrored but NOT messaged** until the business answers Q13 — "may we WhatsApp Airbnb/Booking.com guests?". `LIFECYCLE_SOURCES` is the gate. Production holds 12 real OTA guests with unmasked numbers, so this is not hypothetical.)*
 3. **Two towels:** in-stay request → staff task "Villa B3 · Rahul · 2 towels" → guest follow-up 30 min later understood in context; honest status wording ("I've nudged housekeeping"), never "checked with housekeeping" when it only checked the task record.
 4. **Special request (proposal décor):** outside KB → escalation card to front desk with summary → staff reply from the app pauses the AI; SLA timer re-pings staff if nobody replies in 10 min.
 5. **Night issue (weak AC, 23:05):** honest hold ("the team comes in at 10"), villa-quirks tip if the KB has one, morning digest carries it.
@@ -202,6 +202,21 @@ EZEE_BASE_URL=https://live.ipms247.com · EZEE_HOTEL_CODE · EZEE_AUTH_CODE · E
 EZEE_POLLER_ENABLED=0        # CH-10 addition. BINDING: exactly ONE environment may set 1 (Railway).
                              # eZee's un-ACKed queue is shared per AuthCode — a second poller ACK-consumes
                              # real bookings the production mirror then never sees. Local .env NEVER sets 1.
+LIFECYCLE_SEND_ENABLED=0     # CH-12 addition. Default OFF: merging CH-12 must not, by itself, start
+                             # messaging real people. Rows are still SCHEDULED; nothing is SENT until a
+                             # human flips this, after the booking.* backlog is purged.
+LIFECYCLE_EPOCH              # CH-12 addition. IST wall clock (YYYY-MM-DDTHH:mm) — the cutover INSTANT.
+                             # A booking first mirrored BEFORE it gets no lifecycle, ever. This is what
+                             # makes CH-11's 123 hydrated historical rows (and every pre-CH-12 booking)
+                             # inert. UNSET ⇒ nothing is scheduled at all — "no epoch" fails closed.
+                             # An INSTANT, not a date: 134 mirror rows were created on the cutover DAY.
+LIFECYCLE_SOURCES=Internet Booking Engine,Walk-in   # CH-12 addition. Booking sources we may message.
+                             # The fail-closed answer to the unanswered Q13 ("may we WhatsApp Airbnb
+                             # guests?"): direct only. NOT theoretical — production holds 12 Airbnb/
+                             # Booking.com guests with real, unmasked numbers arriving soon.
+WA_TEMPLATE_MODE=simulate    # CH-12 addition. simulate|send. Template approval belongs to the real
+                             # number's WABA, which does not exist yet — dev sends the identical body as
+                             # free-form (raw.devTemplate=true). Nothing branches on NODE_ENV (§5.3).
 OPS_NUMBERS               # comma-separated E.164 — Paul + front-desk lead (alerts, digests, draft approvals)
 STAFF_ROSTER_JSON         # [{"name":"…","phone":"+91…","role":"housekeeping|maintenance|frontdesk","villas":["B1","B3"]}]
 DRAFT_MODE=true · AUTO_SEND_TYPES=            # csv: presales,instay,… unlocked over time

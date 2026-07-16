@@ -10,6 +10,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/client.js';
 import { getOrCreateConversation, upsertGuestByPhone } from '../src/db/repos.js';
+import { touchPhoneWindow } from '../src/db/windows.js';
 import * as schema from '../src/db/schema.js';
 import { createWaClient, type WaClientDeps } from '../src/wa/client.js';
 
@@ -52,6 +53,24 @@ function graphOk(waMessageId: string): Response {
   });
 }
 
+/**
+ * CH-12 made an OPEN 24h window a precondition of every free-form send (§5.3),
+ * so these send-intent tests must now establish one — the thing a real
+ * counterparty establishes by messaging us. Staff/ops numbers (conversation_id
+ * null) keep their window in phone_windows; guests keep theirs on the
+ * conversation. Refusal itself is tested in test/wa-window.test.ts.
+ */
+async function openWindowFor(phone: string): Promise<void> {
+  await touchPhoneWindow(db, phone, new Date());
+}
+
+async function openConversationWindow(conversationId: string): Promise<void> {
+  await db
+    .update(schema.conversations)
+    .set({ serviceWindowExpiresAt: new Date(Date.now() + 23 * 60 * 60 * 1000) })
+    .where(eq(schema.conversations.id, conversationId));
+}
+
 describe('sendText — send-intent ordering (§3.4, decision D1)', () => {
   it("commits the 'queued' row BEFORE the Graph call, then flips it to 'sent'", async () => {
     let observedMidCall: { status: string; waMessageId: string | null } | undefined;
@@ -73,6 +92,7 @@ describe('sendText — send-intent ordering (§3.4, decision D1)', () => {
       });
       return graphOk('wamid.CLIENT-SENT-0001');
     });
+    await openWindowFor('+917700900011');
 
     const result = await wa.sendText('+917700900011', 'ordering-proof', {
       conversationId: null,
@@ -95,6 +115,7 @@ describe('sendText — send-intent ordering (§3.4, decision D1)', () => {
   it('writes the row with the CALLER-stated conversation and sender (decision D5)', async () => {
     const guest = await upsertGuestByPhone(db, '+917700900012', 'Client Test Guest');
     const conversation = await getOrCreateConversation(db, guest.id);
+    await openConversationWindow(conversation.id);
     const { wa } = makeClient(async () => graphOk('wamid.CLIENT-SENT-0002'));
 
     const result = await wa.sendText('+917700900012', 'attached to conversation', {
@@ -125,6 +146,7 @@ describe('sendText — failure paths (never throws; row is the audit)', () => {
           { status: 400, headers: { 'content-type': 'application/json' } },
         ),
     );
+    await openWindowFor('+917700900013');
     const result = await wa.sendText('+917700900013', 'will 400', {
       conversationId: null,
       sender: 'system',
@@ -156,6 +178,7 @@ describe('sendText — failure paths (never throws; row is the audit)', () => {
     const { wa } = makeClient(async () => {
       throw new TypeError('fetch failed');
     });
+    await openWindowFor('+917700900014');
     const result = await wa.sendText('+917700900014', 'network death', {
       conversationId: null,
       sender: 'system',
@@ -178,6 +201,7 @@ describe('sendText — failure paths (never throws; row is the audit)', () => {
           headers: { 'content-type': 'application/json' },
         }),
     );
+    await openWindowFor('+917700900015');
     const result = await wa.sendText('+917700900015', 'idless 2xx', {
       conversationId: null,
       sender: 'system',
@@ -188,7 +212,12 @@ describe('sendText — failure paths (never throws; row is the audit)', () => {
   it('returns ok:false (never throws) when the INTENT INSERT itself fails — CH-03 fix', async () => {
     // A db whose insert dies simulates pool exhaustion / connection loss at
     // the one write that used to sit outside the failure envelope.
+    // The window must READ as open, or we never reach the insert this test is
+    // actually about (CH-12 checks the window before creating the intent).
     const brokenDb = {
+      select: () => ({
+        from: () => ({ where: () => Promise.resolve([{ lastInboundAt: new Date() }]) }),
+      }),
       insert() {
         throw new Error('pool exhausted');
       },

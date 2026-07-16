@@ -50,6 +50,20 @@
       "when": 1783957554531,
       "tag": "0006_reference-attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784041627807,
+      "tag": "0007_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784187809082,
+      "tag": "0008_lifecycle-deferred-until",
+      "breakpoints": true
     }
   ]
 }

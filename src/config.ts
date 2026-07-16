@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 import { normalizePhone } from './lib/phone.js';
+import { istWallClockToInstant } from './lib/time.js';
 
 // Range-checked HH:mm — a "25:00" must fail BOOT, not the first night-window
 // call inside message handling.
@@ -63,6 +64,31 @@ const envSchema = z.object({
   // production mirror then never sees. Only Railway sets 1. New §3.7
   // registry var (recorded CH-10 deviation, pending the plan.md fold-in).
   EZEE_POLLER_ENABLED: z.enum(['0', '1']).default('0'),
+  // ── CH-12 lifecycle gates. New §3.7 registry vars (recorded deviation). ───
+  // Default OFF. Merging CH-12 to main must not, by itself, start messaging
+  // real people: the flag is a human's hand on the switch, flipped only after
+  // the backlog is purged and the gates are seen to hold in production.
+  LIFECYCLE_SEND_ENABLED: z.enum(['0', '1']).default('0'),
+  // The cutover INSTANT (IST wall clock). Bookings first mirrored before it get
+  // no lifecycle, ever. This is what makes CH-11's 123 hydrated historical rows
+  // — and every real booking that predates this chunk — inert. UNSET ⇒ nothing
+  // is scheduled at all: "no epoch" can only ever fail closed.
+  // WHY an instant and not a date: 134 of production's mirror rows were created
+  // on the cutover DAY itself, so a date would have let all of them through.
+  LIFECYCLE_EPOCH: z
+    .string()
+    .regex(IST_WALL_CLOCK)
+    .refine(hasRealCalendarDate, 'date does not exist on the calendar')
+    .optional(),
+  // Booking sources we are allowed to message. The fail-closed answer to the
+  // unanswered Q13 ("may we WhatsApp guests who booked via Airbnb?"): direct
+  // only. NOT theoretical — production holds 12 Airbnb/Booking.com guests with
+  // real, unmasked phone numbers arriving soon.
+  LIFECYCLE_SOURCES: z.string().default('Internet Booking Engine,Walk-in'),
+  // Real Meta templates, or free-form simulation? Approval belongs to the real
+  // number's WABA, which does not exist yet — so dev simulates. Nothing branches
+  // on NODE_ENV, only on this (§5.3).
+  WA_TEMPLATE_MODE: z.enum(['simulate', 'send']).default('simulate'),
   OPS_NUMBERS: z.string().optional(),
   STAFF_ROSTER_JSON: z.string().optional(),
   DRAFT_MODE: z.enum(['true', 'false']).default('true'),
@@ -107,6 +133,12 @@ export interface Config {
   ezeeAuthCode: string | undefined;
   ezeeUserAgent: string;
   ezeePollerEnabled: boolean;
+  lifecycleSendEnabled: boolean;
+  /** The cutover instant, already resolved from IST wall clock to a UTC Date. */
+  lifecycleEpoch: Date | undefined;
+  /** Lower-cased, for a case-insensitive compare against eZee's free-text source. */
+  lifecycleSources: string[];
+  waTemplateMode: 'simulate' | 'send';
   opsNumbers: string[];
   staffRoster: StaffMember[];
   draftMode: boolean;
@@ -175,6 +207,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ezeeAuthCode: raw.EZEE_AUTH_CODE,
     ezeeUserAgent: raw.EZEE_USER_AGENT,
     ezeePollerEnabled: raw.EZEE_POLLER_ENABLED === '1',
+    lifecycleSendEnabled: raw.LIFECYCLE_SEND_ENABLED === '1',
+    lifecycleEpoch:
+      raw.LIFECYCLE_EPOCH === undefined ? undefined : istWallClockToInstant(raw.LIFECYCLE_EPOCH),
+    lifecycleSources: raw.LIFECYCLE_SOURCES.split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0),
+    waTemplateMode: raw.WA_TEMPLATE_MODE,
     opsNumbers: parseOpsNumbers(raw.OPS_NUMBERS),
     staffRoster: parseStaffRoster(raw.STAFF_ROSTER_JSON),
     draftMode: raw.DRAFT_MODE === 'true',
@@ -269,6 +308,10 @@ export function configSummary(config: Config): string {
     `EZEE_AUTH_CODE=${presence(config.ezeeAuthCode)}`,
     `EZEE_USER_AGENT=${config.ezeeUserAgent}`,
     `EZEE_POLLER_ENABLED=${config.ezeePollerEnabled}`,
+    `LIFECYCLE_SEND_ENABLED=${config.lifecycleSendEnabled}`,
+    `LIFECYCLE_EPOCH=${config.lifecycleEpoch?.toISOString() ?? 'unset (nothing will be scheduled)'}`,
+    `LIFECYCLE_SOURCES=${config.lifecycleSources.join('|')}`,
+    `WA_TEMPLATE_MODE=${config.waTemplateMode}`,
     `OPS_NUMBERS=${config.opsNumbers.length} number(s)`,
     `STAFF_ROSTER_JSON=${config.staffRoster.length} member(s)`,
     `DRAFT_MODE=${config.draftMode}`,

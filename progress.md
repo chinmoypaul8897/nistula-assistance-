@@ -4,7 +4,7 @@
 
 ## Status
 
-- **Current chunk pointer:** CH-12 (Lifecycle engine) — next up. **CH-11 (Booking awareness) DONE 2026-07-14 — merged to `main`, tagged `vCH-11`, live demo PASSED.** `pnpm check` green at **998 tests** (763→934 build, →957 pre-push audit, →963 pre-merge review, →977 website audit, →982 OQ-19 fix, →998 close-out audit). The brain now sees a guest's bookings: they link on the first inbound turn, project through `stayView.ts` (the ONE door from a booking row to words), and reach the model as block [5] stays + a block [6] stage. `get_booking` takes ONE argument and verifies a reference claim against the guest's OWN typed words. **🚨 THE HEADLINE FINDING: `bookings_mirror` is a CHANGE FEED, not the property's booking book** — it holds only what eZee's queue happened to contain on 13 Jul, so a real in-house guest whose booking predates the poller is staged a LEAD and gets sold the villa they are standing in. `pnpm ezee:reconcile` (BKG-05 ArrivalList, print-only unless `--apply`) measures the gap and hydrates it. Run in production it found **21 of 144** bookings held — but the SHAPE was the point: **future arrivals 18/18 present (0 missing), recent arrivals 15/18 MISSING.** The poller is not losing bookings; the mirror captures them by when they were CREATED, not when the guest ARRIVES. `--apply` recovered 123. **🚨 THE SECOND FINDING — OQ-19, and it blocks the website launch: a guest cannot book a specific HOUSE. eZee holds 8 houses inside 3 room TYPES, so `InsertBooking` has no field for a house at all; eZee auto-assigns lowest-number-first (bookings 953 AND 957 both landed in Apartment 06), and the website's confirmation page then reads eZee's pick back and prints it. A guest can pay for Apartment 09 and be told on their own receipt they have Apartment 06.** So `physical_room_label` is **eZee's GUESS, not the guest's house**: `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`, the AI speaks the villa TYPE and names no house, and **CH-13's task cards are BLOCKED on the OQ-19 re-model, not on hydration**. (I hydrated the 143 labels and briefly armed the AI with them before OQ-19 was understood — see the retraction and the OQ-19 addendum in the entry.) **Live demo PASSED** (runbook §CH-11): three probes on the test line, plus a real eZee booking created → mirrored → cancelled → mirrored, and the OQ-19 fix proven live (the production DB held "Apartment 06"; the AI still refused to name it). **⚠️ ONE LEG WAS NOT RUN LIVE, and is NOT claimed as passed: the stranger-refusal probe** (a DIFFERENT phone claiming someone else's booking reference → the byte-identical refusal + a strike). Meta test numbers can only message allowlisted recipients, so it needs a second allowlisted number Paul does not currently have. It is covered in CI (all six failure paths return the same constant) and asserted in the DB, but **it has never been exercised over the real WhatsApp path** — the one place a leak would actually land. Carry it into the next live-demo window. **CH-10 (eZee mirror) DONE 2026-07-13 — merged via PR #30, tagged `vCH-10`, CI green on main, LIVE on Railway; a close-out audit then fixed 2 more DEFECTs (PR #32).** `pnpm check` green at **763 tests** (667→752 build, →761 pre-push audit, →763 close-out audit). The poller drained the property's entire un-ACKed backlog in three polls — **62 real items mirrored and ACKed, 0 errors, 0 ops alerts** (22 confirmed stays across Airbnb/Booking.com/makemytrip/go-mmt/Walk-in + 40 cancel tombstones). **Website (Internet Booking Engine) bookings DO reach the queue** — verified end to end on booking `953` (create → mirror → cancel → mirror, dates/amount verbatim); an earlier "they don't" reading was a queue-BATCHING artifact and is retracted. **The pre-push audit's BLOCKER was real and waiting in production:** two genuine multi-room full-cancellations (`877-1/-2/-3`, `894-1/-2/-3`) arrive as suffixed entries with no bare entry. **Env (Railway):** `EZEE_HOTEL_CODE`/`EZEE_AUTH_CODE` + `EZEE_POLLER_ENABLED=1` are SET (byte-exact — a PowerShell BOM corruption was caught by the length check; move secrets with **Node**, never a PS pipe). **The split-brain rule is BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — a dev poller would ACK-consume real bookings the production mirror never sees (runbook §CH-10).
+- **Current chunk pointer:** **CH-13 (Staff tasks).** **CH-12 (Lifecycle engine) DONE 2026-07-16 — merged to `main`, tagged `vCH-12`, LIVE and ARMED.** `pnpm check` green at **1243 tests**. **The system now SPEAKS FIRST** — a booking landing in eZee causes an unprompted WhatsApp to someone who never messaged us. **Live demo PASSED: a real confirmation was SENT and READ on a real phone** (booking 970, the whole real pipeline), and re-dating it moved the pre-arrival's `send_at` — rescheduled, not duplicated. **The gates were proven on PRODUCTION data, not in a test: with `LIFECYCLE_EPOCH` set, the sweep saw 199 pre-epoch mirror rows and scheduled ZERO** — the 123 historical bookings and the 12 real OTA guests, all held. Backlog purged 85→0. **⚠️ `LIFECYCLE_SEND_ENABLED=1` on Railway: merging now auto-deploys a system that speaks.** What makes that safe is the epoch, `LIFECYCLE_SOURCES` direct-only, and the date gate. **`WA_TEMPLATE_MODE` is unset ⇒ `simulate`, so until Meta approves the templates a real website guest who never messaged us gets NOTHING** (defers on a shut window, skipped at 36h) — correct fail-closed behaviour, and `pnpm templates:pack` is the manual step that finishes it. **🚨 THE FINDING THAT MATTERS: the belief that OTA phone numbers are masked, and OTA guests therefore unreachable by accident, is FALSE.** makemytrip and go-mmt mask them; **Airbnb and Booking.com do NOT.** Production holds **12 real OTA guests with real, unmasked numbers** — `LIFECYCLE_SOURCES` is the only thing between them and an unauthorised WhatsApp (OQ-20 🔴). **🚨 NINE ADVERSARIAL REVIEW ROUNDS FOUND 17 BLOCKER-CLASS DEFECTS IN CODE WHOSE SUITE WAS GREEN EVERY TIME — and FIVE were regressions introduced by the previous round's own fix.** The recurring class reached **ELEVEN**, and R8 named its second axis: **a rule may only SKIP (terminal) on a fact that cannot come back; reading a mutable field it must DEFER.** *Guard by the CONTRACT — and choose the verb the contract can survive being wrong about.* R9 returned GREEN, overruling three findings by algebra and deliberately DEFERRING three real ones (poststay's anchor, behind OQ-22) because the obvious fix would have starved every guest's confirmation to save one thank-you — instance 13. Read the CH-12 entry before touching anything. **CH-11 (Booking awareness) DONE 2026-07-14 — merged to `main`, tagged `vCH-11`, live demo PASSED.** **CH-11 (Booking awareness) DONE 2026-07-14 — merged to `main`, tagged `vCH-11`, live demo PASSED.** `pnpm check` green at **998 tests** (763→934 build, →957 pre-push audit, →963 pre-merge review, →977 website audit, →982 OQ-19 fix, →998 close-out audit). The brain now sees a guest's bookings: they link on the first inbound turn, project through `stayView.ts` (the ONE door from a booking row to words), and reach the model as block [5] stays + a block [6] stage. `get_booking` takes ONE argument and verifies a reference claim against the guest's OWN typed words. **🚨 THE HEADLINE FINDING: `bookings_mirror` is a CHANGE FEED, not the property's booking book** — it holds only what eZee's queue happened to contain on 13 Jul, so a real in-house guest whose booking predates the poller is staged a LEAD and gets sold the villa they are standing in. `pnpm ezee:reconcile` (BKG-05 ArrivalList, print-only unless `--apply`) measures the gap and hydrates it. Run in production it found **21 of 144** bookings held — but the SHAPE was the point: **future arrivals 18/18 present (0 missing), recent arrivals 15/18 MISSING.** The poller is not losing bookings; the mirror captures them by when they were CREATED, not when the guest ARRIVES. `--apply` recovered 123. **🚨 THE SECOND FINDING — OQ-19, and it blocks the website launch: a guest cannot book a specific HOUSE. eZee holds 8 houses inside 3 room TYPES, so `InsertBooking` has no field for a house at all; eZee auto-assigns lowest-number-first (bookings 953 AND 957 both landed in Apartment 06), and the website's confirmation page then reads eZee's pick back and prints it. A guest can pay for Apartment 09 and be told on their own receipt they have Apartment 06.** So `physical_room_label` is **eZee's GUESS, not the guest's house**: `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`, the AI speaks the villa TYPE and names no house, and **CH-13's task cards are BLOCKED on the OQ-19 re-model, not on hydration**. (I hydrated the 143 labels and briefly armed the AI with them before OQ-19 was understood — see the retraction and the OQ-19 addendum in the entry.) **Live demo PASSED** (runbook §CH-11): three probes on the test line, plus a real eZee booking created → mirrored → cancelled → mirrored, and the OQ-19 fix proven live (the production DB held "Apartment 06"; the AI still refused to name it). **⚠️ ONE LEG WAS NOT RUN LIVE, and is NOT claimed as passed: the stranger-refusal probe** (a DIFFERENT phone claiming someone else's booking reference → the byte-identical refusal + a strike). Meta test numbers can only message allowlisted recipients, so it needs a second allowlisted number Paul does not currently have. It is covered in CI (all six failure paths return the same constant) and asserted in the DB, but **it has never been exercised over the real WhatsApp path** — the one place a leak would actually land. Carry it into the next live-demo window. **CH-10 (eZee mirror) DONE 2026-07-13 — merged via PR #30, tagged `vCH-10`, CI green on main, LIVE on Railway; a close-out audit then fixed 2 more DEFECTs (PR #32).** `pnpm check` green at **763 tests** (667→752 build, →761 pre-push audit, →763 close-out audit). The poller drained the property's entire un-ACKed backlog in three polls — **62 real items mirrored and ACKed, 0 errors, 0 ops alerts** (22 confirmed stays across Airbnb/Booking.com/makemytrip/go-mmt/Walk-in + 40 cancel tombstones). **Website (Internet Booking Engine) bookings DO reach the queue** — verified end to end on booking `953` (create → mirror → cancel → mirror, dates/amount verbatim); an earlier "they don't" reading was a queue-BATCHING artifact and is retracted. **The pre-push audit's BLOCKER was real and waiting in production:** two genuine multi-room full-cancellations (`877-1/-2/-3`, `894-1/-2/-3`) arrive as suffixed entries with no bare entry. **Env (Railway):** `EZEE_HOTEL_CODE`/`EZEE_AUTH_CODE` + `EZEE_POLLER_ENABLED=1` are SET (byte-exact — a PowerShell BOM corruption was caught by the length check; move secrets with **Node**, never a PS pipe). **The split-brain rule is BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — a dev poller would ACK-consume real bookings the production mirror never sees (runbook §CH-10).
 - **🚨 CH-12 HARD PRECONDITION (do this FIRST, before mounting any `booking.*` worker):** production's `pgboss.job` holds **~70 un-consumed `booking.*` jobs and the number GROWS EVERY DAY the poller runs — do NOT trust a figure written here; MEASURE it when CH-12 starts.** (62 at CH-10's close-out → 67 → 70 on 2026-07-14.) — **25 `booking.created` + 42 `booking.cancelled`**, measured 2026-07-14. (Was 62 at CH-10's close-out; the poller kept running and mirrored more. **The CH-11 `--apply` reconcile added 123 mirror rows and left the count at exactly 67** — the "hydration emits no events" invariant, verified in production, not just in tests.) The moment CH-12 registers workers on those queues they ALL fire — which would schedule confirmation/pre-arrival messages for bookings that are months old or already cancelled. **CH-12 must purge or date-filter the pre-existing jobs before its workers go live** (`DELETE FROM pgboss.job WHERE name LIKE 'booking.%' AND state='created'`, or gate the handler on `check_in >= today`). **🚨 AND PURGING THE JOBS IS NOT SUFFICIENT — CH-11's reconcile added 123 HISTORICAL bookings to `bookings_mirror` (arrivals going back months).** The mirror — not the event stream — is CH-12's source of truth (§3.4); the events are only wake-ups. So CH-12's **hourly sweep reads those 123 rows straight out of the mirror and re-creates the work you just deleted**: a purge alone would be undone within the hour, and guests whose stay ended in March would get a pre-arrival message. **The date gate on BOTH the handler and the sweep (`check_in >= today`) is therefore mandatory, not an optimisation** — it is the only defence that survives the sweep. **CH-09 (Long-term memory) DONE 2026-07-13 — merged via PR #27 (`eecbe35`), tagged `vCH-09`, CI green on main, live demo PASSED on the test line** (deployed branch saved two real facts — early-check-in preference + a 21 Aug anniversary; recall worked; the diabetic probe stored NOTHING, `sensitive_rows: 0` verified in the production DB; `guest prefs updated langPref="en"` in prod logs is the CH-09 detection fingerprint; close-out addendum in the entry). `pnpm check` green at **667 tests** (492→630 build, →667 after the pre-push audit fixes — a 24-agent workflow whose 6 serious findings, incl. a money BLOCKER in the entitlement screen, were ALL confirmed and ALL fixed; see the audit addendum). The brain now has §6.4 long-term memory: `remember_fact` saves durable guest facts into `guest_facts` (migration 0004) behind DETERMINISTIC save-time screens (sensitive / instruction-shaped / entitlement — code-side per the CH-07 red-team principle, Paul-approved; any ₹ figure inside a fact is refused outright), naive dedupe and a 50-cap eviction (expired → context → preference → celebration → past_issue, oldest first); block [5] GUEST CONTEXT is the FULL profile (name + register/lang prefs + newest 15 facts grouped by salience, DATA + non-evidence framed, framing in the leak-scan corpus, `remember_fact` a tripwire); cheap post-turn heuristics are the FIRST writers of `guests.register_pref`/`lang_pref`; memory PROMISES ("I've made a note") need a real successful save — the new guardrail-2 class **C4**, the first `TOOL_CLAIMS` registration, licensing C4 ONLY; and the repo's first admin surface `POST /admin/guest-lookup` (phone in the BODY, timing-safe bearer, counted `admin_auth_failed` alerts) mounts only when `ADMIN_ROUTES_ENABLED=1`, with a boot guard refusing the flag without a ≥16-char token. **Local real-model demo PASSED end to end** (fact saved with message provenance + a warm in-voice reply — after two demo-found fixes, see the entry; recall probe answered from memory; the diabetic probe REFUSED with zero rows and an honest no-store reply; admin 401/200; a live register_pref flip). **CH-08 (Short-term memory) BUILT 2026-07-12** on `chunk/CH-08-short-term-memory` — `pnpm check` green at **492 tests** (453→492) after the Paul-requested 27-agent post-build audit (5 lenses + skeptics + critic — all confirmed findings fixed pre-merge; see the audit addendum). The brain now has §6.3 short-term memory: a token-budgeted transcript window (≤30 msgs / ~6k tokens NET of the summary block), block [5]-lite GUEST CONTEXT + the `[EARLIER CONTEXT]` rolling summary (both untrusted-DATA framed, non-evidence for guardrail 2), a nightly 04:00 IST summariser (idle >6h, >20 unsummarised → `MODEL_ID_LIGHT ?? MODEL_ID`, append-compacted under an advance-once CAS) plus the on-demand overflow path with hysteresis, and the CH-06/07 forward pointer closed (`knowledge` threaded through `TurnDeps` — the loadKnowledge() singleton is gone from the turn path). Guardrail-2 evidence got its own indexed query (fixes the CH-07 burst-horizon gap, Paul-approved). **Local 40-message demo PASSED with the real model** (summary carried "tenth wedding anniversary"; the probe recalled it from OUTSIDE the live window). **Merged via PR #24 (`a7d6327`), tagged `vCH-08`, auto-deploy verified (/health uptime reset), and the light live probe PASSED on the test line (Paul, 2026-07-12) — Definition of done fully met.** **CH-07 (Policy engine + full guardrails) DONE** on `chunk/CH-07-policy-guardrails` — `pnpm check` green at **441 tests** (289→441). §6.7 is now deterministic CODE (`brain/policy.ts`: human-request skip-model, complaint must-escalate, the §3.3 cool-off with an id-keyed rate window, caption-aware media fallback, human-active silence), and the §6.5 pipeline is COMPLETE: guardrails 2 (class-based promise integrity — completed-action/dispatch claims need real evidence; a team-referral ESCALATES to make itself true), 4 (24h window derived from the newest batch message — the conversation column is stale pre-claim), 5 (strict full-line identity), 6 (length/format clamps) and 7 (leak scan over the instruction blocks — NOT the KB — plus phone/id patterns) joined 1+3, with every hit persisted to `raw_events` (`source='system'`, Paul-approved §4 deviation; full draft + guestPhone in the payload, `processed=true`). Three latent bugs found and fixed on the way: a LIVE money hole (`₹1.4 lakh` extracted as `1` and matched loose backed integers — a fabricated lakh price would have been sent), the stale-window operand that would block every returning guest once sends were gated, and captioned media being told "mind typing it?". The interim ops escalation now writes claimable `contextKind:'ops_escalation'` evidence rows (the CH-13 convention) and fires BEFORE guest dispatch. Local signed-POST demo verified end to end (human request → exact phrasebook line + evidence row + policy telemetry). A four-agent **post-build audit** (Paul-requested) then attacked every decision against the committed code — 7 fixes landed (see the audit addendum in the CH-07 entry), `pnpm check` green at **453 tests**. **Live three-probe demo PASSED against the deployed CH-07 build (2026-07-12) — Definition of done fully met** (deploy + demo details in the entry's post-deploy addendum). **CH-06 (Knowledge base) DONE** on `chunk/CH-06-knowledge-base` — `pnpm check` green at **289 tests**; `pnpm kb:build` compiles `kb/villas.md`/`policies.md`/`faq.md` from curated `kb/source/*` (+ the RoomTypeList occupancy snapshot), block **[3] KNOWLEDGE now ships inside the cached prompt head** (~**2573 tokens**, budget 6000, version `cb4f0950`), and the guardrail-1 fee exemption is wired — **context-BOUND**: each published fee carries the fee terms of its own sentence, so "an extra adult is ₹1,500" may be sent with no tool call while "Villa B3 is ₹1,500 per night" is still BLOCKED (§6.5's second clause). The AI now answers villa/policy/FAQ questions from the KB; stay prices still come only from `get_quote`. Quirks ship as a template + **labelled placeholder** B3/Apartment-11 notes (real villa-team content = OQ-01, final content pass). **A 7-lens adversarial review ran pre-push and found a real money-guardrail hole (a flat `number[]` whitelist let a fabricated nightly rate through) plus two invented KB claims — all fixed before merge; see the review addendum in the CH-06 entry.** **Paul's live phone demo PASSED (2026-07-12) — Definition of done fully met.** **CH-05 (Price tools) DONE** on `chunk/CH-05-price-tools` — `pnpm check` green at **260 tests**; the brain now has `get_quote`/`get_availability`/`get_booking_link` behind a ≤5-round tool loop, price-integrity + negotiation guardrails, and degraded-mode; the live `/api/quote` shape was cross-checked against the vercel preview (EXACT match, incl. the live `available:false`-on-200 case) and `WEBSITE_BASE_URL` is now boot-required (dev value in local `.env`). Remaining acceptance: Paul's live phone demo (price question → exact preview quote) as the post-merge confirmation. **CH-04 (Brain v1 — voice) DONE — merged to `main` (merge commit `901c04e`, PR #9, CI green Node 22 + 24), tagged `vCH-04`, and deployed live to the test service (`/health` ok).** `pnpm check` green at 188 tests; a live Anthropic integration smoke passed (voice on-target, price deferred with no invented ₹, static prompt head caches — 1655 tokens written on msg 1, read back on msg 2). The service now REPLIES in Nistula's voice instead of echoing; no tools yet, so every factual/price/availability question is deferred (correct until CH-05). **`ANTHROPIC_API_KEY` is required at boot from CH-04** (set in local `.env` + Railway, live-validated). **Remaining acceptance: Paul's live 10-message phone demo on the test line as the post-merge confirmation** (runbook has the red-team probe). CH-00/CH-00b/CH-01/CH-02/CH-03 also merged and tagged (`vCH-00`…`vCH-03`).
 - **LIVE on Railway (2026-07-10):** service `nistula-assistance-` (trailing hyphen is the real service name) at **`https://nistula-assistance-production.up.railway.app`**, `/health` healthcheck gate via committed `railway.json`. Meta webhook wired end-to-end: callback verified, `messages` field subscribed, and the **WABA-level `subscribed_apps` link created via API** (the dashboard never creates it — see CH-02 entry). Live round trip proven: guest message → DB → `sendText` reply → phone; statuses walked the rank lattice; dedupe replay was a no-op. **Auto-deploy from main: ON and PROVEN (2026-07-11, Paul-authorized, done via CLI):** the repo had simply been DISCONNECTED from the service (research vs Railway docs: `railway up` never pauses triggers; old deployments' branch metadata is "from the last build, not proof of active connection"). Reconnected with `railway service source connect --repo chinmoypaul8897/nistula-assistance- --branch main --service nistula-assistance-` — connecting immediately auto-built and shipped main head (`eec8b0f`) to SUCCESS, which IS the live verification; every merge to main now ships itself behind the `/health` gate, no more post-merge `railway up`. Railway CLI service link persisted in-repo 2026-07-11 (`railway service` — without it, service-less CLI calls hang on an interactive picker). Stray project `fantastic-motivation`: DELETED via `railway delete` 2026-07-11 (Paul-authorized); Railway grants a 48h grace window (`deletedAt: 2026-07-13`) so it lingers in project lists until then — nothing left to do.
 - **Env values (2026-07-11):** local `.env` holds `NODE_ENV=development`, `PORT=3100` (3000 is owned by another local project), `DATABASE_URL` → local docker Postgres, all four WA values + `ANTHROPIC_API_KEY`. Railway service variables hold the four WA values + `NODE_ENV=production` + `TZ` + `ANTHROPIC_API_KEY` (set via the CH-02 stdin-script pattern — values never transit chat/shell history; token rotation reuses it; the key travelled clipboard → in-process script → both stores, validated 200 against `GET https://api.anthropic.com/v1/models`, Railway value VERIFIED, clipboard cleared, script deleted). `WA_VERIFY_TOKEN` ROTATED 2026-07-10 after Meta's handshake wrote it into pre-fix request logs (logging fixed same session; Meta still holds the OLD token and only needs the new one at the next webhook-config edit — paste from `.env` then). Test number `+1 555-179-8672`; WABA ID `1377084767847948`. **CH-09 addition (local `.env` ONLY):** `ADMIN_ROUTES_ENABLED=1` + a generated `ADMIN_BEARER_TOKEN` for dev poking — Railway does NOT carry them; production admin stays disabled unless actively debugging (runbook §CH-09).
@@ -48,7 +48,7 @@
 | CH-09 | Long-term memory | ✅ DONE 2026-07-13 (PR #27, vCH-09; audit + live demo passed) | [↓](#ch-09--long-term-memory-guest-facts--profile-block--built-2026-07-12) |
 | CH-10 | eZee mirror | ✅ DONE 2026-07-13 (audit + live run: 62 real items mirrored) | [↓](#ch-10--ezee-mirror-poller--normalisation--built-2026-07-13) |
 | CH-11 | Booking awareness | ✅ DONE 2026-07-14 — merged, tagged `vCH-11` (998 tests; live demo PASSED; §5.4 **INVERTED** — the AI names NO house at all, see 🚨 OQ-19) | [↓](#ch-11--booking-awareness-the-guest--booking-bridge--built-2026-07-13) |
-| CH-12 | Lifecycle engine | ⬜ pending | |
+| CH-12 | Lifecycle engine | ✅ DONE 2026-07-16 · `vCH-12` (1243 tests; **9 review rounds, 17 blockers**, 5 of them regressions from the previous fix; live demo PASSED — a real confirmation sent + read) | [↓](#ch-12--lifecycle-engine-scheduler--templates--window-aware-sender--done-2026-07-16) |
 | CH-13 | Staff tasks | ⬜ pending | |
 | CH-14a | Takeover + escalation SLA | ⬜ pending | |
 | CH-14b | Night queue + digest | ⬜ pending | |
@@ -842,6 +842,281 @@ Paul asked for a full checkup before closing the session: "is it all BUILT prope
 **Recorded, NOT fixed (deliberate):** `bookings_mirror.raw` keeps real guests' `Address`/`City`/`State`/`Zipcode`/`Gender` (only card + identity-document fields are stripped) and `bookings_mirror` is **absent from CH-18's DELETE_GUEST list** — an erasure gap CH-18 must close · a malformed `amount` from eZee would fail the numeric column and become an un-ACKable poison pill (no validation today; would alert and retry forever) · true-partial cancels, and full cancels split across two polls, are ACKed but never flipped (alert-only; dormant until CH-12) · `turn.ts`/`worker.ts` and now `poller.ts` breach the ~300-line soft cap · commit `c6598d3` (a one-line CLAUDE.md fix) was pushed **directly to main without a PR** — a §3.6 deviation, recorded rather than hidden · the `vCH-10` tag predates the IBE correction, so `git show vCH-10:progress.md` still yields the retracted claim (main is correct; the tag is a snapshot).
 
 **Trap for future sessions:** **never run two `vitest` processes at once** — the DB suites share one `nistula_test` database and TRUNCATE each other's tables, producing ~30 phantom failures across unrelated files. If the suite fails locally but CI is green, suspect this first.
+
+---
+
+### CH-12 · Lifecycle engine (scheduler + templates + window-aware sender) — DONE 2026-07-16
+
+> **STATUS: BUILT, NOT DONE.** `pnpm check` green at **1205 tests** (1175 at build → 1205 after the
+> review). **Outstanding: the production backlog purge and the live demo.** Nothing has been
+> deployed and no message has been sent to anybody.
+
+**Built:**
+- **`src/lifecycle/gates.ts`** — the four fail-closed gates every booking must pass before a single
+  row is scheduled: **epoch** (`created_at >= LIFECYCLE_EPOCH`), **date** (`check_in >= today` IST),
+  **status** (`confirmed|modified`, an allowlist), **source** (`LIFECYCLE_SOURCES`, direct-only by
+  default), plus a phone check. Pure predicates — no DB, no clock, exhaustively table-tested.
+- **`src/lifecycle/templates.ts`** — 6 guest + 4 staff templates. **The Meta approval body is
+  GENERATED from the same `render()` the sender uses** (`pnpm templates:pack`), so the approved
+  template and the message actually sent cannot drift apart.
+- **`src/lifecycle/scheduler.ts`** — `planSends()` (the §2.3 timing matrix, pure) + the `booking.*`
+  handlers. Idempotent upsert on `dedupe_key`; a modify RESCHEDULES a pending row, never duplicates.
+- **`src/lifecycle/sender.ts`** — minutely, window-aware, transactional claim.
+- **`src/lifecycle/reconcile.ts`** — the hourly sweep, gated in SQL as well as in code.
+- **`src/wa/client.ts`** (+ `templateSend.ts`, `sendFailure.ts`, split for the ~300-line rule) —
+  **the `TODO(CH-12)` that had stood since CH-02 is closed.** The 24h window is enforced at the
+  chokepoint for every free-form send — guests *and* staff/ops, whose window lives in the new
+  `phone_windows` table, written on every inbound from **Meta's own timestamp** (not our receipt
+  time, or a redelivered old webhook would re-open a window Meta had already closed).
+- Migration `0007` (`scheduled_messages`, `phone_windows`), 4 new env vars, 3 workers, 2 crons.
+
+**🚨 The production measurement that shaped the chunk (2026-07-14).** The record said
+“measure the backlog, never trust a number written here”. It was right, and twice over:
+- The `booking.*` backlog was **83** (50 cancelled + 33 created), not ~70.
+- **The “123 historical bookings” scare is real but largely self-neutralising, for a reason
+  nobody had written down:** CH-11's reconcile hydrated them via `FetchSingleBooking`, which returns
+  `checked_out`. The mirror holds **124 `checked_out` + 50 `cancelled` + 24 `confirmed`** and **zero
+  `modified`**. Rows that are live-status AND historical: **2**, not 123. The status gate does most
+  of that work; the date gate remains the belt.
+- **AND THE ONE THAT MATTERS — 12 real OTA guests with UNMASKED phone numbers.** Of the 22
+  live-status bookings arriving today or later: **Airbnb 8 (8 with phones)**, **Booking.com 4 (4 with
+  phones)**, makemytrip 6 (0 — masked), Walk-in 3 (1), go-mmt 1 (0 — masked). **The comfortable
+  belief that OTA numbers are masked and therefore harmless is FALSE.** Without the source gate, the
+  first thing this system does in the world is WhatsApp twelve people nobody authorised us to message.
+- Every mirror row was created on 13–14 Jul, **134 of them on the cutover day itself** — which
+  is why `LIFECYCLE_EPOCH` must be an **instant**, not a date.
+
+**Decisions made while building (Paul-approved before the build):**
+- **The four gates**, instead of the plan's single date filter.
+- **`LIFECYCLE_SEND_ENABLED=0` by default.** Merging this chunk must not, by itself, start messaging
+  people: rows accrue as `pending` and a human flips the switch.
+- **Win-back consent is checked at SEND time, not schedule time.** It is captured by CH-15's post-stay
+  thank-you ~74 days AFTER the booking is scheduled, so a schedule-time gate would mean the win-back
+  could never fire for anyone, ever.
+- **The hourly sweep calls the scheduler directly** rather than re-emitting `booking.*` events. Same
+  effect (the handler is idempotent), and it avoids inventing phantom jobs in the very queue this
+  chunk has a hard precondition to keep clean.
+- **`scheduled_messages.skip_reason`** — one column beyond §4: a skipped row that cannot say why
+  is unauditable.
+- **`docs/product-picture.md` S2 and S6 amended, visibly.** S6's win-back “names the villa” —
+  it may not (OQ-19); it names the TYPE. S2's pre-arrival promised a “map pin, host contact” —
+  neither exists (OQ-12); it now asks for the arrival time and promises a human sends the pin, which
+  is exactly what `kb/faq.md` already promises. plan.md §2.4 corrected to match.
+
+**🚨 A 5-LENS ADVERSARIAL REVIEW FOUND 8 BLOCKER-CLASS DEFECTS. THE SUITE WAS GREEN THROUGH
+EVERY ONE.** All fixed, each pinned by a test:
+1. **The recurring failure class, seventh instance.** The sender re-used the **scheduling** allowlist
+   (`confirmed|modified`) at **send** time. So the moment a stay advanced to `checked_in` /
+   `checked_out` — *which is what happens to every stay that actually occurs* — the welcome,
+   thank-you and win-back were killed, **permanently** (a resolved row can never be rescheduled). I
+   had written a careful comment explaining why re-applying the DATE gate would destroy post-stay
+   messages, and then destroyed them with the STATUS gate. **A rule written from an ENUM instead of
+   the CONTRACT it stands in for.** The send-time question is *“is this still a booking?”*, not
+   *“would we schedule it today?”*.
+2. **Wrong recipient.** `guest_id` was not in the dedupe upsert's `SET`, so a phone correction in eZee
+   (`guest_phone` is in `MIRROR_DIFF_FIELDS`) left the rows pinned to the FIRST guest row: the
+   booking's name, villa, dates and reference would go to a number no longer on the booking, and the
+   real guest would get **nothing, silently, for ever**.
+3. **Gates never revoked.** A booking re-sourced to `Airbnb` after scheduling kept its five rows and
+   sent them. Skipping the new schedule was never enough — the old one had to die.
+4. **Transient faults were terminal.** A Meta 429 or a DB wobble burned the message for ever.
+   **`pending` IS the retry state**: transient → defer (backed off), terminal → resolve.
+5. **“The team has been informed” when it hadn't.** `escalateToOps` discarded the `SendResult`
+   and wrote the guardrail-2 evidence row regardless. CH-12's window enforcement made that failure
+   *certain* (`phone_windows` is empty on deploy), so every escalation would have been refused while
+   every guest was told a human was coming. Evidence now requires a delivery. **Carve-out kept: with
+   NO ops number configured the alert log IS the ops channel (D4)** — “nobody is configured”
+   and “everybody unreachable” are different facts, and only the second makes the promise a lie.
+6. **The welcome offered “a late breakfast”.** The tariff is accommodation-only, the meal plan
+   is an opaque code (OQ-16), and no breakfast fee is published — guardrail 1 would have blocked
+   the AI from even pricing it if the guest said yes.
+7. **`human_active_until` was ignored** — the one chunk that speaks first was the one chunk
+   ignoring the human-takeover pause.
+8. **Simulate mode wedged the sender.** Undeliverable rows are permanently the OLDEST, so 25 of them
+   starved every newer message while alerting once a minute each.
+
+Also fixed: params now refuse ₹ figures, house names and URLs **in the SLOT, not just the
+sentence** (the body-level tests scan the `{{1}}` skeleton and could never have caught a poisoned
+param); nothing lands at 3 am; “Nistula 4BHK Siolim in Siolim” reads properly; SHOUTING OTA
+names are title-cased and eZee's “Walk in guest” placeholder is refused.
+
+
+#### Rounds 2–9: eight more reviews, seven more blockers — the class reached ELEVEN, then GREEN (2026-07-16)
+
+The 8 above were round 1. Six further rounds followed, each on the code the previous round had
+just "fixed". **Every round found something, and four of the six found a regression the previous
+round's fix had introduced.** That is the headline, not the count: *the fixes were the danger.*
+
+- **R2 — the 8th instance.** Fixing (1) above by re-reading the mirror at send time, I then wrote
+  the REVOCATION check against the same scheduling gate — so a `checked_in` booking had its whole
+  schedule frozen. Reproduced live.
+- **R3.** `isRetryable` was an ALLOWLIST of transient Meta codes, so an unlisted code (e.g. 4,
+  rate-limit) counted as permanent and burned the message. Inverted to a permanent DENYLIST that
+  defaults to retry: we cannot enumerate every transient failure, but we CAN enumerate the handful
+  that are certainly final. **The safe default is the one that keeps the guest's message alive.**
+- **R4/R5 — the 9th instance.** Revocation is IRREVERSIBLE, so it may only fire on a fact that
+  cannot come back. It was reading mutable, human-edited fields (source, phone), so a front-desk
+  typo destroyed a real guest's lifecycle permanently. Only `cancelled`/`no_show` may revoke;
+  everything mutable DEFERS, which is reversible.
+- **R6.** `planSends` took `now` and rewrote `send_at` on every re-plan — and the hourly sweep
+  re-plans everything. So the staleness clock was reset to zero for ever and the 36h guard could
+  NEVER fire: a guest opening their window days later would receive their confirmation,
+  pre-arrival and welcome together, narrating a Sunday that was last week. Two comments in the
+  file already asserted the instant was immutable. Every instant now derives from an immutable
+  fact of the booking.
+- **R7 — the TENTH instance, introduced by R6's own fix.** R6 was right, and then judged EVERY
+  kind by that one plan-age clock. `send_at` measures a message's truth only for a body whose
+  planned moment IS the event it narrates. **The pre-arrival's is anchored three days BEFORE the
+  arrival it talks about**, so a booking made inside that window was BORN 50h "stale" and skipped
+  on the first tick — terminally. **Every booking made after (check-in −2d) 22:00 IST silently
+  lost the one message that asks for an arrival time and promises the pin.** plan.md §8 mandates
+  the opposite in as many words ("send now instead"); runbook.md names this exact outcome as the
+  thing to avoid; and R6's own commit message claimed it still sent.
+
+  **The proxy was wrong in BOTH directions** — the tell that it was a proxy at all. It skipped
+  messages that were still true AND sent ones already false: *"we are looking forward to welcoming
+  you on Friday"* to a guest who arrived six days ago, *"your villa is ready for you today"* on day
+  three of the stay. Both now fail against the old code.
+
+- **R8 — the ELEVENTH instance, inside R7's OWN new rule set.** The TRUTH map asked the right
+  question and then chose the wrong VERB: prearrival/welcome **SKIPPED** (terminal) on `check_in` —
+  mutable, edited by the front desk, and a `MIRROR_DIFF_FIELD`, so any poll delivering a different
+  value emits `booking.modified`. R6's maintenance branch re-plans on that event and drags both
+  rows' `send_at` into the past; the sender picks them up on the next minutely tick and resolves
+  both TERMINALLY. `check_out` is untouched, so the stay-over backstop cannot fire. **When the desk
+  corrects the date minutes later, the correcting event is a TOTAL NO-OP** — the upsert only touches
+  `pending`. **An arrival date mistyped for ONE MINUTE permanently and silently cost the guest their
+  pre-arrival and welcome.** Reproduced against the real event path (`{attempted:3, sent:1,
+  skipped:2}`, with poststay/winback surviving off the untouched `check_out` as the control).
+  It was the NINTH instance's exact shape, it contradicted the doctrine paragraph written three
+  lines above it, and it was inconsistent with the source/phone guards fifteen lines below — which
+  DEFER for precisely this reason and say so. Fixed: TRUTH returns a **verdict** as well as a
+  reason; `check_in` DEFERS (reversible), and the terminal bound is `stay_over` on `check_out` —
+  the fact that cannot come back — which already ran above it.
+
+**THE RULE, restated because eleven instances is not bad luck — and it has TWO axes.** *Guard by the
+CONTRACT, never by the ENUM, the LIST, the CLOCK, or a MUTABLE FIELD.*
+1. **The QUESTION.** What does this predicate actually answer, and does its implementation answer
+   THAT — or a proxy that merely coincides today? (Instances 1–10.)
+2. **The VERB — the axis R8 added, and the one that had already produced the 9th instance without
+   anyone naming it.** Skipping is TERMINAL: a resolved row is NEVER rescheduled. So a rule may only
+   SKIP on **a fact that cannot come back**. Reading a mutable field, it must **DEFER** — which is
+   reversible. *Choose the verb the contract can survive being wrong about.*
+
+Staleness is now stated per kind as the claim each body makes (`TRUTH` in `sendGuards.ts`), each
+rule carrying its own verdict, and it sits beside the sentence it governs — `templates.ts` says:
+edit a claim, edit its expiry.
+
+**R9 — GREEN, and it earned the word.** Three lenses, every blocker/major refuted three ways, a
+final judge at max effort. Six findings survived refutation and the judge **overruled three of them
+by algebra rather than by vote**: they alleged the 11th instance had merely been relocated onto
+`check_out` (also mutable), but `stay_over` can only fire wrongly on an **inverted stay** —
+departing before arriving — which no eZee form can express. On any coherent stay, `check_out < today`
+plus `check_out >= check_in` gives `check_in < today`, where TRUTH already defers and `stay_over` is
+the ONLY thing that can resolve those rows. It fires exactly when the stay is genuinely wholly past.
+
+**The other three are REAL, reachable, and deliberately deferred** — `poststay`'s terminal bound is
+plan-age, but its instant derives from mutable `check_out`, so a >7d-backwards typo, corrected too
+late, costs the thank-you for ever. Deferred because it fails toward SILENCE, breaches no
+non-negotiable, sits entirely behind **OQ-22** (zero `modified` rows have EVER been observed), and
+costs the least consequential of the five bodies. Logged there and as `TODO(CH-17)`.
+
+**🚨 AND THE JUDGE CAUGHT THE TRAP IN THE OBVIOUS FIX — record it, because it would have been
+instance 13.** Flipping `poststay`/`stay_over` to defer looks like the consistent move. It is not:
+`poststay` sits deliberately OUTSIDE `PRE_STAY_KINDS`, so it has **no `stay_over` backstop**, and the
+sender selects `ORDER BY send_at LIMIT 10` — a permanently-deferring row is permanently the OLDEST,
+so a handful would own every batch for ever and **starve every new guest's confirmation**. That
+trades one lost thank-you for harm to EVERY guest. The bound must be **re-anchored on the immutable
+`row.createdAt`**, never removed. *Five of eight rounds introduced the next instance via exactly this
+kind of hot fix under merge pressure; the ninth round's best decision was the fix it refused to make.*
+
+**🚨 AND THE SUITE ITSELF WAS LYING.** R7's second finding: `blockedBy` fell back to the wall
+clock, so the guest-quiet window (22:00–08:00 IST) deferred every non-confirmation send — **`main`
+would have been red ten hours a night**, and the 1235-green that cleared R6 was partly an artifact
+of running at 18:17. The sender now takes ONE injectable clock for the whole tick (the due query
+and the human-active check read it too) and every lifecycle suite pins a fixed civil instant with
+its fixtures derived from it. Verified green at 02:00 and 23:30 IST.
+
+**Why they all shipped green — the lesson worth more than the fixes.** R6 deleted the very test
+that proved the last-minute pre-arrival sends (`'…sends its pre-arrival now, not in the past'`) and
+replaced it with one asserting `sendAt < NOW` — **DUE-ness, not outcome**. Due, yes; sent, no. The
+fixture sat at 31.5h, just under the 36h line. **A test that asserts a precondition instead of the
+outcome will pass through the bug it was written to catch.** The restored proof asserts `'sent'`
+and drives `handleBookingEvent`, the real event path.
+
+
+**Observed reality:**
+- **The dev test number CANNOT prove the closed-window path.** In `simulate` mode a “template”
+  is physically a free-form text, so Meta blocks it exactly like any other. Those rows are left
+  **pending** (not failed) and go out the moment the guest writes. Only the real WABA, with approved
+  templates and `WA_TEMPLATE_MODE=send`, exercises it. **Do not claim that path is proven.**
+- The guest's **AI reply still goes silent on a closed window**, and always will: there is no template
+  for an arbitrary conversational reply, and there never can be. CH-12 did not fix that and could
+  not. What it fixed is that *lifecycle* messages, which do have templates, can reach a shut window.
+- **CH-07's ops escalation now fails if an ops number has been quiet for 24h** — the same outcome
+  Meta's 131047 already produced, but local and labelled. The runbook's old mitigation (“every
+  staff number messages the line once”) **buys 24 hours, not for ever.** TODO(CH-13/14): move
+  staff sends onto `sendTemplated` + `nst_escalation_card`, which reaches a shut window.
+
+**Deviations from plan.md:** the four gates (vs one date filter) · send-time win-back consent ·
+the sweep calls the scheduler rather than re-emitting events · the `skip_reason` column ·
+`gates.ts`, `reconcile.ts`, `db/windows.ts`, `wa/templateSend.ts`, `wa/sendFailure.ts` beyond the
+§3.2 layout · product-picture S2/S6 amended. All approved or recorded above.
+
+**🚨 One more, and R7 caught it as an unrecorded §0 breach — "do not improvise" applies to a guard
+you DELETE as much as one you add.** §8 step 3 mandates *"no prearrival if booking already <3d out
+(**send now instead**)"*. **There is no `<3d` branch in the scheduler, deliberately.** The
+pre-arrival is scheduled at its TRUE planned instant even when that instant is already past;
+the sender's due query is `send_at <= now`, so it is due immediately and **sends now** — the
+outcome the plan asks for, reached by a better road. The plan's mechanism (collapse the instant to
+`now`) is what R6 proved destroys the staleness clock, since the sweep rewrites `send_at` on every
+re-plan. **The outcome matches the mandate; the mechanism does not. A reader looking for the `<3d`
+guard will not find one — it lives as `TRUTH.prearrival` ("true until the guest arrives") plus an
+immutable instant.** Also beyond the plan: `POSTSTAY_GRACE_HOURS` (7d) and the guest-quiet window
+(22:00–08:00, deliberately NOT the STAFF `NIGHT_START/NIGHT_END`, which would have deferred the
+§2.3 09:00 welcome).
+
+**Open questions:** **OQ-20** (may we WhatsApp OTA guests at all — 🔴, with 12 real people
+behind it) · **OQ-21** (is every eZee booking a real guest, or are some maintenance blocks?) ·
+**OQ-22** (do amendments ever reach the feed? we have never seen one) · **OQ-23** (who sends the
+location pin the pre-arrival now promises every arriving guest?). All four sit behind fail-closed
+defaults.
+
+**How to verify:** `pnpm check` (**1243 tests**) · `pnpm templates:pack` prints the Meta approval pack
+· `SELECT kind, status, skip_reason, send_at FROM scheduled_messages ORDER BY send_at;` shows what
+is queued, what was refused, and why.
+
+#### The live cutover (2026-07-16) — all three preconditions DONE
+
+1. **Backlog purged: 85 → 0.** Measured immediately before (it does grow daily — 62 → 67 → 83 → 85
+   across four measurements, which is why the number in any document is worthless and only a fresh
+   `SELECT` counts).
+2. **`LIFECYCLE_EPOCH` set on Railway** = `2026-07-16T11:33` (IST wall clock), via **Node, never a
+   PowerShell pipe**.
+3. **THE GATES PROVEN ON PRODUCTION DATA, not in a test:** with the epoch set, the hourly sweep saw
+   **199 pre-epoch mirror rows and scheduled ZERO**. That is the 123 historical bookings AND the 12
+   real OTA guests with unmasked numbers, all held back by the gates, in the live system.
+4. **Live demo PASSED — a real confirmation reached a real phone.** Booking 970 (a genuine eZee
+   booking on Paul's own number): created → mirrored ≤60s → **confirmation SENT and READ on the
+   handset**, through the entire real pipeline (no test seam). Re-dating it moved the pre-arrival's
+   `send_at` — **rescheduled, not duplicated** — as designed.
+
+**⚠️ The one leg NOT proven live: the cancel.** Paul cancelled booking 969, but eZee's queue is
+BATCHED and had not pushed the cancellation before the demo closed. The path is covered by tests
+(`booking.cancelled` → all pending rows → `cancelled`) and by the sender's independent mirror
+re-read at send time (a booking cancelled without any event reaching us is still refused —
+`booking_cancelled`, tested). **A poll against a backlogged eZee queue proves nothing** (the CH-10
+lesson), so this is recorded as covered-by-test-and-by-defence-in-depth, NOT as demonstrated live.
+
+**⚠️ AND THE THING THAT IS ARMED.** `LIFECYCLE_SEND_ENABLED=1` on Railway, so **merging to `main`
+auto-deploys a system that speaks first.** What makes that safe is the epoch (nothing before
+2026-07-16T11:33 qualifies), `LIFECYCLE_SOURCES` direct-only (OQ-20 — no OTA guest is messaged
+until the business says we may), and the date gate under both. `WA_TEMPLATE_MODE` is unset ⇒
+`simulate`, so **until Meta approves the templates a real website guest who has never messaged us
+gets NOTHING**: their confirmation defers on a shut window and is skipped at 36h. That is correct
+fail-closed behaviour, not a bug — but it means the armed sender currently only reaches guests with
+an open 24h window. **Template approval (`pnpm templates:pack`) is the manual step that finishes
+the job.**
 
 ---
 

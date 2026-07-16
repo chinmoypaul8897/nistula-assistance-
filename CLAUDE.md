@@ -32,6 +32,49 @@ hourly sweep **MUST date-filter** or it will message guests about stays that end
 the one house eZee never gets wrong). None of eZee's ~92 endpoints can create a room type — it
 happens in eZee's back office. Full analysis + the eZee account-manager script: `docs/open-questions.md` OQ-19.
 
+## 🚨 CH-12 is DONE and the system now SPEAKS FIRST (2026-07-16, `vCH-12`, 1243 tests)
+
+Everything before CH-12 only ever *replied* to someone who had messaged us. A booking landing in
+eZee now causes an **unprompted WhatsApp to a real person who never contacted this number.** That
+inverts the risk, and **it is LIVE and ARMED** (`LIFECYCLE_SEND_ENABLED=1` on Railway): a real
+confirmation has been sent to and read on a real phone. What holds it back is four fail-closed
+gates — **epoch** (proven on production data: 199 pre-epoch mirror rows → **0** scheduled),
+**date**, **status**, **source**. `WA_TEMPLATE_MODE` is unset ⇒ `simulate`, so until Meta approves
+the templates a website guest who has never messaged us gets **nothing** (defers on a shut window,
+skipped at 36h) — correct, and `pnpm templates:pack` is the manual step that finishes it.
+
+**The fact that changes how you think about this system:** the comfortable belief that OTA phone
+numbers are masked — and that OTA guests are therefore unreachable by accident — is **FALSE**.
+makemytrip and go-mmt mask them. **Airbnb and Booking.com do not.** Production holds **12 real OTA
+guests arriving soon, with real phone numbers**. `LIFECYCLE_SOURCES` (direct-only, fail-closed) is
+the only thing standing between them and a WhatsApp nobody authorised (**OQ-20**, 🔴 unanswered).
+
+## 🚨 THE RECURRING FAILURE CLASS reached ELEVEN — and it has TWO axes
+
+**Nine adversarial review rounds found 17 blocker-class defects. The suite was green every single
+time. FIVE were regressions introduced by the previous round's own fix** — so on this codebase *a
+fix is the most dangerous thing in the room*, and an unverified one is not a fix.
+
+> **Guard by the CONTRACT — never by the ENUM, the LIST, the CLOCK, or a MUTABLE FIELD.**
+
+1. **The QUESTION.** What does this predicate *actually* answer — the thing its caller needs, or a
+   proxy that merely coincides today? *(The sender re-used the SCHEDULING allowlist at SEND time, so
+   every stay that actually happened lost its welcome, thank-you and win-back. One plan-age clock
+   judged every kind, so every last-minute booking silently lost its pre-arrival — and the same rule
+   also SENT "we look forward to welcoming you" to guests who had already arrived. A proxy wrong in
+   both directions is the tell that it was a proxy at all.)*
+2. **The VERB.** Skipping is **TERMINAL** — a resolved row is never rescheduled. So a rule may only
+   SKIP on **a fact that cannot come back**; reading a mutable field it must **DEFER**, which is
+   reversible. *(An arrival date mistyped for ONE MINUTE and corrected permanently cost the guest
+   their pre-arrival and welcome, because the correcting event no-ops against a resolved row.)*
+   **Choose the verb the contract can survive being wrong about.**
+
+**And the test that "covers" it may be the reason it shipped.** The proof that last-minute
+pre-arrivals send was deleted and replaced with one asserting `sendAt < NOW` — *due*-ness, not
+outcome. Due, yes; sent, no. **Assert the OUTCOME, and drive the REAL event path
+(`handleBookingEvent`), never `runSender` directly.** A suite that reads the wall clock is lying
+too: the guest-quiet window turned `main` red ten hours a night while looking green at 6 p.m.
+
 ## Session protocol (mandatory — from plan.md §0)
 
 [plan.md](plan.md) is the **single source of truth** for the build; [progress.md](progress.md) is the session-memory layer. Every build session:

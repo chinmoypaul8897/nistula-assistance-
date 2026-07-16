@@ -1,0 +1,1 @@
+ALTER TABLE "scheduled_messages" ADD COLUMN "deferred_until" timestamp with time zone;

@@ -16,13 +16,28 @@ STAFF: nothing. SYS: ack <1s · debounce batched · `get_quote` called (villa ty
 
 ## S2 · Booking made (lifecycle, zero staff typing)
 
-Event: a booking (website or OTA) appears in eZee for Rahul M, 3BHK type, 20–22 Dec, phone present.
+> **⚠️ AMENDED 2026-07-14 (CH-12), Paul-approved.** Two lines of this scenario asked for things that
+> do not exist, and shipping them would have meant inventing facts at a guest.
+> 1. The pre-arrival originally promised a **"map pin, host contact"**. **There is no address, pin or
+>    coordinate anywhere in the knowledge base, and no sanctioned staff contact number**
+>    (OQ-12 / team-question Q37 — both open 🔴). So the pre-arrival now does what `kb/faq.md` already
+>    promises guests today: it **asks for the arrival time and says a human will send the pin.** When
+>    the villa team supplies a pin, this becomes real and the copy tightens.
+> 2. Triggering on **"website or OTA"** is now gated: OTA bookings are **excluded** by
+>    `LIFECYCLE_SOURCES` until the business answers **Q13 — "may we WhatsApp Airbnb/Booking.com
+>    guests at all?"** This is not hypothetical: production holds 12 real OTA guests with unmasked
+>    phone numbers, and nobody has told us we may write to them.
+>
+> The original text is preserved in git history. Retractions stay visible.
 
-- A (moment of booking) — confirmation: name, villa type + Assagao, dates, reference, "we're right here for any question."
-- A (17 Dec 10:00 IST) — pre-arrival: check-in from 3 pm, map pin, host contact, offer of help with cab/kids.
-- A (20 Dec 09:00 IST) — welcome: villa ready, one concrete detail, "message me here for anything."
+Event: a **direct** booking (website / walk-in) appears in eZee for Rahul M, 3BHK type, 20–22 Dec, phone present.
+*(An OTA booking mirrors identically but is **not** messaged — see the amendment above.)*
 
-STAFF: arrivals digest line the evening before (via window-aware send). SYS: poller mirrored the booking ≤60s · guest row auto-created from booking phone · three `scheduled_messages` rows with correct IST times + dedupe keys · date-change moves rows, cancellation clears them · templates used when window closed (dev: `raw.devTemplate=true`).
+- A (moment of booking) — confirmation: name, villa **type** + Assagao, dates, reference, check-in from 3 pm, "we're right here for any question."
+- A (17 Dec 10:00 IST) — pre-arrival: check-in from 3 pm, **asks for the expected arrival time and promises the accurate location pin in reply**, offers to help before travel.
+- A (20 Dec 09:00 IST) — welcome: villa ready from 3 pm, "message us right here for anything."
+
+STAFF: arrivals digest line the evening before (via window-aware send). SYS: poller mirrored the booking ≤60s · guest row auto-created from booking phone · **five** `scheduled_messages` rows (confirmation, pre-arrival, welcome, thank-you, win-back) with correct IST times + dedupe keys · date-change **reschedules** rows (never duplicates), cancellation clears the pending ones · templates used when window closed (dev: `raw.devTemplate=true`) · **the four gates passed: in-epoch, arriving, confirmed, sanctioned source.**
 
 ## S3 · Two towels (in-stay service + honest follow-up)
 
@@ -66,7 +81,15 @@ SYS: maintenance intent + staff-off → night_queue path (no 23:05 staff ping) �
 
 Precondition: Rahul's stay ended ~75 days ago; `marketing_opt_in=true` (captured via post-stay YES); one `past_issue` fact ("AC weak in B3 master — resolved") and one `preference` fact ("early check-in matters").
 
-- A 11:00 (win-back template) — seasonal, personal, names the villa, zero pressure, "(Reply STOP anytime to stop these.)"
+> **⚠️ AMENDED 2026-07-14 (CH-12), Paul-approved.** The win-back originally **"names the villa"**.
+> It may not, and neither may anything else we send: **a guest cannot book a specific house — eZee
+> picks one for them** (🚨 OQ-19, proven end to end). `bookings_mirror.physical_room_label` is
+> eZee's *guess*, not the house the guest bought, so "your stay in Villa B3" could simply be false.
+> The win-back therefore names the villa **TYPE and its locality** ("your Nistula Villa in Assagao"),
+> which is always true. `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` enforces it in code, not by
+> prompt. When eZee is re-modelled so one house = one bookable product, this can name the house again.
+
+- A 11:00 (win-back template) — seasonal, personal, names the villa **TYPE + locality** (never a house — see above), zero pressure, "(Reply STOP anytime to stop these.)"
 - G 11:24 — "good timing. is b3 free 12-14 oct?"
 - A 11:24 — live ₹ figure from `get_quote` + memory in action: "and I remember early check-in matters to you — I've already flagged it to the team" (only if a task/fact action actually ran) + booking link offer.
 
