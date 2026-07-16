@@ -138,27 +138,27 @@ describe('🚨 the booking is sent to the number CURRENTLY on it', () => {
   });
 });
 
-describe('🚨 a gate that starts failing REVOKES what it already allowed', () => {
-  it('a booking re-sourced to Airbnb loses its pending messages', async () => {
+describe('🚨 a booking re-sourced to an OTA is never MESSAGED (but not destroyed)', () => {
+  it('the rows survive a re-source — the SENDER is what refuses (revocation is irreversible)', async () => {
     const no = await seed();
     await scheduleForBooking(deps(), no);
     expect(await rows()).toHaveLength(5);
 
     // eZee re-sources it. `source` is in MIRROR_DIFF_FIELDS — this really happens.
     await db.execute(sql`UPDATE bookings_mirror SET source = 'Airbnb'`);
-    const result = await scheduleForBooking(deps(), no);
+    await scheduleForBooking(deps(), no);
 
-    expect(result.skipped).toBe('source_not_allowed');
+    // NOT destroyed. `source` is a mutable, human-edited free-text field, and
+    // revocation can never be undone — so a retyped source must not permanently
+    // kill a real guest's lifecycle (the 9th-instance fix). The guarantee that
+    // no OTA guest is messaged lives in the SENDER, which re-reads the mirror
+    // before every send. Refusing to send is reversible; destroying is not.
     const scheduled = await rows();
-    // Skipping the NEW schedule was never enough: the OLD one had to die.
-    expect(scheduled.every((r) => r.status === 'cancelled')).toBe(true);
-    // The reason is the CONTRACT's ("this booking stopped being messageable"),
-    // not an echo of the gate that happened to fail — revocation is no longer
-    // driven by the scheduling gates (see the 8th-instance fix).
-    expect(scheduled[0]?.skipReason).toBe('source_not_allowed');
+    expect(scheduled).toHaveLength(5);
+    expect(scheduled.every((r) => r.status === 'pending')).toBe(true);
   });
 
-  it('and the sender refuses one anyway, if it somehow survives', async () => {
+  it('and the SENDER is the one that refuses it — no OTA guest is messaged', async () => {
     const no = await seed();
     await scheduleForBooking(deps(), no);
     await openWindow();
@@ -168,10 +168,11 @@ describe('🚨 a gate that starts failing REVOKES what it already allowed', () =
     const { wa, sent } = makeWa();
     const result = await runSender(senderDeps(wa));
 
-    expect(sent).toHaveLength(0);
-    expect(result).toMatchObject({ skipped: 1, sent: 0 });
+    expect(sent).toHaveLength(0); // THE guarantee: nothing reaches the OTA guest
+    expect(result).toMatchObject({ deferred: 1, sent: 0 });
     const [row] = await db.select().from(scheduledMessages).where(sql`kind = 'confirmation'`);
     expect(row?.skipReason).toBe('source_not_allowed');
+    expect(row?.status).toBe('pending'); // deferred, not burned — the field may be corrected
   });
 });
 

@@ -22,6 +22,7 @@ import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import {
   bookingState,
   checkGates,
+  hasPhone,
   revocationReason,
   type GateContext,
   type SkipReason,
@@ -127,7 +128,9 @@ function logSkip(
       detail: { reservationNo: row.ezeeReservationNo, reason, revoked },
     });
   }
-  if (reason === 'no_phone') {
+  // WHY the sweep is excluded: it re-examines the same booking every hour, so an
+  // alert here would page ops hourly, for ever, about one unchanged fact.
+  if (reason === 'no_phone' && !deps.fromSweep) {
     // Not a failure — OTA channels legitimately mask numbers. But a real booking
     // we cannot reach is a human's problem, so it surfaces.
     // TODO(CH-14b): carry these into the morning digest.
@@ -154,12 +157,14 @@ export async function scheduleForBooking(
   }
 
   // ── 1. WITHDRAW? — the CONTRACT, decided before and independently of the
-  // create-gates. Only a booking that stopped being messageable at all loses
-  // what it was granted: cancelled, no-show, re-sourced to an unsanctioned
-  // channel, or stripped of its phone. Advancing (checked_in/checked_out),
-  // ageing past its check-in, or flapping to `unknown` NEVER revokes — that is
-  // the ordinary life of a real stay, and the remaining lifecycle must survive.
-  const revoke = revocationReason(row, deps.gates);
+  // create-gates, and on a deliberately HIGH bar because revocation is
+  // IRREVERSIBLE. Only a business-FINAL fact destroys a schedule: cancelled, or
+  // a no-show. Advancing (checked_in/checked_out), ageing past its check-in,
+  // flapping to `unknown`, a phone cleared mid-correction, or a retyped source
+  // never revoke — those are the ordinary life of a real stay (or of a human
+  // editing a record), and the remaining lifecycle must survive them. What
+  // should merely STOP a send is the SENDER's job: refusing is reversible.
+  const revoke = revocationReason(row);
   if (revoke !== null) {
     const revoked = await revokePending(deps, row.ezeeReservationNo, revoke);
     logSkip(deps, row, revoke, revoked);
@@ -184,7 +189,11 @@ export async function scheduleForBooking(
   const gate = checkGates(row, deps.gates);
   if (!gate.ok) {
     const existing = await hasSchedule(deps.db, row.ezeeReservationNo);
-    if (!existing) {
+    // Nothing to maintain, OR nothing to maintain WITH: without a phone there is
+    // no guest to re-bind (guests.phone is NOT NULL), so leave any existing rows
+    // exactly as they are — pending and paused. The sender refuses to send them
+    // while the field is blank, and they resume if it is retyped.
+    if (!existing || !hasPhone(row)) {
       logSkip(deps, row, gate.reason);
       return { scheduled: 0, skipped: gate.reason };
     }

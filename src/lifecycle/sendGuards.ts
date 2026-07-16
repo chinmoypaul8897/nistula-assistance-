@@ -149,10 +149,15 @@ export async function blockedBy(
     }
     // The SOURCE and PHONE gates are re-applied — eZee changes both fields, and
     // a booking re-sourced to an OTA after it was scheduled must not send (Q13).
+    // THIS is where those two are enforced, and DEFER is the right verb: both are
+    // mutable, human-edited fields. Refusing to send is reversible — if the front
+    // desk restores a phone it cleared mid-correction, the message still goes.
+    // Resolving them terminally (or revoking upstream) destroyed a real guest's
+    // lifecycle for a typo. The stale guard bounds the wait either way.
     if (!passesSource(booking, deps.gates.sources)) {
-      return { outcome: 'skipped', reason: 'source_not_allowed' };
+      return { outcome: 'deferred', reason: 'source_not_allowed' };
     }
-    if (!hasPhone(booking)) return { outcome: 'skipped', reason: 'no_phone' };
+    if (!hasPhone(booking)) return { outcome: 'deferred', reason: 'no_phone' };
     // The DATE gate is NOT re-applied wholesale — check_in is in the past by the
     // time a thank-you is due, which is the point of a thank-you. But a PRE-stay
     // message is a lie once the stay is entirely over: if the dates were amended

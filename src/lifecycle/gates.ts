@@ -143,21 +143,25 @@ export function bookingState(row: BookingMirror): 'ok' | 'terminal' | 'transient
 }
 
 /**
- * Why an EXISTING schedule must be WITHDRAWN — the contract, not the gates.
+ * Why an EXISTING schedule must be WITHDRAWN — and the bar is deliberately
+ * HIGHER than "would we send right now?".
  *
- * Revoke only when the booking has genuinely stopped being messageable. NOT
- * because it advanced (`checked_in`/`checked_out`), NOT because its check-in has
- * passed, NOT because it predates the epoch, and NOT because a status is
- * momentarily `unknown` — those are the ordinary life of a real stay, and the
- * remaining lifecycle must survive them.
+ * 🚨 REVOCATION IS IRREVERSIBLE. A cancelled row can never be rescheduled (the
+ * upsert only touches `pending`), so this predicate may only fire on facts that
+ * are themselves irreversible. The ninth instance of the recurring class was
+ * letting it fire on MUTABLE, human-edited, free-text mirror fields: a front
+ * desk clearing a phone field mid-correction, or a source string being retyped,
+ * would permanently destroy a real guest's lifecycle — while the code two lines
+ * up carefully protected a momentary `unknown` status as transient.
+ *
+ * Only a booking that is business-FINAL is revoked: cancelled, or a no-show.
+ * Everything else that should merely STOP a send (no phone right now, a source
+ * we may not message, a flapping status) is the SENDER's job — it re-reads the
+ * mirror before every send and refuses. Refusing to send is reversible; the
+ * message survives to go out if the field is corrected. Destroying it is not.
  */
-export function revocationReason(
-  row: BookingMirror,
-  ctx: Pick<GateContext, 'sources'>,
-): string | null {
+export function revocationReason(row: BookingMirror): string | null {
   if (bookingState(row) === 'terminal') return `booking_${row.status}`;
-  if (!passesSource(row, ctx.sources)) return 'source_not_allowed';
-  if (!hasPhone(row)) return 'no_phone';
   return null;
 }
 

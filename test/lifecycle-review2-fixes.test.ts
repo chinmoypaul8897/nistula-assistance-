@@ -369,28 +369,43 @@ describe('🚨 a stay that ACTUALLY HAPPENS keeps its lifecycle — through the 
     expect(rows.filter((r) => r.status === 'cancelled')).toHaveLength(0);
   });
 
-  it('...but a booking that genuinely stops being messageable STILL revokes', async () => {
+  it('...but a booking that is business-FINAL still revokes (cancelled / no_show only)', async () => {
+    // Only an irreversible business fact destroys a schedule. A retyped source or
+    // a phone cleared mid-correction must NOT — the sender refuses those instead.
     for (const [field, value] of [
       ['status', 'cancelled'],
       ['status', 'no_show'],
-      ['source', 'Airbnb'],
-      ['guest_phone', null],
     ] as const) {
       await db.execute(
         sql`TRUNCATE scheduled_messages, guest_stays, bookings_mirror, messages, conversations, guests CASCADE`,
       );
       const no = await seed();
       await handleBookingEvent(deps(), 'created', no);
-      await db.execute(
-        value === null
-          ? sql`UPDATE bookings_mirror SET guest_phone = NULL`
-          : sql`UPDATE bookings_mirror SET ${sql.raw(field)} = ${value}`,
-      );
+      await db.execute(sql`UPDATE bookings_mirror SET ${sql.raw(field)} = ${value}`);
       await handleBookingEvent(deps(), 'modified', no);
 
       const rows = await db.select().from(scheduledMessages);
       expect(rows.every((r) => r.status === 'cancelled')).toBe(true);
     }
+  });
+
+  it('🚨 a phone cleared mid-correction PAUSES the lifecycle — it does not destroy it', async () => {
+    // The 9th instance: no_phone is a mutable, human-edited field, but revocation
+    // is irreversible. A front desk clearing the field for a moment must not
+    // permanently kill a real guest's welcome, thank-you and win-back.
+    const no = await seed();
+    await handleBookingEvent(deps(), 'created', no);
+    await db.execute(sql`UPDATE bookings_mirror SET guest_phone = NULL`);
+    await handleBookingEvent(deps(), 'modified', no);
+
+    let rows = await db.select().from(scheduledMessages);
+    expect(rows.every((r) => r.status === 'pending')).toBe(true); // paused, alive
+
+    // ...and when the number is retyped, the lifecycle simply resumes.
+    await db.execute(sql`UPDATE bookings_mirror SET guest_phone = ${PHONE}`);
+    await handleBookingEvent(deps(), 'modified', no);
+    rows = await db.select().from(scheduledMessages);
+    expect(rows.filter((r) => r.status === 'cancelled')).toHaveLength(0);
   });
 });
 
