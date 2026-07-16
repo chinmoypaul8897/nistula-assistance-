@@ -19,7 +19,13 @@ import { project, referenceBase } from '../brain/stayView.js';
 import { nowIST } from '../lib/time.js';
 import { firstNameOf, planSends } from './plan.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
-import { checkGates, revocationReason, type GateContext, type SkipReason } from './gates.js';
+import {
+  bookingState,
+  checkGates,
+  revocationReason,
+  type GateContext,
+  type SkipReason,
+} from './gates.js';
 import { LIFECYCLE_TEMPLATES, type ScheduledKind } from './templates.js';
 
 export { planSends, type PlannedSend } from './plan.js';
@@ -60,21 +66,39 @@ async function siblingRows(db: Db, row: BookingMirror): Promise<BookingMirror[]>
     );
 }
 
-/** Withdraw a booking's un-sent messages. Used when a gate that once passed now
- * fails, and by cancelForBooking. Never touches what has already gone. */
+/** Dedupe keys for every kind of one booking (keyed on the reference BASE, so
+ * eZee's suffixed multi-room entries collapse to one booking). */
+function dedupeKeysFor(reservationNo: string): string[] {
+  const base = referenceBase(reservationNo);
+  return (Object.keys(LIFECYCLE_TEMPLATES) as ScheduledKind[]).map((k) => `${k}:${base}`);
+}
+
+/** Does this booking already HAVE a lifecycle? If so it is maintained even when
+ * the create-gates would not start it fresh (a lived stay still needs its guest
+ * re-bound and its remaining rows kept true). */
+async function hasSchedule(db: Db, reservationNo: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: scheduledMessages.id })
+    .from(scheduledMessages)
+    .where(inArray(scheduledMessages.dedupeKey, dedupeKeysFor(reservationNo)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** Withdraw a booking's un-sent messages. Used when the contract says the
+ * booking stopped being messageable, and by cancelForBooking. Never touches
+ * what has already gone. */
 async function revokePending(
   deps: SchedulerDeps,
   reservationNo: string,
   reason: string,
 ): Promise<number> {
-  const base = referenceBase(reservationNo);
-  const keys = (Object.keys(LIFECYCLE_TEMPLATES) as ScheduledKind[]).map((k) => `${k}:${base}`);
   const revoked = await deps.db
     .update(scheduledMessages)
     .set({ status: 'cancelled', skipReason: reason.slice(0, 100) })
     .where(
       and(
-        inArray(scheduledMessages.dedupeKey, keys),
+        inArray(scheduledMessages.dedupeKey, dedupeKeysFor(reservationNo)),
         eq(scheduledMessages.status, 'pending'), // never un-send what already went
       ),
     )
@@ -129,26 +153,45 @@ export async function scheduleForBooking(
     return { scheduled: 0, skipped: 'no_mirror_row' };
   }
 
+  // ── 1. WITHDRAW? — the CONTRACT, decided before and independently of the
+  // create-gates. Only a booking that stopped being messageable at all loses
+  // what it was granted: cancelled, no-show, re-sourced to an unsanctioned
+  // channel, or stripped of its phone. Advancing (checked_in/checked_out),
+  // ageing past its check-in, or flapping to `unknown` NEVER revokes — that is
+  // the ordinary life of a real stay, and the remaining lifecycle must survive.
+  const revoke = revocationReason(row, deps.gates);
+  if (revoke !== null) {
+    const revoked = await revokePending(deps, row.ezeeReservationNo, revoke);
+    logSkip(deps, row, revoke, revoked);
+    return { scheduled: 0, skipped: revoke };
+  }
+
+  // ── 2. The gates decide whether to START a lifecycle — NOT whether to keep
+  // maintaining one that already exists.
+  //
+  // 🚨 The subtlety that cost a whole review round: a gate failure used to
+  // RETURN here, which froze an existing schedule. Once eZee marks a real
+  // arrival `checked_in`, every later booking.modified failed the status gate
+  // and returned BEFORE the guest re-binding below — so a phone corrected by
+  // the front desk left the thank-you and win-back pointed at the old (wrong)
+  // number for 75+ days, with the hourly sweep unable to heal it (it filters
+  // confirmed|modified). The same freeze stranded a changed check-out date and
+  // skipped the undescribable check.
+  //
+  // So: refuse only when there is nothing to maintain. A booking that already
+  // HAS rows is still maintained — re-bound, re-planned, re-checked — even
+  // though we would not start it fresh today.
   const gate = checkGates(row, deps.gates);
   if (!gate.ok) {
-    // 🚨 REVOKE BY THE CONTRACT, NEVER BY THE GATE THAT JUST FAILED.
-    //
-    // A gate failure means "we would not SCHEDULE this fresh today". That is NOT
-    // the same as "withdraw what this booking already has". Conflating them was
-    // the eighth instance of the recurring class, and it was the worst: a real
-    // arrival sets eZee's status to `checked_in`, which is a diff field, which
-    // emits booking.modified, which re-ran the gates, which failed on
-    // `status_not_live` — and revoked the guest's welcome, thank-you and
-    // win-back. Permanently, for every stay that actually happened.
-    //
-    // A booking that has been lived, or whose check-in has passed, is still a
-    // real booking. Only one that stopped being messageable at all — cancelled,
-    // no-show, re-sourced to an unsanctioned channel, or stripped of its phone —
-    // loses what it was granted.
-    const reason = revocationReason(row, deps.gates);
-    const revoked = reason === null ? 0 : await revokePending(deps, row.ezeeReservationNo, reason);
-    logSkip(deps, row, gate.reason, revoked);
-    return { scheduled: 0, skipped: gate.reason };
+    const existing = await hasSchedule(deps.db, row.ezeeReservationNo);
+    if (!existing) {
+      logSkip(deps, row, gate.reason);
+      return { scheduled: 0, skipped: gate.reason };
+    }
+    deps.log.info(
+      { reservationNo: row.ezeeReservationNo, gate: gate.reason },
+      '[lifecycle] not schedulable fresh, but an existing schedule is maintained',
+    );
   }
 
   // stayView is the only door from a booking row to words (CH-11). If it will
@@ -162,13 +205,20 @@ export async function scheduleForBooking(
   const siblings = await siblingRows(deps.db, row);
   const stay = project(row, siblings, deps.gates.today);
   if (!stay.describable) {
-    // SYMMETRIC WITH THE GATE-FAIL BRANCH (review fix): a booking that WAS
-    // describable and later is not — the classic case is a multi-room booking
-    // whose first sibling (877-1) was scheduled and its confirmation sent before
-    // the second sibling (877-2) arrived and made it multi_room — must have its
-    // pending rows WITHDRAWN, not merely skipped. Otherwise the guest keeps a
-    // single-room lifecycle for a multi-room stay.
-    const revoked = await revokePending(deps, row.ezeeReservationNo, `undescribable:${stay.reason}`);
+    // A booking that WAS describable and now is not — the classic case is a
+    // multi-room booking whose first sibling (877-1) was scheduled, and whose
+    // confirmation went out, before the second sibling (877-2) arrived and made
+    // it multi_room — must have its pending rows WITHDRAWN, not merely skipped:
+    // the stored params now describe a single room for a multi-room stay.
+    //
+    // BUT NOT ON A TRANSIENT STATE. An `unknown` (an unconfirmed hold flapping
+    // between polls) is also undescribable, and will very likely resolve on the
+    // next poll — revoking it would destroy a real guest's lifecycle for a
+    // momentary eZee wobble. Guard by the contract here too.
+    const transient = bookingState(row) === 'transient';
+    const revoked = transient
+      ? 0
+      : await revokePending(deps, row.ezeeReservationNo, `undescribable:${stay.reason}`);
     logSkip(deps, row, `undescribable:${stay.reason}`, revoked);
     // WHY the alert only from the event path: the hourly sweep re-examines the
     // same rows forever, so alerting here would page ops every hour for one bad

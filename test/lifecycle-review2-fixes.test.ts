@@ -315,6 +315,51 @@ describe('🚨 a stay that ACTUALLY HAPPENS keeps its lifecycle — through the 
     expect(rows.find((r) => r.kind === 'winback')?.status).toBe('pending');
   });
 
+  it('🚨 a phone corrected AFTER check-in re-points the rows — the schedule is not frozen', async () => {
+    // The regression the contract fix introduced: gate-fail RETURNED before the
+    // guest re-binding, so once a booking was checked_in a corrected phone left
+    // the thank-you and win-back aimed at the old (wrong) number for 75+ days,
+    // and the sweep (confirmed|modified only) could never heal it.
+    const no = await seed();
+    await handleBookingEvent(deps(), 'created', no);
+    const [first] = await db.select().from(schema.guests);
+
+    // The guest arrives AND the front desk fixes the typo'd number. Both status
+    // and guest_phone are diff fields, so one booking.modified carries both.
+    await db.execute(
+      sql`UPDATE bookings_mirror SET status = 'checked_in', guest_phone = '+917700900999'`,
+    );
+    await handleBookingEvent(deps(), 'modified', no);
+
+    const corrected = (await db.select().from(schema.guests)).find(
+      (g) => g.phone === '+917700900999',
+    );
+    expect(corrected).toBeDefined();
+    const rows = await db.select().from(scheduledMessages);
+    expect(rows.filter((r) => r.status === 'cancelled')).toHaveLength(0); // still alive
+    // ...and every surviving row now belongs to the CORRECTED guest.
+    for (const r of rows) expect(r.guestId).toBe(corrected?.id);
+    expect(rows.every((r) => r.guestId !== first?.id)).toBe(true);
+  });
+
+  it('a check-out extended mid-stay re-plans the thank-you (not frozen on the old date)', async () => {
+    const no = await seed();
+    await handleBookingEvent(deps(), 'created', no);
+    const before = (await db.select().from(scheduledMessages)).find((r) => r.kind === 'poststay');
+
+    // Guest is in-house and extends: checked_in + a later check-out.
+    await db.execute(
+      sql`UPDATE bookings_mirror SET status = 'checked_in', check_out = '2026-12-29'`,
+    );
+    await handleBookingEvent(deps(), 'modified', no);
+
+    const after = (await db.select().from(scheduledMessages)).find((r) => r.kind === 'poststay');
+    expect(after?.id).toBe(before?.id); // same row, re-planned
+    // check_out 29 Dec + 1d at 11:00 IST = 30 Dec 05:30 UTC — NOT the old date.
+    expect(after?.sendAt.toISOString()).toBe('2026-12-30T05:30:00.000Z');
+    expect(after?.sendAt.getTime()).toBeGreaterThan(before!.sendAt.getTime());
+  });
+
   it('an "unknown" (flapping hold) must not revoke either', async () => {
     const no = await seed();
     await handleBookingEvent(deps(), 'created', no);

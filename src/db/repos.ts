@@ -3,7 +3,7 @@
  * helper is one statement or an upsert-then-read; business logic lives in the
  * feature modules, never here.
  */
-import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Db, DbLike } from './client.js';
 import { conversations, costEvents, guests, messages, rawEvents } from './schema.js';
 
@@ -201,7 +201,24 @@ export async function getRecentMessages(
   const rows = await db
     .select()
     .from(messages)
-    .where(and(eq(messages.conversationId, conversationId), ne(messages.sender, 'system')))
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        ne(messages.sender, 'system'),
+        // THE TRANSCRIPT IS WHAT THE GUEST ACTUALLY SAW (CH-12 review fix).
+        // An outbound row that never reached them — 'failed', or 'queued' and
+        // still in flight — must never be replayed to the model as something we
+        // said: it would believe it had already answered, apologised, or sent a
+        // confirmation that the guest never received. Inbound is always real.
+        // This became acute when CH-12's sender began retrying transient Graph
+        // failures: each attempt writes its own audit row, and 144 of them would
+        // otherwise flood a 30-message window and poison the rolling summary.
+        or(
+          eq(messages.direction, 'in'),
+          inArray(messages.status, ['sent', 'delivered', 'read']),
+        ),
+      ),
+    )
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit);
   return rows.reverse();
