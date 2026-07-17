@@ -65,8 +65,14 @@ Precondition: Rahul linked to an ACTIVE stay in Villa B3.
   name the house, sourced from a FRESH `BKG-03 tran.RoomID` read at task time — NEVER from
   `bookings_mirror.physical_room_label`, a snapshot frozen at CH-11's 14 Jul reconcile.
   `assignFor(kind, villa)` may key off that fresh read; it falls back to the frontdesk lead only when
-  BKG-03 cannot resolve a room (it returns 503 for an unconfirmed hold — "unreadable" NEVER means
-  "cancelled"). The PMS re-model is NOT a precondition. CH-19 asserts THIS.**
+  BKG-03 cannot resolve a room. The PMS re-model is NOT a precondition. CH-19 asserts THIS.**
+  > **⚠️ CORRECTED 2026-07-17 (CH-13a).** This line used to read *"(it returns 503 for an unconfirmed
+  > hold …)"*. **BKG-03 never returned 503 in 14 live probes** — "no such reservation" is an EMPTY OK
+  > (`{status:'ok', reservations:[]}`), no room yet is `RoomID:""`, and a CANCELLED or VOIDED booking
+  > returns its room happily (so a successful read is NOT proof of life). The 503 string is
+  > documented for **BKG-30**, a different endpoint. The unconfirmed-hold case specifically is
+  > **untested, not disproven** — none was reachable to probe. `staff/villaRoute.ts` treats all of
+  > them identically, so **the rule survives unchanged: "unreadable" NEVER means "cancelled".**
 - G 15:52 — "where are those?"
 - A 15:52 — HONEST wording: references the open task and the nudge — "I've just nudged housekeeping — your towels are marked on the way. Sorry for the wait, Rahul." (Never "I checked with housekeeping" — it checked the task record.)
 - STAFF 15:52 — SLA nudge (task open 32 min > 30-min SLA): re-ping + cc lead.

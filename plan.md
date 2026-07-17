@@ -373,7 +373,7 @@ Loads guest + facts + stays (join `guest_stays`→`bookings_mirror`, most releva
 3. **get_booking**(reference?) → the guest's own bookings from the mirror (active/upcoming/past). Reference-claim flow is CODE-side verification only: the guest must STATE the full booking name AND check-in date (or the booking email) — matched against the mirror in code; the WhatsApp profile name is NEVER used for matching; 3 failed reference attempts/day → hard escalate + polite refusal; any partial mismatch → escalate for human approval, reveal nothing. Never returns another guest's data.
 4. **create_staff_task**(kind, ~~villa_label~~, summary, detail?) → tasks insert + staff notify
 
-   > **🚨 `villa_label` MUST NOT BE A MODEL-SUPPLIED PARAMETER — decided 2026-07-16, and this signature is stale.** A model-supplied villa is *the model guessing a house*, and its likeliest source is the guest's own guess ("I'm in Apartment 09") — which CH-11's `scanUnitAssertions` treats as a violation to so much as say aloud. **The door is a FACT WE LOOK UP, never a string handed to us**, exactly as CH-11's `get_booking` takes ONE argument and verifies a reference claim against the guest's OWN typed words rather than the model's args. **CH-13 derives the villa server-side from the linked booking via a FRESH `BKG-03 tran.RoomID` read** (never `physical_room_label`, a 14 Jul snapshot; BKG-03 returns 503 for an unconfirmed hold and "unreadable" NEVER means "cancelled"), and falls back to the frontdesk lead when it cannot resolve one. The tool's gates below (near-duplicate = same kind+villa) then key off the DERIVED villa, not an argument. *Recorded because a close-out simulation of the CH-13 session found this was the one thing it would have had to guess at, and §0 says an unstated engineering decision stops a session.*
+   > **🚨 `villa_label` MUST NOT BE A MODEL-SUPPLIED PARAMETER — decided 2026-07-16, and this signature is stale.** A model-supplied villa is *the model guessing a house*, and its likeliest source is the guest's own guess ("I'm in Apartment 09") — which CH-11's `scanUnitAssertions` treats as a violation to so much as say aloud. **The door is a FACT WE LOOK UP, never a string handed to us**, exactly as CH-11's `get_booking` takes ONE argument and verifies a reference claim against the guest's OWN typed words rather than the model's args. **CH-13 derives the villa server-side from the linked booking via a FRESH `BKG-03 tran.RoomID` read** (never `physical_room_label`, a 14 Jul snapshot), and falls back to the frontdesk lead when it cannot resolve one. **🚨 SUPERSEDED IN PLACE 2026-07-17 (CH-13a, built): this line used to say "BKG-03 returns 503 for an unconfirmed hold". IT DOES NOT — 14 live probes, and BKG-03 never returned 503 once.** "No such reservation" is an **EMPTY OK** (`{status:'ok', reservations:[]}`), so a `not_found` branch keyed on an error code — which this very paragraph instructed — **would never have run**. No room yet is `RoomID:""`; a CANCELLED/VOIDED booking returns its room happily, so a successful read is NOT proof of life. (503 is documented for **BKG-30**, a different endpoint.) The unconfirmed-hold case is **untested, not disproven**. **The rule survives: "unreadable" NEVER means "cancelled"** — `staff/villaRoute.ts` is the shipped reference. The tool's gates below (near-duplicate = same kind+villa) then key off the DERIVED villa, not an argument. *Recorded because a close-out simulation of the CH-13 session found this was the one thing it would have had to guess at, and §0 says an unstated engineering decision stops a session.*
  → returns short task id + assignee first name. THE precondition for saying "the team has been informed." Gates: available only in `instay`/`arrival` stages (leads → escalate_to_human); max 3 OPEN tasks per conversation (further requests append to the newest matching task); a near-duplicate open task (same kind+villa, similar summary) → append, don't create.
 5. **escalate_to_human**(reason, urgency) → §7-style handover: conversation flag + front-desk card (or night queue) → returns queued_for ("now"|"morning").
 6. **remember_fact**(kind, content) → guest_facts insert (used sparingly: preferences, celebrations, issues).
@@ -739,9 +739,20 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 > to contradict: **eZee's assignment IS the physical door.** Route the card off a FRESH
 > `BKG-03 tran.RoomID` read by reservation number at task time — NOT off
 > `bookings_mirror.physical_room_label`, which is a snapshot frozen at CH-11's 14 Jul reconcile
-> (only BKG-03 carries a room; the poller never does). **BKG-03 returns 503 for an unconfirmed hold
-> and "unreadable" NEVER means "cancelled".** What the AI may SAY to a guest is a separate question,
-> still gated on OQ-15. Full analysis: CLAUDE.md OQ-19 · `docs/open-questions.md` OQ-19.
+> (only BKG-03 carries a room; the poller never does). What the AI may SAY to a guest is a separate
+> question, still gated on OQ-15. Full analysis: CLAUDE.md OQ-19 · `docs/open-questions.md` OQ-19.
+>
+> **🚨 SUPERSEDED IN PLACE 2026-07-17 (CH-13a, BUILT — `src/staff/villaRoute.ts` is the shipped
+> reference).** This box used to end *"BKG-03 returns 503 for an unconfirmed hold"*. **It does not.
+> 14 live probes; BKG-03 never returned 503 once.** "No such reservation" is an **EMPTY OK**
+> (`{status:'ok', reservations:[]}`) — so the `not_found` branch this instruction implies, keyed on
+> an error code, **would never have run.** No room yet is `RoomID:""`. **A CANCELLED or VOIDED
+> booking returns its room happily**, so a successful read is NOT proof of life — check
+> `tran.CurrentStatus` (this matters for OQ-24: a void emits no event, so the mirror can hold a dead
+> booking as live indefinitely, and the fresh read is the only place anyone learns). 503 is
+> documented for **BKG-30**, a different endpoint. The unconfirmed-hold case is **untested, not
+> disproven** — none was reachable. **The rule survives unchanged: "unreadable" NEVER means
+> "cancelled".**
 
 **Goal.** Tasks flow: created → notified → staff replies DONE → closed → guest informed; overdue tasks nudge staff and update the AI's honesty.
 
