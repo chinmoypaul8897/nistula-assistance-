@@ -147,6 +147,14 @@ describe('namesPhysicalHouse — the house-NAMING screen (GATE 2 + guest templat
     '2 extra towels', // a bare quantity
     'villa 99', // no such unit
     'the front desk', // ordinary prose
+    // 🚨 ROUND 4: a bare unit-code with a digit that HAPPENS to be 6/9/11 is
+    // NOT a house — there is no Villa B9/C11 — and the digit-fallback must not
+    // strip the letter to invent Apartment 09 out of "seat B9".
+    'B9',
+    'C11',
+    'seat B9',
+    'the safe code is B6',
+    'meet at gate C11',
   ])('does NOT name a house: %j', (t) => {
     expect(namesPhysicalHouse(t)).toBe(false);
   });

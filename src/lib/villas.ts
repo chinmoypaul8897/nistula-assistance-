@@ -259,6 +259,15 @@ export function namesPhysicalHouse(text: string): boolean {
     // Re-resolve the BARE unit number: "villa 11" → "11" → Apartment 11, a real
     // house; "villa 99" → "99" → no unit → still not a house. Failing toward
     // "this is a house" is the safe direction for a house-NAMING screen.
+    //
+    // 🚨 ONLY for a span carrying a villa/apartment WORD (round 4). A bare
+    // unit-code span like "B9" or "C11" is judged correctly by resolveVilla
+    // already (B3 → match, B9 → none — there is no Villa B9), so stripping its
+    // letter to re-resolve the digit — "B9" → "9" → Apartment 09 — would invent
+    // a house out of "seat B9" / "gate C11". The word-plus-bare-digit form is
+    // the only one resolveVilla downgrades to ambiguous, so it is the only one
+    // that needs this fallback.
+    if (!/\b(?:apartments?|apts?|villas?)\b/i.test(span)) return false;
     const digit = /\d{1,2}/.exec(span)?.[0];
     return digit !== undefined && resolveVilla(digit).kind === 'match';
   });

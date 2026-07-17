@@ -79,7 +79,17 @@ const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+let\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\s+know\b/i },
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+flagged\s+(?:it|this|that)\s+(?:with|to)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+spoken\s+(?:to|with)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
-  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have|\s+had)?\s+passed\s+(?:it|this|that)\s+on\b/i },
+  // 🚨 ROUND 4 added these. A denylist has infinite siblings, and round 4 named
+  // more natural ones the round-3 set missed — each ships a FALSE "staff were
+  // told" straight to the guest when the card reached nobody (an UNCAUGHT
+  // phrasing is never even evaluated by the veto, so it does not regenerate —
+  // it SENDS). `checked with` matters most: the DoD forbids "I checked with
+  // housekeeping" by name as the exact dishonest wording the SLA nudge must
+  // never use. `passed` now also catches "passed this to housekeeping", not
+  // only "passed it on".
+  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+(?:reached\s+out\s+to|contacted|checked\s+with)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
+  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+got\s+(?:onto\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)|(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\s+onto\s+(?:it|this|that))\b/i },
+  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have|\s+had)?\s+passed\s+(?:it|this|that)\s+(?:on\b|(?:on\s+)?to\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b)/i },
   // Subject-anchored: "daily housekeeping is taken care of" must NOT match.
   { cls: 'C1', re: /\b(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\s+(?:knows|(?:is|are)\s+aware|(?:is|are)\s+looking\s+into|(?:is|are)\s+on\s+(?:it|this|that))\b/i },
   // C5 — THING-DONE. The object is a specific OUTCOME. Telling the team about a

@@ -222,6 +222,29 @@ describe('🚨 C1/C2 — create_staff_task licenses ONLY a delivered task (CH-13
   });
 
   it.each([
+    "I've reached out to housekeeping.",
+    "I've contacted the front desk.",
+    "I've checked with housekeeping.", // 🚨 the DoD forbids this exact wording
+    "I've got housekeeping onto it.",
+    "I've got onto the team.",
+    "I've passed this to housekeeping.", // "passed X to ROLE", not only "passed it on"
+  ])('🚨 the round-4 gap: "%s" is a C1 claim — an UNCAUGHT one SENDS, it does not regenerate', (
+    draft,
+  ) => {
+    expect(scanPromises(draft, NO_EVIDENCE).violations.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    "I'll check with the team.", // future = referral
+    "I'll reach out to housekeeping.", // future
+    "I've reached out to you.", // "you" — not a role
+    "I've contacted the owner.", // owner is not a rostered role
+    "I've got your booking confirmed.", // "got YOUR booking", not "got ROLE onto it"
+  ])('the round-4 widening did NOT over-block "%s"', (draft) => {
+    expect(scanPromises(draft, NO_EVIDENCE).violations).toEqual([]);
+  });
+
+  it.each([
     "I'll ask housekeeping about that.", // future = referral, not a claim
     'Let me know if you need anything else.', // "let ME know" — not a role
     "You asked about breakfast earlier.", // "you asked" — not the AI's claim
