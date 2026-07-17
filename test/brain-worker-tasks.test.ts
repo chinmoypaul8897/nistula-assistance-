@@ -399,7 +399,7 @@ describe('🚨 CH-13a · the retry key survives the batch growing (real worker)'
     // Attempt 1: the tool succeeds, THEN the turn dies.
     const a1 = rig({});
     let round = 0;
-    a1.deps.converse = async (input) => {
+    a1.deps.converse = async () => {
       round += 1;
       if (round === 1) {
         const use = {
