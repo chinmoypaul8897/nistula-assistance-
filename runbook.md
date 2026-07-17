@@ -802,6 +802,86 @@ time.** What the AI may SAY to a guest is a separate question, still gated on OQ
 - A booking must be **CONFIRMED** before it enters the connectivity queue — the poller never sees an
   unconfirmed (status-10) hold. **CORRECTION 2026-07-16: such a hold RESERVES NOTHING** — it blocks no
   inventory (proven website-side; this line previously claimed the opposite, on an assumption nobody
-  had tested). **BKG-03 also cannot read one — it returns `503 No Reservation Found`, and
-  "unreadable" NEVER means "cancelled".** eZee assigns a house only at confirm, so no house exists
-  before then either.
+  had tested). eZee assigns a house only at confirm, so no house exists before then either.
+- **🚨 BKG-03's `503 No Reservation Found` — CORRECTED 2026-07-17 (CH-13a), and the correction is
+  partly "we don't know".** This line used to state flatly that BKG-03 returns `503` for an
+  unconfirmed hold. **I probed BKG-03 live 14 times and it never returned 503 once.** What it
+  actually does:
+  - **A reservation that does not exist → `{status:'ok', reservations:[]}`.** An EMPTY OK, not an
+    error. Any caller keying "no such booking" off an error code has a branch that never runs.
+  - **A booking with no room yet → `RoomID: ""`** — an empty string, not an absent field.
+  - **A CANCELLED or VOIDED booking → `ok`, with the room returned happily.** A successful read is
+    NOT proof the booking is alive; check `tran.CurrentStatus`.
+  - `503 No Reservation Found` **is documented for BKG-30**, a different endpoint
+    (`04_bookings.md:9097`) — the likeliest origin of the mix-up. **BKG-03's own error table
+    (`:1737-1749`) lists no 503 at all.**
+  **What is still UNKNOWN, and is not claimed either way:** I had no unconfirmed hold to probe (every
+  reachable one had since been cancelled), so whether an unconfirmed hold specifically returns 503 is
+  **untested, not disproven**. `staff/villaRoute.ts` therefore treats 503, `ok`+empty AND `RoomID:''`
+  all as *"we could not read the door"* — correct in both worlds. **The rule that survives all of it,
+  unchanged: UNREADABLE NEVER MEANS CANCELLED.**
+
+## Staff tasks (CH-13a)
+
+### What runs
+
+`create_staff_task` is the AI's hands. A task card goes to the staff member whose ROLE does the work
+and whose ROUND has the house; else the frontdesk lead; else `OPS_NUMBERS[0]`; else nobody, and the
+task is recorded as `notify_failed` with an ops alert. `staff.command` workers parse `DONE <id>` and
+`TASKS` from roster numbers. `staff.sla` runs every 5 minutes (`Asia/Kolkata`, stately) and re-pings
+overdue open tasks.
+
+### 🚨 The three rules that keep it honest
+
+1. **The villa on a card is read FRESH from `BKG-03 tran.RoomID` at task time** — never from
+   `bookings_mirror.physical_room_label` (a snapshot frozen at CH-11's 14 Jul reconcile) and never
+   from a model argument (`create_staff_task` has no villa parameter at all). If the read fails for
+   ANY reason the task is still raised, on the villa TYPE, to the front desk. eZee flaps; a guest's
+   towels must not depend on it.
+2. **`ok` answers "did a human GET this?"** An undelivered card returns `ok:false NOT_NOTIFIED`, so
+   guardrail 2 licenses nothing and the AI says it is bringing the team in rather than claiming
+   anyone is coming. There is **no "nobody configured" carve-out** here, unlike `escalateToOps`.
+3. **The card may name the house; the guest reply may not** (OQ-15). Two audiences, two schemas:
+   `staffParam` vs `param` in `lifecycle/templates.ts`.
+
+### 🚨 THE STAFF 24h WINDOW — the thing that will bite you first
+
+A staff number that has not written to the line in 24 hours is **unreachable by free-form**, and in
+dev `WA_TEMPLATE_MODE` is unset ⇒ `simulate`, where a "template" is physically free-form and Meta
+refuses it identically. **So every card to a cold staff number becomes `notify_failed`.** That is
+correct behaviour, not a bug — but it means:
+
+- **Before any live demo, the staff number must message the business line once.** That buys **24
+  hours, not for ever** (plan.md:727).
+- The permanent fix is template approval on the REAL number's WABA — an ops event at real-number
+  cutover (CH-18→19). `pnpm templates:pack` prints the bodies, `nst_task_card_v1` included.
+
+### The roster
+
+`STAFF_ROSTER_JSON` is boot-validated: phones normalise to E.164, and **villas must resolve to a
+canonical label** (`"B3"` → `Villa B3`). An unknown or ambiguous villa **REFUSES BOOT** — without
+that, a typo'd round matches nothing and every task for that house silently routes to the front desk,
+which presents as a mysterious ops workload rather than a config error. `villas: []` is legal and
+means "no specific round" (NOT a wildcard). **The frontdesk LEAD is the first `frontdesk` member —
+roster order is a contract.** The roster may be empty; it fails closed on its own.
+
+### Verifying it locally
+
+```
+docker compose up -d postgres && pnpm dev     # boot logs "staff tasks ENABLED"
+```
+Seed an in-house guest with a real reservation number, insert a `phone_windows` row for the staff
+number (a cold window cannot receive a card), then a signed POST asking for towels. Expect: a `tasks`
+row whose `villa_label` came from the LIVE BKG-03 read, a rendered card, and — because the fixture
+phone is not an allowed Meta recipient — `notify_failed` plus an AI reply that promises NOTHING and
+escalates. Then POST `DONE <id>` **from the roster number**: the task closes, a `task_done` context
+row appears, and the guest gets the close line.
+
+### Reading it in production
+
+```sql
+SELECT short_id, kind, villa_label, status, assigned_phone, sla_deadline FROM tasks ORDER BY opened_at DESC;
+SELECT count(*) FROM tasks WHERE status = 'notify_failed';   -- cards that reached nobody
+```
+A rising `notify_failed` count means the roster's windows are shut or the roster is wrong — the
+guests were never promised anything, but nobody is doing the work either.
