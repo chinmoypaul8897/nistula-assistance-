@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Nistula Assistance** — a WhatsApp AI host (Claude as the brain) for Nistula, a boutique villa company in Goa (8 villas, eZee PMS, ~60% of bookings direct on one WhatsApp number). It will run the full guest conversation: pre-sales with live website-identical prices, in-stay requests routed to staff as tasks, automatic lifecycle messages, per-guest persistent memory, and graceful human takeover via Meta coexistence.
 
-**Current state: CH-00 → CH-12 are DONE, merged, tagged (`vCH-00`…`vCH-12`) and LIVE on Railway (CH-09 merged via PR #27 after a 24-agent pre-push audit fixed a money BLOCKER; its live three-probe demo passed 2026-07-13 with real facts saved in the production DB).** The service takes real WhatsApp messages on the Meta test number, replies in Nistula's voice through Claude, quotes live website-identical prices via tools, answers villa/policy/FAQ questions from the compiled knowledge base (prompt block [3]), brackets every model turn with deterministic code (§6.7 policy routing before, the complete §6.5 guardrail pipeline after — every hit persisted to `raw_events`), carries §6.3 short-term memory (token-budgeted transcript window + the `[EARLIER CONTEXT]` rolling summary + the nightly 04:00 IST summariser), and now has §6.4 long-term memory: `remember_fact` saves durable guest facts behind deterministic sensitive/instruction/entitlement screens (any rate or authority claim refused fail-closed), block [5] GUEST CONTEXT renders the full profile (name + detected register/lang prefs + newest 15 facts; stays/tasks stubbed for CH-11/13), memory promises need a real save (guardrail-2 class C4 + the `fact_saved` evidence row), and `POST /admin/guest-lookup` peeks a guest's memory (bearer + flag; enabled in local dev only — Railway carries no admin vars). **CH-10 (eZee mirror) is DONE and LIVE (2026-07-13, 761 tests):** the 60s poller mirrors eZee bookings into `bookings_mirror`, ACKs only what committed, and emits `booking.*` events for CH-12. Its live run drained the property's whole un-ACKed backlog — 62 items, 0 errors — and the pre-push audit's BLOCKER (multi-room full-cancels arriving as suffixed `-1/-2/-3` entries with no bare entry) turned out to be **sitting in production waiting**. **BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — only Railway may run the poller, or dev would ACK-consume real bookings prod never sees (runbook §CH-10). Move secrets to Railway with **Node**, never a PowerShell pipe (it prepends a UTF-8 BOM into the stored value). BKG-20 "ReadBooking" is broken — never used; `InsertBooking` needs POST + per-night comma-separated rates (the vendor docs are wrong). Website (Internet Booking Engine) bookings **DO** reach the queue — verified end to end (booking 953: create → mirror → cancel → mirror, dates/amount verbatim). An earlier "they don't" reading was a queue-BATCHING artifact; **a poll against a backlogged eZee queue proves nothing — only test against a drained queue.** **CH-12's backlog precondition is DISCHARGED** — the `booking.*` queue was purged 85→0 at the 2026-07-16 cutover and CH-12's workers now consume it live. **Do NOT re-run the purge: `DELETE FROM pgboss.job WHERE name LIKE 'booking.%'` now destroys real arriving guests' events.** The date gate shipped on both legs (`reconcile.ts` GATE 2 + `gates.ts passesDate`), so the mirror's 123 historical bookings schedule nothing — proven live at 199 pre-epoch rows → **0**. **Next chunk: CH-13 (Staff tasks) — read the 🚨 OQ-19 section below FIRST; it blocks the task card, and plan.md does NOT know that.** `progress.md` is authoritative for exactly what exists and what each chunk learned — read it, not this paragraph, for detail.
+**Current state: CH-00 → CH-12 are DONE, merged, tagged (`vCH-00`…`vCH-12`) and LIVE on Railway (CH-09 merged via PR #27 after a 24-agent pre-push audit fixed a money BLOCKER; its live three-probe demo passed 2026-07-13 with real facts saved in the production DB).** The service takes real WhatsApp messages on the Meta test number, replies in Nistula's voice through Claude, quotes live website-identical prices via tools, answers villa/policy/FAQ questions from the compiled knowledge base (prompt block [3]), brackets every model turn with deterministic code (§6.7 policy routing before, the complete §6.5 guardrail pipeline after — every hit persisted to `raw_events`), carries §6.3 short-term memory (token-budgeted transcript window + the `[EARLIER CONTEXT]` rolling summary + the nightly 04:00 IST summariser), and now has §6.4 long-term memory: `remember_fact` saves durable guest facts behind deterministic sensitive/instruction/entitlement screens (any rate or authority claim refused fail-closed), block [5] GUEST CONTEXT renders the full profile (name + detected register/lang prefs + newest 15 facts; stays/tasks stubbed for CH-11/13), memory promises need a real save (guardrail-2 class C4 + the `fact_saved` evidence row), and `POST /admin/guest-lookup` peeks a guest's memory (bearer + flag; enabled in local dev only — Railway carries no admin vars). **CH-10 (eZee mirror) is DONE and LIVE (2026-07-13, 761 tests):** the 60s poller mirrors eZee bookings into `bookings_mirror`, ACKs only what committed, and emits `booking.*` events for CH-12. Its live run drained the property's whole un-ACKed backlog — 62 items, 0 errors — and the pre-push audit's BLOCKER (multi-room full-cancels arriving as suffixed `-1/-2/-3` entries with no bare entry) turned out to be **sitting in production waiting**. **BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — only Railway may run the poller, or dev would ACK-consume real bookings prod never sees (runbook §CH-10). Move secrets to Railway with **Node**, never a PowerShell pipe (it prepends a UTF-8 BOM into the stored value). BKG-20 "ReadBooking" is broken — never used; `InsertBooking` needs POST + per-night comma-separated rates (the vendor docs are wrong). Website (Internet Booking Engine) bookings **DO** reach the queue — verified end to end (booking 953: create → mirror → cancel → mirror, dates/amount verbatim). An earlier "they don't" reading was a queue-BATCHING artifact; **a poll against a backlogged eZee queue proves nothing — only test against a drained queue.** **CH-12's backlog precondition is DISCHARGED** — the `booking.*` queue was purged 85→0 at the 2026-07-16 cutover and CH-12's workers now consume it live. **Do NOT re-run the purge: `DELETE FROM pgboss.job WHERE name LIKE 'booking.%'` now destroys real arriving guests' events.** The date gate shipped on both legs (`reconcile.ts` GATE 2 + `gates.ts passesDate`), so the mirror's 123 historical bookings schedule nothing — proven live at 199 pre-epoch rows → **0**. **Next chunk: CH-13 (Staff tasks) — read the OQ-19 section below FIRST. The task card is UNBLOCKED (the website abolished house-choice, 2026-07-16), but route it off a FRESH `BKG-03 tran.RoomID` read at task time, NEVER off `bookings_mirror.physical_room_label` — a snapshot frozen at CH-11's 14 Jul reconcile. plan.md §8 CH-13 carries the same note; **progress.md, runbook.md, docs/product-picture.md and the `TODO(CH-13)` in `src/ezee/normalize.ts` were written BEFORE the answer — treat every "blocked on the PMS re-model" line as superseded.** `progress.md` is authoritative for exactly what exists and what each chunk learned — read it, not this paragraph, for detail.
 
 ## OQ-19 — the house problem: SYMPTOM CLOSED 2026-07-16. Read this before naming a villa.
 
@@ -69,6 +69,52 @@ our label comes from our own poller (`ezee/normalize.ts`). Verified, not assumed
 Rahul · 2 towels"* and §5.4 / §8 CH-11 step 4 said a unit may be named once `physical_room_label`
 exists. Each is marked SUPERSEDED in place; `docs/product-picture.md` S3 (which CH-19 asserts
 against) was amended off "Villa B3".
+
+## 🚨 CH-12 is DONE and the system now SPEAKS FIRST (2026-07-16, `vCH-12`, 1243 tests)
+
+Everything before CH-12 only ever *replied* to someone who had messaged us. A booking landing in
+eZee now causes an **unprompted WhatsApp to a real person who never contacted this number.** That
+inverts the risk, and **it is LIVE and ARMED** (`LIFECYCLE_SEND_ENABLED=1` on Railway): a real
+confirmation has been sent to and read on a real phone. What holds it back is four fail-closed
+gates — **epoch** (proven on production data: 199 pre-epoch mirror rows → **0** scheduled),
+**date**, **status**, **source**. `WA_TEMPLATE_MODE` is unset ⇒ `simulate`, so until Meta approves
+the templates a website guest who has never messaged us gets **nothing** (defers on a shut window,
+skipped at 36h) — correct. **There is no manual step for you here** (plan §8 CH-12: "None now"):
+template approval belongs to the REAL number's WABA, which does not exist yet, so it happens at
+real-number cutover — an ops event between CH-18 and CH-19. `pnpm templates:pack` generates the
+exact bodies to paste THEN.
+
+**The fact that changes how you think about this system:** the comfortable belief that OTA phone
+numbers are masked — and that OTA guests are therefore unreachable by accident — is **FALSE**.
+makemytrip and go-mmt mask them. **Airbnb and Booking.com do not.** Production holds **12 real OTA
+guests arriving soon, with real phone numbers**. `LIFECYCLE_SOURCES` (direct-only, fail-closed) is
+the only thing standing between them and a WhatsApp nobody authorised (**OQ-20**, 🔴 unanswered).
+
+## 🚨 THE RECURRING FAILURE CLASS reached ELEVEN — and it has TWO axes
+
+**Nine adversarial review rounds found 17 blocker-class defects. The suite was green every single
+time. FIVE were regressions introduced by the previous round's own fix** — so on this codebase *a
+fix is the most dangerous thing in the room*, and an unverified one is not a fix.
+
+> **Guard by the CONTRACT — never by the ENUM, the LIST, the CLOCK, or a MUTABLE FIELD.**
+
+1. **The QUESTION.** What does this predicate *actually* answer — the thing its caller needs, or a
+   proxy that merely coincides today? *(The sender re-used the SCHEDULING allowlist at SEND time, so
+   every stay that actually happened lost its welcome, thank-you and win-back. One plan-age clock
+   judged every kind, so every last-minute booking silently lost its pre-arrival — and the same rule
+   also SENT "we look forward to welcoming you" to guests who had already arrived. A proxy wrong in
+   both directions is the tell that it was a proxy at all.)*
+2. **The VERB.** Skipping is **TERMINAL** — a resolved row is never rescheduled. So a rule may only
+   SKIP on **a fact that cannot come back**; reading a mutable field it must **DEFER**, which is
+   reversible. *(An arrival date mistyped for ONE MINUTE and corrected permanently cost the guest
+   their pre-arrival and welcome, because the correcting event no-ops against a resolved row.)*
+   **Choose the verb the contract can survive being wrong about.**
+
+**And the test that "covers" it may be the reason it shipped.** The proof that last-minute
+pre-arrivals send was deleted and replaced with one asserting `sendAt < NOW` — *due*-ness, not
+outcome. Due, yes; sent, no. **Assert the OUTCOME, and drive the REAL event path
+(`handleBookingEvent`), never `runSender` directly.** A suite that reads the wall clock is lying
+too: the guest-quiet window turned `main` red ten hours a night while looking green at 6 p.m.
 
 ## Session protocol (mandatory — from plan.md §0)
 

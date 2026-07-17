@@ -31,17 +31,21 @@
  *     of both. CH-11 built the enrichment: `pnpm ezee:reconcile --apply` hydrates
  *     the label via BKG-03 through the event-free backfill writer, and the poller
  *     diff now COALESCEs a null-from-poll so a later poll cannot erase it.
- *     🚨 TODO(CH-13) — READ OQ-19 FIRST. Do NOT build the staff task card on this
- *     label. It is not the house the guest booked: eZee holds 8 houses inside 3
- *     room TYPES, a booking cannot name a house at all, and eZee auto-assigns
- *     lowest-number-first. The label is eZee's GUESS, and a card routed on it
- *     sends housekeeping to the wrong door. (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT
- *     = false` for exactly this reason.) CH-13's villa routing is blocked on the
- *     OQ-19 PMS re-model — one house = one bookable product — not on refresh
- *     semantics. The stale-label problem below is real but SECONDARY: once a house
- *     is genuinely bookable, hydration must re-fetch and overwrite, not fill-if-
- *     null, because nothing today refreshes a label eZee later changes.
- *     Full analysis: runbook §OQ-19 · docs/open-questions.md OQ-19.
+ *     🚨 TODO(CH-13) — do NOT build the staff task card on THIS label, but the
+ *     reason INVERTED on 2026-07-16 and the old one is gone. The website
+ *     abolished house-level choice, so there is no longer a "guest's house" for
+ *     eZee's assignment to contradict: eZee's assignment IS the physical door,
+ *     CH-13's routing is UNBLOCKED, and the PMS re-model is not a precondition.
+ *     What is wrong with THIS label is that it is a SNAPSHOT — only BKG-03 carries
+ *     a room, the poller never does (see coalesceMirrorInput), so most stored
+ *     labels are frozen at CH-11's 14 Jul reconcile and may be months stale by
+ *     arrival. The stale-label problem is now PRIMARY, not secondary.
+ *     Route off a FRESH BKG-03 tran.RoomID read by reservation number AT TASK
+ *     TIME. BKG-03 returns 503 for an unconfirmed hold, and "unreadable" NEVER
+ *     means "cancelled". (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` survives,
+ *     but for a DIFFERENT reason: it gates what the AI SAYS TO A GUEST, which is
+ *     not the same predicate as where housekeeping is sent — still gated on
+ *     OQ-15.) Full analysis: CLAUDE.md §OQ-19 · docs/open-questions.md OQ-19.
  */
 import type { MirrorRowInput, UpsertMirrorOutcome } from '../db/bookings.js';
 import { normalizePhone } from '../lib/phone.js';

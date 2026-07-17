@@ -77,7 +77,13 @@ export type Stage = 'lead' | 'prearrival' | 'inhouse' | 'postguest';
  * With this false the AI speaks the villa TYPE — exactly what it did before the
  * labels were hydrated, and what §5.4's *intent* has always been.
  *
- * FLIP TO TRUE only when a house is genuinely the thing that was booked (one
+ * FLIP TO TRUE only when OQ-15 says we may PROMISE a house to a guest.
+ * (The old condition — "when a house is genuinely the thing that was booked (one house = one
+ * bookable product in eZee, as Siolim already is)" — was RETIRED on 2026-07-16: the website
+ * abolished house-choice, so nothing is "the thing that was booked" any more. Staff routing is
+ * unblocked and reads BKG-03 directly; this flag is only about what we SAY to a guest, which
+ * still turns on OQ-15 and on the fact that an assignment can move before arrival.)
+ * Superseded reason, kept so nobody flips it on the old test (one
  * house = one bookable product in eZee, as Siolim already is). The unit tests
  * around this constant spell out precisely what changes when you do.
  */

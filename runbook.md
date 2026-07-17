@@ -780,8 +780,14 @@ eZee holds 8 houses inside 3 room types, so a booking cannot name a house — eZ
 lowest-number-first. The label is **not** the house the guest booked. The AI is therefore forbidden
 from speaking one (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`) and says "your Nistula Villa".
 
-**A staff task card built on that label would send housekeeping to the wrong door.** Blocks CH-13.
-The fix is a PMS re-model (one house = one bookable product) — see `docs/open-questions.md` OQ-19.
+**🚨 SUPERSEDED 2026-07-16 — read CLAUDE.md §OQ-19 before acting on anything above.** The website
+abolished house-level choice, so there is no "guest's house" for eZee's assignment to contradict:
+**eZee's assignment IS the physical door, CH-13 is NOT blocked, and the PMS re-model is not a
+precondition.** A card built on **`bookings_mirror.physical_room_label` is still wrong** — but now
+because that label is a SNAPSHOT frozen at CH-11's 14 Jul reconcile (only BKG-03 carries a room; the
+poller never does), not because it is a guess. **Route off a FRESH `BKG-03 tran.RoomID` read at task
+time.** What the AI may SAY to a guest is a separate question, still gated on OQ-15. See
+`docs/open-questions.md` OQ-19.
 
 **eZee quirks found the hard way (the docs are wrong about all of these):**
 - `ArrivalList` caps its window at **ONE MONTH** — error `112`, which is **not in its documented
@@ -793,5 +799,9 @@ The fix is a PMS re-model (one house = one bookable product) — see `docs/open-
   returned. **Blank fails** with "Missing parameters", despite the doc treating it as optional.
 - `RoomList` **rejects `check_out_date` and `num_nights` together**.
 - `InsertBooking` has **no room field at all**. A booking cannot name a house. This is OQ-19.
-- A booking must be **CONFIRMED** before it enters the connectivity queue — an unconfirmed booking
-  holds inventory but the poller never sees it.
+- A booking must be **CONFIRMED** before it enters the connectivity queue — the poller never sees an
+  unconfirmed (status-10) hold. **CORRECTION 2026-07-16: such a hold RESERVES NOTHING** — it blocks no
+  inventory (proven website-side; this line previously claimed the opposite, on an assumption nobody
+  had tested). **BKG-03 also cannot read one — it returns `503 No Reservation Found`, and
+  "unreadable" NEVER means "cancelled".** eZee assigns a house only at confirm, so no house exists
+  before then either.

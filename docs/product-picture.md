@@ -44,11 +44,20 @@ STAFF: arrivals digest line the evening before (via window-aware send). SYS: pol
 Precondition: Rahul linked to an ACTIVE stay in Villa B3.
 
 - G 15:20 — "hi, can we get 2 extra towels"
-- A 15:20 — "Of course — two fresh towels are on their way to Villa B3. Anything else you need this afternoon?"
+- A 15:20 — "Of course — two fresh towels are on their way up. Anything else you need this afternoon?"
+  **🚨 The AI's REPLY names no house, and that is a DIFFERENT rule from the card above.**
+  `TRUST_EZEE_ROOM_ASSIGNMENT = false` still gates what we SAY to a guest (OQ-15: may we promise a
+  specific house at all?), even though the staff card may now route on one. An earlier draft of this
+  line read "on their way to Villa B3" — CH-11's `scanUnitAssertions` guardrail would have
+  deterministically escalated the very reply this scenario asserts.
 - STAFF 15:20 — task card: `NISTULA TASK #<id> · Nistula Villa (Assagao) · Rahul · 2 extra towels · Reply DONE <id>`
-  **🚨 OQ-19 amendment (2026-07-16): the card names the villa TYPE, never a house, and routes to the
-  frontdesk lead until the PMS re-model lands. CH-19 asserts THIS, not "Villa B3" — eZee only GUESSED
-  that label, so a card built on it sends housekeeping to the wrong door.**
+  **🚨 OQ-19 amendment, REVISED 2026-07-16 (this supersedes the earlier amendment on this line —
+  which said the card must never name a house and was written before the answer landed): the card MAY
+  name the house, sourced from a FRESH `BKG-03 tran.RoomID` read at task time — NEVER from
+  `bookings_mirror.physical_room_label`, a snapshot frozen at CH-11's 14 Jul reconcile.
+  `assignFor(kind, villa)` may key off that fresh read; it falls back to the frontdesk lead only when
+  BKG-03 cannot resolve a room (it returns 503 for an unconfirmed hold — "unreadable" NEVER means
+  "cancelled"). The PMS re-model is NOT a precondition. CH-19 asserts THIS.**
 - G 15:52 — "where are those?"
 - A 15:52 — HONEST wording: references the open task and the nudge — "I've just nudged housekeeping — your towels are marked on the way. Sorry for the wait, Rahul." (Never "I checked with housekeeping" — it checked the task record.)
 - STAFF 15:52 — SLA nudge (task open 32 min > 30-min SLA): re-ping + cc lead.
@@ -90,7 +99,8 @@ Precondition: Rahul's stay ended ~75 days ago; `marketing_opt_in=true` (captured
 > eZee's *guess*, not the house the guest bought, so "your stay in Villa B3" could simply be false.
 > The win-back therefore names the villa **TYPE and its locality** ("your Nistula Villa in Assagao"),
 > which is always true. `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` enforces it in code, not by
-> prompt. When eZee is re-modelled so one house = one bookable product, this can name the house again.
+> prompt. **Naming a house to a GUEST is gated on OQ-15** (may we promise a specific house?) **and on
+> staleness — NOT on the PMS re-model, which OQ-19's 2026-07-16 answer removed as a precondition.**
 
 - A 11:00 (win-back template) — seasonal, personal, names the villa **TYPE + locality** (never a house — see above), zero pressure, "(Reply STOP anytime to stop these.)"
 - G 11:24 — "good timing. is b3 free 12-14 oct?"

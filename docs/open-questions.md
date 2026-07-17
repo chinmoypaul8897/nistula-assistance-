@@ -472,30 +472,6 @@ tombstone (42). Zero `Modify`.
 as good as the row's provenance.* Our own `status` column can be hand-edited; a reconcile-hydrated
 payload is not a feed observation. Check where the row came from before you believe what it says.
 
-**Why it matters:** the lifecycle sends to whatever phone the booking carries. A maintenance block
-with the caretaker's number gets a warm "we look forward to welcoming you".
-
-**What we shipped meanwhile:** `LIFECYCLE_EPOCH` — only bookings mirrored AFTER the cutover instant
-get lifecycle at all, so nothing historical can fire; plus the status allowlist (`confirmed` /
-`modified` only — an unconfirmed hold is never congratulated).
-
-**What changes once they answer:** if such rows exist, we need a way to recognise them (a rate plan,
-a source string, a name convention) and add a fifth gate.
-
-### OQ-22 — What do you do in eZee when a booking changes, and how fast?
-**Status:** 🟡 **HALF-ANSWERED BY OBSERVATION, 2026-07-16 — eZee's feed DOES deliver `Modify`.**
-A booking re-dated in the eZee UI during CH-12's live demo mirrored as `modified` and correctly
-re-planned its `send_at` (booking 969; see the CH-12 post-deploy verification in progress.md). A
-`modified` row is reachable ONLY through `verb === 'modify'` in `ezee/normalize.ts`, so **the row IS
-the proof.** The earlier reading — *"we have never once seen a `Modify`; the mirror holds zero
-`modified` rows"* — was a 2026-07-14 measurement and is **RETRACTED**: it was true of the data that
-day, and it was a statement about a queue we had not yet watched long enough. *(The CH-10 lesson,
-again: a poll against a backlogged eZee queue proves nothing.)*
-
-**What remains 🔴 is the PROCESS half** (team-question Q38): when a guest changes a booking **by
-phone**, does the front desk always enter it in eZee, and how fast? The API leg works; the human leg
-is unmeasured.
-
 **Why it matters:** if a guest moves their stay from the 20th to the 27th by phone and that never
 reaches eZee's connectivity queue, we will send the welcome on the 20th and state the wrong dates.
 
