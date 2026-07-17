@@ -51,6 +51,7 @@
  * villa TYPE + the frontdesk lead.
  */
 import type { EzeeClient } from '../ezee/client.js';
+import { isDeadCurrentStatus, normaliseCurrentStatus } from '../ezee/normalize.js';
 import { toArray, type EzeeBookingTran } from '../ezee/types.js';
 import { getVillaById } from '../lib/villas.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
@@ -86,14 +87,6 @@ export interface VillaRouteDeps {
  * (frontdesk lead) is a perfectly good outcome, so waiting longer buys little.
  */
 export const DOOR_READ_TIMEOUT_MS = 6_000;
-
-/** eZee's words for a booking that is over. A DENYLIST on purpose, matching
- * normalize.ts's own fall-through discipline: `CurrentStatus:"Confirmed
- * Reservation"` is what every real booking carries and is NOT in eZee's
- * documented value list, so an unrecognised status must never be read as
- * death — it would refuse to route every real guest. Only a word that MEANS
- * dead counts as dead. */
-const DEAD_CURRENT_STATUSES = new Set(['cancel', 'void']);
 
 /** Trimmed non-empty string or null — eZee sends '' for absent (observed on
  * RoomID for a room-less booking). */
@@ -145,8 +138,13 @@ export async function resolveDoor(
 
   // Rule 2. Checked BEFORE the room, because eZee hands us the room of a dead
   // booking without complaint and we must not act on it.
-  const current = str(tran.CurrentStatus)?.toLowerCase();
-  if (current !== undefined && current !== null && DEAD_CURRENT_STATUSES.has(current)) {
+  //
+  // The vocabulary comes from ezee/normalize.ts — the mapper that has been
+  // reading this field against live data since CH-10 — and NOT from a copy
+  // here. My first cut copied it, dropped "Cancelled", and would have sent
+  // housekeeping to a cancelled booking's door with no alert (caught by the
+  // pre-push review). One definition; a new dead word lands in one place.
+  if (isDeadCurrentStatus(normaliseCurrentStatus(str(tran.CurrentStatus) ?? undefined))) {
     await alertOps(deps.log, {
       kind: 'task_booking_dead_at_ezee',
       summary:

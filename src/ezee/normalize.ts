@@ -63,6 +63,36 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** eZee's own change-verb vocabulary — echoed VERBATIM in ACK Status. */
 const ACK_STATUSES = new Set(['new', 'modify', 'cancel']);
 
+/**
+ * eZee's `CurrentStatus`, folded for comparison. Spaces and underscores go:
+ * "Checked Out" and "checked_out" are the same word to eZee's back office.
+ * EXPORTED (CH-13a) so nothing re-implements it — see isDeadCurrentStatus.
+ */
+export function normaliseCurrentStatus(currentStatus: string | undefined): string {
+  return (currentStatus ?? '').toLowerCase().replace(/[\s_]+/g, '');
+}
+
+/**
+ * Does eZee's word mean this booking is OVER? (CH-13a extraction.)
+ *
+ * 🚨 EXPORTED BECAUSE staff/villaRoute.ts RE-ENUMERATED IT AND DRIFTED. That
+ * copy read `new Set(['cancel','void'])` — so "Cancelled", which this mapper
+ * has always known and which eZee's own docs list, ROUTED A HOUSEKEEPER TO A
+ * CANCELLED BOOKING'S DOOR with no ops alert. Found by CH-13a's pre-push
+ * review. There is now ONE vocabulary; a new dead word is added here and both
+ * callers get it.
+ *
+ * A DENYLIST on purpose, and this is the load-bearing half: `CurrentStatus:
+ * "Confirmed Reservation"` is what EVERY real booking carries and is NOT in
+ * eZee's documented value list (CH-10's live finding), so an unrecognised
+ * status must never be read as death — that would hide every real booking.
+ * Only a word that MEANS dead counts as dead. That is exactly why the
+ * completeness of this list is load-bearing rather than incidental.
+ */
+export function isDeadCurrentStatus(normalised: string): boolean {
+  return normalised === 'cancel' || normalised === 'cancelled' || normalised === 'void';
+}
+
 export interface StatusMapping {
   status: MirrorRowInput['status'];
   issue: string | null;
@@ -80,11 +110,11 @@ export function mapStatus(
   isConfirmed: string | undefined,
   currentStatus: string | undefined,
 ): StatusMapping {
-  const current = (currentStatus ?? '').toLowerCase().replace(/[\s_]+/g, '');
+  const current = normaliseCurrentStatus(currentStatus);
   if (current === 'arrived' || current === 'checkedin') return { status: 'checked_in', issue: null };
   if (current === 'checkedout') return { status: 'checked_out', issue: null };
   if (current === 'noshow') return { status: 'no_show', issue: null };
-  if (current === 'cancel' || current === 'cancelled' || current === 'void') {
+  if (isDeadCurrentStatus(current)) {
     return { status: 'cancelled', issue: null };
   }
   const verb = (tranStatus ?? '').toLowerCase().trim();

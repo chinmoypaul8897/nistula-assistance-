@@ -522,7 +522,7 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
           // allow).
           const body = await getMessageBody(deps.db, job.data.waMessageId);
           await handleStaffCommand(
-            { db: deps.db, log: deps.log, wa: deps.wa, roster },
+            { db: deps.db, log: deps.log, wa: deps.wa, roster, now: () => new Date() },
             { phone: job.data.phone, body },
           );
         }

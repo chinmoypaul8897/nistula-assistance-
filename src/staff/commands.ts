@@ -29,16 +29,20 @@
  * as a §8-step-3 deviation.
  */
 import { closeTaskByShortId, findTaskByShortId, getLiveTasksForPhone, type Task } from '../db/tasks.js';
-import type { Db } from '../db/client.js';
+import type { Db, DbLike } from '../db/client.js';
 import { getConversationTurnContext, insertMessage } from '../db/repos.js';
 import { sanitiseInline } from '../brain/prompt.js';
-import { summarizeError } from '../lib/logger.js';
 import type { AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { memberFor, type Roster } from './roster.js';
 
 export interface StaffCommandDeps {
   db: Db;
+  /** Injected — the chunk's one remaining un-injected clock was here (pre-push
+   * review). `closed_at` must be pinnable by a test, and tasks.ts's own rule is
+   * one clock per tick: this instant is compared against a DB-clock
+   * `sla_deadline`. */
+  now: () => Date;
   log: AlertLogger & { info?: (obj: Record<string, unknown>, msg?: string) => void };
   wa: Pick<WaClient, 'sendText'>;
   roster: Roster;
@@ -100,12 +104,31 @@ export async function handleStaffCommand(
     return;
   }
 
-  // The guarded UPDATE is the whole concurrency story: only the caller that
-  // actually changed the row proceeds, so a Meta redelivery (which the
-  // webhook's wa_message_id dedupe already absorbs) or a race with the SLA
-  // nudger cannot close twice, write two evidence rows, or message the guest
-  // twice.
-  const closed = await closeTaskByShortId(deps.db, command.shortId, input.phone, new Date());
+  // 🚨 ONE TRANSACTION: the guarded claim AND the evidence row.
+  //
+  // The guarded UPDATE is the concurrency story — only the caller that actually
+  // changed the row proceeds, so a Meta redelivery (which the webhook's
+  // wa_message_id dedupe already absorbs) or a race with the SLA nudger cannot
+  // close twice or message the guest twice.
+  //
+  // But the CH-12 sender's other half was missing here, and the pre-push review
+  // reproduced the cost: with the claim committed alone, a process death between
+  // it and the evidence row (a Railway deploy, an OOM — the job expires and
+  // retries) left the task `done`, NO `task_done` row, the guest never told, and
+  // the retry reporting "already closed" and stopping. A housekeeper delivered
+  // the towels and the system forgot. `closeTaskByShortId`'s own doc claimed
+  // "exactly one close writes evidence"; the true invariant was AT MOST one, and
+  // zero was reachable. Committing them together makes the retry either redo
+  // both or find the work genuinely done.
+  //
+  // The guest SEND stays outside: it is not rollback-able, and holding a tx open
+  // across a Graph call is how you get lock storms.
+  const closed = await deps.db.transaction(async (tx) => {
+    const row = await closeTaskByShortId(tx, command.shortId, input.phone, deps.now());
+    if (row === null) return null;
+    await writeTaskDoneEvidence(tx, row);
+    return row;
+  });
   if (closed === null) {
     await replyToUnclosable(deps, input.phone, command.shortId);
     return;
@@ -153,35 +176,34 @@ function renderTaskList(open: Task[]): string {
  * Best-effort throughout: the task IS closed, and failing to reach the guest
  * must not un-close it or fail the staff member's DONE.
  */
+/**
+ * The row that licenses the AI's next honest "that's sorted" (guardrail 2, C1
+ * and C5). Rides the SAME transaction as the claim.
+ *
+ * 🚨 THE RESEMBLANCE TO escalateToOps IS A TRAP — its rule is the OPPOSITE, and
+ * copying it here would be wrong. That row may only be written once a card is
+ * DELIVERED, because the fact it records ("a human is coming") only becomes
+ * true if the card lands. This row records a fact that has ALREADY happened,
+ * whoever hears about it: a human finished the work and typed DONE. Its truth
+ * does not depend on our send succeeding, so gating it on delivery would make
+ * the AI's next reply DIShonest — it would deny work that was genuinely done.
+ * Different facts, different rules.
+ */
+async function writeTaskDoneEvidence(db: DbLike, task: Task): Promise<void> {
+  if (task.conversationId === null) return;
+  await insertMessage(db, {
+    conversationId: task.conversationId,
+    direction: 'out',
+    sender: 'system',
+    type: 'text',
+    body: `task closed: ${task.shortId}`,
+    status: 'sent',
+    raw: { contextKind: TASK_DONE_CONTEXT_KIND, shortId: task.shortId },
+  });
+}
+
 async function tellGuest(deps: StaffCommandDeps, task: Task): Promise<void> {
   if (task.conversationId === null) return;
-  // Written BEFORE the send, and deliberately.
-  //
-  // 🚨 THE RESEMBLANCE TO escalateToOps IS A TRAP — the rule there is the
-  // OPPOSITE, and copying it here would be wrong. That row may only be written
-  // once a card is DELIVERED, because the fact it records ("a human is coming")
-  // only becomes true if the card lands. This row records a fact that has
-  // ALREADY happened, whoever hears about it: a human finished the work and
-  // typed DONE. Its truth does not depend on our send succeeding, so gating it
-  // on delivery would make the AI's next reply DIShonest — it would deny work
-  // that was genuinely done. Different facts, different rules.
-  try {
-    await insertMessage(deps.db, {
-      conversationId: task.conversationId,
-      direction: 'out',
-      sender: 'system',
-      type: 'text',
-      body: `task closed: ${task.shortId}`,
-      status: 'sent',
-      raw: { contextKind: TASK_DONE_CONTEXT_KIND, shortId: task.shortId },
-    });
-  } catch (error) {
-    deps.log.error(
-      { taskId: task.id, err: summarizeError(error) },
-      'task_done evidence row failed (telemetry only)',
-    );
-  }
-
   const ctx = await getConversationTurnContext(deps.db, task.conversationId).catch(() => null);
   if (ctx === null) return;
   // Voice guide: British English, no exclamation marks, 1–3 sentences. The

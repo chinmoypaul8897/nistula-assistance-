@@ -231,6 +231,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
             conversationId,
             guestId: args.conversation.guestId,
             guestFirstName: args.guestName ?? null,
+            sourceMessageId: args.newestGuestMsgId ?? null,
             stays: args.stays ?? [],
             // The same DB clock as `booking.today` — the stage gate and block
             // [6]'s stage line must never disagree inside one turn.
@@ -239,7 +240,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
             ezee: deps.tasks.resolveDoor,
             assign: deps.tasks.assign,
             notify: deps.tasks.notify,
-            created: { count: 0, shortIds: [] },
+            created: { count: 0 },
           },
         }),
   };

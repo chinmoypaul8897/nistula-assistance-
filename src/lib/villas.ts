@@ -180,24 +180,72 @@ export function getVillaById(villaId: string): Villa | undefined {
 /**
  * Does this text NAME a physical house, as opposed to a villa type? (CH-13a.)
  *
- * ONE definition, because two would drift and this predicate now guards two
- * different doors: the guest-facing template `param` (a house may not reach a
- * guest — OQ-15) and `create_staff_task`'s summary screen (an unverified house
- * may not compete with the door we resolved from eZee). They ask the same
- * question and must never answer it differently.
+ * ONE definition, because two would drift, and this predicate guards two doors:
+ * the guest-facing template `param` (a house may not reach a guest — OQ-15) and
+ * `create_staff_task`'s summary screen (an unverified house may not compete
+ * with the door we resolved from eZee).
  *
- * Guard by the CONTRACT, not a shape enumeration: a villa TYPE is a bare word
- * ("Nistula Apartment", "Nistula Villa") — a HOUSE is that word followed by a
- * number, optionally via a letter ("Apartment 06", "Apartment 11", "Villa B3").
- * An earlier `0?\d|[BC]\d` enumeration missed "Apartment 11", a REAL house,
- * because 0? matched empty and the trailing digit broke \b.
+ * 🚨 REWRITTEN BY CH-13a's PRE-PUSH REVIEW, and the finding was humbling: this
+ * function's own docstring said "guard by the CONTRACT, not a shape
+ * enumeration" — and then enumerated a shape. `/\b(?:Apartment|Villa)\s*[A-Za-z]?\d/`
+ * missed "apt 6", "villa b-3", "a9", "B3" and "the 06 apartment", every one of
+ * which THIS REPO'S OWN RESOLVER maps to a real house. So the same chunk
+ * decided "apt 6" IS a house (config.ts canonicalises the roster through
+ * resolveVilla) and IS NOT a house name (this screen) — and a card could read
+ * "Apartment 06 · Rahul · AC weak in villa b-3", which is two doors in
+ * different buildings, with the guest's own guess the likelier one for a tired
+ * housekeeper to act on.
+ *
+ * ─── The split this predicate needs, and why it is not just resolveVilla ────
+ * The answer to "WHICH house is this?" already exists: `resolveVilla`. But it
+ * cannot be the whole answer here, because it is deliberately LENIENT for its
+ * own caller ("which villa does the guest mean?"): it maps a BARE digit to a
+ * house. Handing it a task summary directly refuses the product —
+ *   "6 towels please" → Apartment 06 · "9 am wake-up call" → Apartment 09
+ *   "need 11 hangers" → Apartment 11 · "a taxi at 6"     → Apartment 06
+ * — and bare "Siolim" resolves to Siolim 4BHK while being the LOCALITY every
+ * confirmation template prints. The over-fire is as real a bug as the
+ * under-fire (CH-11 learnt this when its first unit-guard rewrite blocked the
+ * core pre-sales quote).
+ *
+ * So the two questions are split, each answered by whatever owns it:
+ *  - SCOPE  ("is this text REFERRING to a house at all?") is this function's
+ *    contract: a house reference is a type WORD bound to a unit token, or a
+ *    unit-letter token — never a bare number, which is a count or a clock.
+ *  - VOCABULARY ("does that span name a real house?") is delegated to
+ *    `resolveVilla`, so the spellings can never drift from the roster's.
  *
  * NOT to be confused with stayGuards.scanUnitAssertions, which asks a different
  * question — "is the model BINDING a house to this guest?" — and deliberately
  * lets a bare mention through, because naming a house is how we sell.
  */
+const HOUSE_SPAN = new RegExp(
+  [
+    // "Apartment 06", "apt 6", "apt6", "villa b-3", "Villa B3".
+    // NOTE no \b after the word: "apt6" is one token, and a housekeeper writes
+    // it. ("aptitude 6" cannot match — the digit must follow within one
+    // optional letter.)
+    String.raw`\b(?:apartments?|apts?|villas?)[\s.\-#:]*[a-z]?-?\d{1,2}\b`,
+    // "the 06 apartment" — the same reference, written backwards.
+    String.raw`\b\d{1,2}\s*(?:apartments?|apts?|villas?)\b`,
+    // Our label for the one Siolim house. Deliberately NOT bare "4BHK" and NOT
+    // bare "Siolim": the latter is the LOCALITY every confirmation template
+    // prints, and eZee's own type name ("Nistula 4BHK Siolim") must stay
+    // sayable to a guest.
+    String.raw`\bsiolim[\s.\-#:]*4\s*bhk\b`,
+    // A bare unit-letter token: "B3", "a9", "c-1". A bare NUMBER is excluded on
+    // purpose — that is the whole point of the scope half.
+    String.raw`\b[abc]-?\d{1,2}\b`,
+  ].join('|'),
+  'gi',
+);
+
 export function namesPhysicalHouse(text: string): boolean {
-  return /\b(?:Apartment|Villa)\s*[A-Za-z]?\d/i.test(text) || /\bSiolim 4BHK\b/i.test(text);
+  const spans = text.match(HOUSE_SPAN);
+  if (spans === null) return false;
+  // A span is a house only if the resolver says so — an unknown "a1" or
+  // "villa 99" names nothing, and a TYPE ("the apartment") resolves ambiguous.
+  return spans.some((span) => resolveVilla(span).kind === 'match');
 }
 
 /** The canonical booking link to share (§5.1) — never build a booking ourselves. */

@@ -322,9 +322,15 @@ describe('🚨 scenario 3, end to end through the real worker', () => {
     await processConversation(deps, conversation.id);
 
     const tasks = [...(await db.execute(sql`SELECT villa_label, assigned_phone FROM tasks`))];
-    // The TYPE, never the mirror's stale 'Villa B3'; and a human who can look
-    // it up. A guest's towels do not depend on eZee being reachable.
-    expect(tasks).toEqual([{ villa_label: 'Nistula Apartment', assigned_phone: MEERA }]);
+    // The TYPE plus an unmistakable "not confirmed", never the mirror's stale
+    // 'Villa B3'; and a human who can look it up. A guest's towels do not
+    // depend on eZee being reachable.
+    expect(tasks).toEqual([
+      {
+        villa_label: 'Nistula Apartment — house not confirmed, check eZee',
+        assigned_phone: MEERA,
+      },
+    ]);
     expect(carded[0]?.to).toBe(MEERA);
   });
 });

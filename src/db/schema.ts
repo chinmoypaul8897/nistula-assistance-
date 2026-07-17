@@ -476,6 +476,29 @@ export const tasks = pgTable(
     kind: taskKindEnum('kind').notNull(),
     /** 6-char base32, unique — the id a human types back as `DONE <id>`. */
     shortId: text('short_id').notNull().unique(),
+    /**
+     * 🚨 THE RETRY KEY (CH-13a pre-push review) — `${conversationId}:${newest
+     * guest message id}:${kind}`, or NULL for a task no guest message asked for
+     * (CH-13b's booking.created auto-tasks). Unique; Postgres allows many NULLs.
+     *
+     * WHY it exists: `create_staff_task` runs PRE-claim (CH-03 D2), so a
+     * `converse()` failure later in the turn makes pg-boss retry the WHOLE tool
+     * loop. The near-duplicate guard was named as the thing that absorbed that
+     * replay — and it cannot be, because it compares MODEL-AUTHORED PROSE with
+     * word overlap, and a retry is a fresh sample of a stochastic model that
+     * does not reproduce its own wording. Reproduced: turn 1 "2 extra towels",
+     * turn 2 "two towels for the bathroom" → 2 tasks, 2 cards, one guest ask.
+     *
+     * The remember_fact precedent did NOT transfer, and that is the lesson: it
+     * accepted naive similarity for a SILENT side effect (a duplicate row).
+     * A duplicate task buzzes a real housekeeper twice, starts a second SLA
+     * clock, and demands a second DONE.
+     *
+     * The contract this key states: ONE guest message asking for ONE KIND of
+     * help is ONE errand. Two towels and a bathrobe in one message is one
+     * housekeeping trip, not two.
+     */
+    requestKey: text('request_key').unique(),
     summary: text('summary').notNull(),
     detail: text('detail'),
     status: taskStatusEnum('status').notNull().default('open'),

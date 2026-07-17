@@ -60,16 +60,37 @@ export async function runSlaNudger(deps: SlaDeps): Promise<NudgeRun> {
   let nudged = 0;
   for (const task of overdue) {
     try {
-      // Claim first. Guarded on `open`, so two ticks (or a DONE landing
-      // mid-tick) can never double-buzz a busy human.
+      // 🚨 SEND FIRST, FLIP ON DELIVERY — and this order is the VERB lesson,
+      // not a style choice.
+      //
+      // My first cut claimed the row (open→nudged) BEFORE sending, and on a
+      // failed send alerted ops and returned WITHOUT reverting. The flip is
+      // TERMINAL — `findOverdueTasks` selects only `open`, and nothing anywhere
+      // returns a task to `open` — so the row said "nudged" when nobody was
+      // nudged, the rung was permanently consumed, and block [5] rendered
+      // ", already chased once" into the prompt: a chase that never happened,
+      // told to the model as fact. A terminal verb on a MUTABLE, RETRYABLE fact
+      // (`retryable: true` is literally set on those send failures) is the
+      // 9th/11th instance's exact shape.
+      //
+      // Sending first is safe here because there is no concurrent nudger to
+      // race: STAFF_SLA_QUEUE is stately with a constant singletonKey, so at
+      // most one tick runs. The only race is a DONE landing mid-tick, and
+      // `markNudged`'s `WHERE status='open'` still wins that cleanly — we just
+      // do not write evidence for a task that closed underneath us.
+      //
+      // The residual, chosen deliberately: a crash between the send and the
+      // flip re-nudges next tick. Buzzing a housekeeper twice is an annoyance;
+      // never chasing again while telling the model we did is a lie.
+      if (!(await nudgeOne(deps, task))) continue;
       const claimed = await markNudged(deps.db, task.id);
-      if (claimed === null) continue;
-      await nudgeOne(deps, claimed);
+      if (claimed === null) continue; // a DONE won the race — nothing to record
+      await writeNudgeEvidence(deps, task);
       nudged += 1;
     } catch (error) {
       deps.log.error(
         { taskId: task.id, err: summarizeError(error) },
-        'sla nudge failed — next tick will not retry (the task is already nudged)',
+        'sla nudge failed — the task stays open and the next tick retries',
       );
     }
   }
@@ -77,7 +98,10 @@ export async function runSlaNudger(deps: SlaDeps): Promise<NudgeRun> {
   return { considered: overdue.length, nudged };
 }
 
-async function nudgeOne(deps: SlaDeps, task: Task): Promise<void> {
+/** Re-pings the assignee + ccs the lead. Returns whether a human got it — the
+ * caller flips the row only then, so a failed nudge leaves the task open for
+ * the next tick. */
+async function nudgeOne(deps: SlaDeps, task: Task): Promise<boolean> {
   const params = {
     shortId: task.shortId,
     villa: task.villaLabel ?? 'villa not confirmed',
@@ -104,18 +128,18 @@ async function nudgeOne(deps: SlaDeps, task: Task): Promise<void> {
   }
 
   if (!delivered) {
-    // NO evidence row. The AI must not say "I've nudged housekeeping" when the
-    // nudge reached nobody — that is the same sentence as the promise this
-    // guardrail exists for, one rung further on. CH-12's blocker #5, again.
+    // NO evidence row, NO flip. The AI must not say "I've nudged housekeeping"
+    // when the nudge reached nobody — that is the same sentence as the promise
+    // this guardrail exists for, one rung further on (CH-12's blocker #5) — and
+    // the task stays `open` so the next tick tries again.
     await alertOps(deps.log, {
       kind: 'sla_nudge_undelivered',
       summary: 'An overdue task could not be re-pinged — nobody was reachable',
       detail: { taskId: task.id, shortId: task.shortId, kind: task.kind, villa: task.villaLabel },
     });
-    return;
+    return false;
   }
 
-  await writeNudgeEvidence(deps, task);
   await alertOps(deps.log, {
     kind: 'task_sla_breached',
     summary: 'A guest request passed its SLA and the team was re-pinged',
@@ -127,6 +151,7 @@ async function nudgeOne(deps: SlaDeps, task: Task): Promise<void> {
       villa: task.villaLabel,
     },
   });
+  return true;
 }
 
 /**

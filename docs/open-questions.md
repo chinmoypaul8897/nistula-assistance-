@@ -374,12 +374,33 @@ is no longer a "guest's house" for it to contradict.** eZee's assignment simply 
 guest will occupy, and eZee is now the ONLY system that knows it (`BKG-03 tran.RoomID`, at confirm).
 **We can route staff off that directly — we need neither the website's database nor the re-model.**
 
-**Two eZee facts learned from the website's own scars — both new to us:**
-1. **BKG-03 cannot read an UNCONFIRMED booking.** It returns `503 No Reservation Found` for a live
-   status-10 hold. **"Unreadable" NEVER means "cancelled"** — conflating them caused a real bug on
-   their side. A house only exists after confirm, because eZee only assigns at confirm.
-   **🚨 TODO(CH-17): the deferred `ezee_cancel_conflict` / `partial_cancel_suspect` re-sync is exactly
-   a BKG-03 call. Whoever builds it must not read 503 as a cancellation.**
+**Two eZee facts learned from the website's own scars — the FIRST one was WRONG, corrected below:**
+1. ~~**BKG-03 cannot read an UNCONFIRMED booking.** It returns `503 No Reservation Found` for a live
+   status-10 hold.~~
+   > **🚨 CORRECTED 2026-07-17 by CH-13a, which probed BKG-03 live 14 times before building on it.
+   > BKG-03 NEVER RETURNED 503 ONCE.** That string is documented for **BKG-30**, a different
+   > endpoint (`04_bookings.md:9097`) — the likeliest origin of the mix-up; BKG-03's own error table
+   > (`:1737-1749`) lists no 503 at all. What it ACTUALLY does:
+   > - **a reservation that does not exist → `{status:'ok', reservations:[]}`** — an EMPTY OK. Any
+   >   caller keying "no such booking" off an ERROR CODE has a branch that never runs. (CH-13a's own
+   >   approved plan said to build exactly that; the probe is why it does not.)
+   > - **no room assigned yet → `RoomID: ""`** — an empty string, not an absent field.
+   > - **a CANCELLED or VOIDED booking → `ok`, room returned happily.** A successful read is NOT
+   >   proof the booking is alive; check `tran.CurrentStatus`. This matters for **OQ-24**: a VOID
+   >   emits no event, so the mirror can hold a dead booking as live for ever (969 does), and a
+   >   fresh read is the only place anyone would learn.
+   >
+   > **STILL UNKNOWN, and not claimed either way:** no unconfirmed hold was reachable to probe (every
+   > one had since been cancelled), so *"503 for an unconfirmed hold"* is **untested, not
+   > disproven**. `staff/villaRoute.ts` treats 503, `ok`+empty AND `RoomID:''` identically — correct
+   > in both worlds.
+
+   **The rule survives all of it, unchanged: "UNREADABLE" NEVER MEANS "CANCELLED"** — conflating them
+   caused a real bug on the website's side. A house only exists after confirm, because eZee only
+   assigns at confirm. **🚨 TODO(CH-17): the deferred `ezee_cancel_conflict` /
+   `partial_cancel_suspect` re-sync is exactly a BKG-03 call. Whoever builds it must not read an
+   error — OR AN EMPTY OK — as a cancellation.** `villaRoute.resolveDoor` already does this
+   correctly and is the reference implementation.
 2. **An unconfirmed (status-10) hold reserves NOTHING at eZee** — it blocks no inventory. That
    defuses part of OQ-18 and bears on OQ-21.
 

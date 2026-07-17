@@ -108,8 +108,19 @@ export async function notifyTask(
  * from telling the model a task is in hand.
  */
 async function recordHole(deps: NotifierDeps, task: Task, reason: string): Promise<void> {
+  // 🚨 If THIS update fails, the task stays `open` — a card nobody received,
+  // looking exactly like work in hand. The nudger would then chase it and,
+  // on a landed nudge, write an `sla_nudge` row licensing "I've just nudged
+  // housekeeping" about a task no human has ever seen: the honesty hole
+  // `notify_failed` exists to prevent, defeated by a swallowed catch
+  // (pre-push review). It is still swallowed — the notifier must never throw
+  // into a guest's turn — but it is no longer SILENT: ops is paged either way
+  // below, and the failure is named so an operator can find it.
   await markNotifyFailed(deps.db, task.id).catch((error: unknown) => {
-    deps.log.error({ taskId: task.id, err: String(error) }, 'markNotifyFailed failed');
+    deps.log.error(
+      { taskId: task.id, shortId: task.shortId, err: String(error) },
+      'markNotifyFailed FAILED — task is still open with a card nobody received',
+    );
   });
   await alertOps(deps.log, {
     kind: 'task_notify_failed',

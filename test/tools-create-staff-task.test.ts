@@ -51,14 +51,24 @@ interface Harness {
   tasks: ToolTaskContext;
 }
 
-const harness = (over: Partial<ToolTaskContext> & { live?: Task[]; delivered?: boolean } = {}): Harness => {
+const harness = (
+  over: Partial<ToolTaskContext> & { live?: Task[]; delivered?: boolean; byKey?: Task } = {},
+): Harness => {
   const inserted: unknown[] = [];
   const appended: unknown[] = [];
   const notified: Task[] = [];
   const live = over.live ?? [];
   const db = {
     select: () => ({
-      from: () => ({ where: () => ({ orderBy: () => Promise.resolve(live) }) }),
+      from: () => ({
+        where: () => ({
+          // getLiveTasksForConversation ends .orderBy(); findTaskByRequestKey
+          // ends .limit(1). `byKey` is what a PREVIOUS attempt at this same
+          // request left behind — the retry path.
+          orderBy: () => Promise.resolve(live),
+          limit: () => Promise.resolve(over.byKey === undefined ? [] : [over.byKey]),
+        }),
+      }),
     }),
     insert: () => ({
       values: (v: unknown) => ({
@@ -85,6 +95,7 @@ const harness = (over: Partial<ToolTaskContext> & { live?: Task[]; delivered?: b
     conversationId: 'c-1',
     guestId: 'g-1',
     guestFirstName: 'Rahul',
+    sourceMessageId: 'm-1',
     stays: [stay()],
     today: TODAY,
     now: new Date('2026-07-17T09:50:00Z'),
@@ -94,7 +105,7 @@ const harness = (over: Partial<ToolTaskContext> & { live?: Task[]; delivered?: b
       notified.push(t);
       return { delivered: over.delivered ?? true };
     }),
-    created: { count: 0, shortIds: [] },
+    created: { count: 0 },
     ...over,
   };
   const ctx = { log: { error: () => {}, warn: () => {} }, tasks } as unknown as ToolContext;
@@ -141,9 +152,16 @@ describe('create_staff_task — the happy path', () => {
     const h = harness({ ezee: vi.fn(async () => ({ resolved: false as const, reason: 'unreadable' as const })) });
     const result = await run(h.ctx);
     expect(result).toMatchObject({ ok: true });
-    // A guest's towels must not depend on eZee being up.
-    expect(h.inserted[0]).toMatchObject({ villaLabel: 'Nistula Apartment' });
-    expect(h.tasks.assign).toHaveBeenCalledWith('housekeeping', 'Nistula Apartment');
+    // A guest's towels must not depend on eZee being up. But the card must SAY
+    // the house is unconfirmed rather than quietly printing a type that names
+    // three houses — the review found that line was unreachable.
+    expect(h.inserted[0]).toMatchObject({
+      villaLabel: 'Nistula Apartment — house not confirmed, check eZee',
+    });
+    expect(h.tasks.assign).toHaveBeenCalledWith(
+      'housekeeping',
+      'Nistula Apartment — house not confirmed, check eZee',
+    );
   });
 
   it('raises even with no eZee client at all', async () => {
@@ -172,10 +190,65 @@ describe('🚨 create_staff_task — DELIVERY IS THE CONTRACT', () => {
     expect((result as { message: string }).message).toMatch(/bringing the team in/i);
   });
 
-  it('an undelivered card does NOT burn the per-turn allowance', async () => {
+  it('🚨 an undelivered card DOES burn the per-turn allowance', async () => {
+    // This test used to assert the OPPOSITE, and it was asserting the bug.
+    // The pre-push review reproduced the consequence: with the latch counting
+    // only successes, a deterministic failure (an empty roster, or a staff
+    // window shut >24h — both DEFAULT states today) let one turn insert 6 rows
+    // and page ops 6 times against a cap of 2. Every retry was certain to fail
+    // again, and `notify_failed` is invisible to GATES 3/4, so nothing else
+    // could see the orphans. The latch counts ATTEMPTS.
     const h = harness({ delivered: false });
     await run(h.ctx);
-    expect(h.tasks.created.count).toBe(0);
+    expect(h.tasks.created.count).toBe(1);
+  });
+
+  it('🚨 a turn cannot spray orphan tasks when the roster is unreachable', async () => {
+    const h = harness({ delivered: false });
+    for (let i = 0; i < 6; i += 1) await run(h.ctx, { summary: `towels ${String(i)}` });
+    expect(h.inserted.length).toBeLessThanOrEqual(2);
+    expect(h.notified.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('🚨 create_staff_task — GATE 0, the retry key', () => {
+  it('a retry finds its own previous task instead of raising a second one', async () => {
+    // The tool runs PRE-claim, so a converse() failure later in the turn makes
+    // pg-boss retry the WHOLE loop. `similar()` cannot absorb that — a retry is
+    // a fresh sample of a stochastic model and does not reproduce its own
+    // wording. The key is deterministic, so it collides instead.
+    const h = harness({ byKey: task({ shortId: 'PREV11', status: 'open' }) });
+    const result = await run(h.ctx, { summary: 'two towels for the bathroom' });
+    expect(result).toEqual({ ok: true, data: { shortId: 'PREV11', replayed: true } });
+    expect(h.inserted).toHaveLength(0);
+    expect(h.notified).toHaveLength(0);
+  });
+
+  it('the replay answers from the EXISTING row’s status, not from optimism', async () => {
+    // The previous attempt's card never landed, so the promise is still false.
+    const h = harness({ byKey: task({ shortId: 'PREV11', status: 'notify_failed' }) });
+    expect(await run(h.ctx)).toMatchObject({ ok: false, error: 'NOT_NOTIFIED' });
+    expect(h.inserted).toHaveLength(0);
+  });
+
+  it('a resolved task is not evidence anyone is moving NOW', async () => {
+    const h = harness({ byKey: task({ shortId: 'PREV11', status: 'done' }) });
+    expect(await run(h.ctx)).toMatchObject({ ok: false, error: 'REFUSED' });
+  });
+
+  it('the key is per KIND — towels and a broken AC in one message are two errands', async () => {
+    const h = harness({ byKey: undefined });
+    expect(await run(h.ctx, { kind: 'maintenance', summary: 'the AC is weak' })).toMatchObject({
+      ok: true,
+    });
+    expect(h.inserted[0]).toMatchObject({ requestKey: 'c-1:m-1:maintenance' });
+  });
+
+  it('no source message ⇒ no key, and the task still raises', async () => {
+    // CH-13b's booking.created auto-tasks have no guest message behind them.
+    const h = harness({ sourceMessageId: null });
+    expect(await run(h.ctx)).toMatchObject({ ok: true });
+    expect(h.inserted[0]).toMatchObject({ requestKey: null });
   });
 });
 
@@ -241,9 +314,15 @@ describe('create_staff_task — GATES 3 and 4, duplicates and the cap', () => {
     const result = await run(h.ctx, { summary: 'more extra towels please' });
     expect(result).toMatchObject({ ok: true, data: { appended: true, reason: 'duplicate' } });
     expect(h.inserted).toHaveLength(0);
-    // No second buzz: the housekeeper already has the card, and the SLA nudger
-    // is what chases them.
-    expect(h.notified).toHaveLength(0);
+    // 🚨 A card DOES go out, and this assertion is inverted from my first cut.
+    // It asserted "no second buzz", reasoning that a housekeeper holding the
+    // card needs no reminder — true only for a GENUINE repeat. The append path
+    // is also reached by similar()'s false merges and by the at-cap rule, where
+    // the new ask is DIFFERENT; the appended text lands in `detail`, which no
+    // staff surface renders. So it licensed "the pillows are on their way" and
+    // nobody ever learned about the pillows. An un-carded ask is invisible work.
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]?.summary).toContain('(also)');
   });
 
   it('the duplicate check keys on the DERIVED villa, not an argument', async () => {
@@ -292,7 +371,7 @@ describe('create_staff_task — the per-turn latch', () => {
   it('caps raises across the turn, so a guardrail regenerate cannot double-buzz', async () => {
     // The tool loop RE-RUNS on a regenerate, sharing this context object — the
     // CH-09 lesson, applied to a side effect a human can hear.
-    const h = harness({ created: { count: 2, shortIds: ['X', 'Y'] } });
+    const h = harness({ created: { count: 2 } });
     expect(await run(h.ctx)).toMatchObject({ ok: false, error: 'REFUSED' });
     expect(h.inserted).toHaveLength(0);
   });

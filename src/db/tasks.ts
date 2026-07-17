@@ -5,11 +5,13 @@
  * state flip is a GUARDED UPDATE that returns the row it changed
  * (`WHERE status IN (...) RETURNING`), never a read-then-write. Two reasons,
  * both real on this system:
- *  - Staff commands are intercepted in the webhook BEFORE `insertMessage`, so
- *    they get NO `wa_message_id` dedupe for free (CH-02's dedupe protects the
- *    guest path only). A Meta redelivery of `DONE A3F2K9` therefore arrives
- *    twice, and only the UPDATE's own row count can tell the winner from the
- *    replay. The winner is the only one that may message the guest.
+ *  - A Meta redelivery of `DONE A3F2K9` is absorbed FIRST by the webhook's own
+ *    `wa_message_id` dedupe (it stores the staff message through the same
+ *    `insertMessage`, so the `isNew` guard returns early). This layer is the
+ *    SECOND guard, for what that one cannot see: two staff typing DONE on the
+ *    same task at once, or a job retry after a crash. Only the UPDATE's own
+ *    returned row tells the winner from the loser, and the winner is the only
+ *    one that writes evidence and messages the guest.
  *  - The 5-minutely nudger and a staff DONE can race on the same row.
  * This is the `lifecycle/sender.ts` pattern (CH-12), for the same reason.
  */
@@ -50,13 +52,15 @@ export const MAX_OPEN_TASKS_PER_CONVERSATION = 3;
 export const LIVE_TASK_STATUSES = ['open', 'nudged'] as const satisfies readonly TaskStatus[];
 
 /**
- * Crockford-style base32 minus I/L/O/U: unambiguous when a tired housekeeper
- * reads it off a phone and types it back, and minus U so no 6-char id can spell
- * something unfortunate. 28^6 ≈ 480M — §3.3 asks for "short but unguessable
- * enough", and the id alone grants nothing anyway (a DONE is only honoured from
- * a roster number).
+ * Crockford base32: unambiguous when a tired housekeeper reads it off a phone
+ * and types it back (it already excludes I/L/O/U, so no 6-char id can spell
+ * something unfortunate either). 32^6 ≈ 1.07B — §3.3 asks for "short but
+ * unguessable enough", and the id alone grants nothing anyway: a DONE is only
+ * honoured from a roster number, so a guest who knows one can do nothing with
+ * it. (A `.replace(/[ILOU]/g,'')` used to sit here doing nothing, with a
+ * comment claiming 28^6 — the alphabet never contained those letters.)
  */
-const SHORT_ID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'.replace(/[ILOU]/g, '');
+const SHORT_ID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const SHORT_ID_LENGTH = 6;
 
 /** WHY randomInt and not Math.random: this id is typed back by a human as an
@@ -79,15 +83,41 @@ export interface NewTask {
   summary: string;
   detail: string | null;
   assignedPhone: string | null;
+  /** The retry key (see schema). Null ⇒ no guest message asked for this. */
+  requestKey: string | null;
   /** Injected, never `new Date()` here — one clock per tick (the CH-12 lesson:
    * a suite that reads the wall clock lies at 02:00). */
   now: Date;
 }
 
+/** `${conversationId}:${newest guest message id}:${kind}` — deterministic, so a
+ * pg-boss retry of the same turn computes the SAME key and collides instead of
+ * being judged by word overlap. */
+export function taskRequestKey(
+  conversationId: string,
+  sourceMessageId: string,
+  kind: TaskKind,
+): string {
+  return `${conversationId}:${sourceMessageId}:${kind}`;
+}
+
+/** The task a previous attempt at THIS request already created, if any. */
+export async function findTaskByRequestKey(db: DbLike, requestKey: string): Promise<Task | null> {
+  const [row] = await db.select().from(tasks).where(eq(tasks.requestKey, requestKey)).limit(1);
+  return row ?? null;
+}
+
 /**
- * Inserts an open task with a fresh short id. Retries on the short-id unique —
- * a collision is ~1-in-480M per attempt, but "unlikely" is not "handled", and
- * the failure mode would be a guest told their request was logged when it threw.
+ * Inserts an open task with a fresh short id.
+ *
+ * Retries on the SHORT-ID unique — a collision is ~1-in-a-billion per attempt,
+ * but "unlikely" is not "handled", and the failure mode would be a guest told
+ * their request was logged when it threw.
+ *
+ * It does NOT retry a REQUEST-KEY collision, and the difference matters: a
+ * short-id clash means "unlucky, try another id"; a request-key clash means
+ * "this exact request already exists" — retrying would defeat the very guard.
+ * That throws to the caller, which reads the existing row.
  */
 export async function insertTask(db: DbLike, input: NewTask): Promise<Task> {
   const slaMinutes = SLA_MINUTES[input.kind];
@@ -103,6 +133,7 @@ export async function insertTask(db: DbLike, input: NewTask): Promise<Task> {
           villaLabel: input.villaLabel,
           kind: input.kind,
           shortId: generateShortId(),
+          requestKey: input.requestKey,
           summary: input.summary,
           detail: input.detail,
           assignedPhone: input.assignedPhone,
@@ -203,7 +234,12 @@ export async function closeTaskByShortId(
     .set({ status: 'done', closedAt: now, closedBy })
     .where(
       and(
-        eq(sql`upper(${tasks.shortId})`, shortId.toUpperCase()),
+        // The stored id is ALWAYS uppercase (SHORT_ID_ALPHABET has no lower
+        // case), so upper-casing the INPUT is enough and upper-casing the
+        // COLUMN would only defeat the unique index — verified with EXPLAIN:
+        // `upper(short_id) = $1` seq-scans, this index-scans. Same
+        // case-insensitive-human property, one index scan (pre-push review).
+        eq(tasks.shortId, shortId.toUpperCase()),
         inArray(tasks.status, [...LIVE_TASK_STATUSES]),
       ),
     )
@@ -218,7 +254,7 @@ export async function findTaskByShortId(db: DbLike, shortId: string): Promise<Ta
   const [row] = await db
     .select()
     .from(tasks)
-    .where(eq(sql`upper(${tasks.shortId})`, shortId.toUpperCase()))
+    .where(eq(tasks.shortId, shortId.toUpperCase()))
     .limit(1);
   return row ?? null;
 }

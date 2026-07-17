@@ -133,6 +133,11 @@ export interface ToolTaskContext {
   guestId: string;
   /** For the card. Sanitised at render, not here. */
   guestFirstName: string | null;
+  /** The newest guest message of the batch — the same provenance cursor
+   * memory.sourceMessageId uses. It is what makes the retry key DETERMINISTIC:
+   * a pg-boss retry re-reads the same batch, so it computes the same key and
+   * collides with its own previous attempt instead of raising a second task. */
+  sourceMessageId: string | null;
   /** This guest's stays, already projected (the worker's single read) — the
    * stage gate and the reservation number for the door read both come from
    * here, never from a model argument. */
@@ -160,7 +165,7 @@ export interface ToolTaskContext {
    * absorbs it, but a latch is cheaper than a DB round trip and does not depend
    * on two summaries being similar enough to match.
    */
-  created: { count: number; shortIds: string[] };
+  created: { count: number };
 }
 
 /** The one eZee call a tool may make (BKG-03). Narrowed to a function type so

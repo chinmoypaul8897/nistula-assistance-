@@ -74,7 +74,7 @@ const log = {
   info: () => {},
 };
 
-const deps = () => ({ db, log, wa, roster: ROSTER });
+const deps = () => ({ db, log, wa, roster: ROSTER, now: () => NOW });
 
 async function seedTask(over: Partial<Parameters<typeof insertTask>[1]> = {}): Promise<Task> {
   return insertTask(db, {
@@ -86,6 +86,7 @@ async function seedTask(over: Partial<Parameters<typeof insertTask>[1]> = {}): P
     summary: '2 extra towels',
     detail: null,
     assignedPhone: ANITA,
+    requestKey: null,
     now: NOW,
     ...over,
   });
@@ -291,6 +292,30 @@ describe('the SLA nudger', () => {
     const task = await seedTask();
     await db.execute(sql`UPDATE tasks SET status = 'notify_failed' WHERE id = ${task.id}`);
     expect(await runSlaNudger(slaDeps(LATE))).toEqual({ considered: 0, nudged: 0 });
+  });
+
+  it('🚨 an UNDELIVERED nudge leaves the task OPEN so the next tick retries', async () => {
+    // THE VERB. My first cut claimed the row (open→nudged) BEFORE sending and
+    // never reverted on failure. The flip is TERMINAL — findOverdueTasks selects
+    // only `open`, and nothing anywhere reopens — so the rung was permanently
+    // consumed by a nudge that never happened, and block [5] then rendered
+    // ", already chased once" into the prompt: a chase told to the model as
+    // fact. A terminal verb on a mutable, RETRYABLE fact.
+    const task = await seedTask();
+    const shut = async () => ({
+      ok: false as const,
+      messageId: null,
+      error: 'WINDOW_CLOSED_SIMULATED',
+      usedTemplate: false,
+      retryable: true,
+    });
+    wa.sendTemplated.mockImplementationOnce(shut).mockImplementationOnce(shut);
+    expect(await runSlaNudger(slaDeps(LATE))).toEqual({ considered: 1, nudged: 0 });
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('open');
+
+    // And the next tick, with a reachable human, genuinely nudges it.
+    expect(await runSlaNudger(slaDeps(LATE))).toEqual({ considered: 1, nudged: 1 });
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('nudged');
   });
 
   it('🚨 an UNDELIVERED nudge writes NO evidence — "I nudged them" would be a lie', async () => {
