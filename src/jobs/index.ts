@@ -42,6 +42,7 @@ import { runSender } from '../lifecycle/sender.js';
 import { istCalendarDay, nowIST } from '../lib/time.js';
 import { summarizeError } from '../lib/logger.js';
 import { buildStaffTaskDeps } from '../staff/index.js';
+import { maybeCreateArrivalVerifyTask, type ArrivalTaskDeps } from '../staff/arrivalTasks.js';
 import { handleStaffCommand } from '../staff/commands.js';
 import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
@@ -448,10 +449,37 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
       fromSweep,
     });
 
+    // CH-13b's arrival auto-task rides the SAME booking consumer (D9: one queue,
+    // one consumer — a second boss.work on this queue would split the jobs). It
+    // is INDEPENDENT of the lifecycle result on purpose: a source-gated Airbnb
+    // booking gets no message but its room still needs preparing, so the task
+    // gate (epoch/date/status, no source) is asked separately.
+    const arrivalTaskDeps = (): ArrivalTaskDeps | null => {
+      if (deps.staff === undefined) return null;
+      const now = nowIST();
+      return {
+        db: deps.db,
+        log: deps.log,
+        roster: deps.staff.roster,
+        wa: deps.wa,
+        epoch: gates.epoch,
+        today: istCalendarDay(now),
+        now,
+      };
+    };
+
     for (const [kind, queue] of Object.entries(BOOKING_EVENT_QUEUES) as [BookingEventKind, string][]) {
       await deps.boss.work<{ reservationNo: string }>(queue, workOptions, async (jobs) => {
         for (const job of jobs) {
           await handleBookingEvent(schedulerDeps(), kind, job.data.reservationNo);
+          // Only on CREATE: a modify/cancel does not re-open the pre-arrival
+          // verify question, and the deterministic request_key makes a
+          // redelivered create idempotent anyway. A throw here retries the whole
+          // job — both halves are idempotent, so at-least-once is safe.
+          if (kind === 'created') {
+            const ad = arrivalTaskDeps();
+            if (ad !== null) await maybeCreateArrivalVerifyTask(ad, job.data.reservationNo);
+          }
         }
       });
     }

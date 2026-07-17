@@ -299,10 +299,11 @@ export function settlePlanFor(directive: Directive, status: Conversation['status
         telemetry: 'human_request',
       };
     case 'MEDIA_FALLBACK':
-      // TODO(CH-13b): replace the interim ops notify with a real frontdesk
-      // task (§6.7's "graceful fallback line + frontdesk task"). Explicitly
-      // 13b, not 13a: this fires on the POLICY path, which skips the model
-      // entirely, so it needs a caller of its own rather than the tool.
+      // §6.7's "graceful fallback line + frontdesk task". The directive still
+      // carries `escalate:'media'`; CH-13b's worker re-routes THAT reason to a
+      // tracked frontdesk task (raiseMediaFrontdeskTask) instead of an ops ping.
+      // The policy path stays deliberately thin — the send + the escalate signal
+      // are all it knows; the worker owns the side effect.
       return {
         ...STORE_ONLY,
         send: 'mediaFallback',

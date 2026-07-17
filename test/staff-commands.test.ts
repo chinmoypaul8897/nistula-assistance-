@@ -274,6 +274,22 @@ describe('the SLA nudger', () => {
   const slaDeps = (now: Date) => ({ db, log, wa, roster: ROSTER, now: () => now });
   const LATE = new Date('2026-07-17T10:31:00Z'); // 31 min after NOW; housekeeping SLA is 30
 
+  it('🚨 CH-13b · an escalation-kind task nudges at its 10-min SLA (the groundwork)', async () => {
+    // CH-13b's escalation-SLA "groundwork" is the escalation:10 constant (shipped
+    // CH-13a) + the kind-blind nudger: an escalation task overdue at 10 min is
+    // nudged like any other. The 10/20-min re-ping LADDER is CH-14; this proves
+    // the first rung is wired.
+    const task = await seedTask({ kind: 'escalation', assignedPhone: MEERA });
+    const tenMin = new Date(NOW.getTime() + 11 * 60_000); // 11 > the 10-min SLA
+    expect(await runSlaNudger(slaDeps(tenMin))).toEqual({ considered: 1, nudged: 1 });
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('nudged');
+    // And it is NOT yet overdue at 9 minutes — the deadline is real.
+    const nine = new Date(NOW.getTime() + 9 * 60_000);
+    const fresh = await seedTask({ kind: 'escalation', assignedPhone: MEERA });
+    expect((await runSlaNudger(slaDeps(nine))).nudged).toBe(0);
+    expect((await findTaskByShortId(db, fresh.shortId))?.status).toBe('open');
+  });
+
   it('nudges an overdue task, re-pings the assignee and ccs the lead', async () => {
     const task = await seedTask();
     const run = await runSlaNudger(slaDeps(LATE));

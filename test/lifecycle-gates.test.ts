@@ -20,6 +20,7 @@ import {
   passesEpoch,
   passesSource,
   passesStatus,
+  passesTaskGate,
   type GateContext,
 } from '../src/lifecycle/gates.js';
 
@@ -204,5 +205,45 @@ describe('checkGates — all four together', () => {
     for (const r of preExisting) {
       expect(checkGates(r, CTX).ok).toBe(false);
     }
+  });
+});
+
+describe('🚨 CH-13b — the TASK gate is a DIFFERENT question from the lifecycle gate (D9)', () => {
+  const TASK_CTX = { epoch: EPOCH, today: TODAY };
+
+  it('agrees with checkGates on epoch/date/status', () => {
+    expect(passesTaskGate(row(), TASK_CTX).ok).toBe(true);
+    expect(passesTaskGate(row({ createdAt: new Date('2026-07-13T05:00:00Z') }), TASK_CTX)).toEqual({
+      ok: false,
+      reason: 'before_epoch',
+    });
+    expect(passesTaskGate(row({ checkIn: '2026-03-01' }), TASK_CTX)).toEqual({
+      ok: false,
+      reason: 'stay_in_past',
+    });
+    expect(passesTaskGate(row({ status: 'cancelled', checkIn: null }), TASK_CTX)).toEqual({
+      ok: false,
+      reason: 'status_not_live', // status is checked before date — a cancel is not live
+    });
+    expect(passesTaskGate(row({ status: 'unknown' }), TASK_CTX)).toEqual({
+      ok: false,
+      reason: 'status_not_live',
+    });
+  });
+
+  it('🚨 ADMITS an Airbnb booking that checkGates REFUSES on source — the whole point', () => {
+    // OQ-20 forbids MESSAGING this guest; it does not stop us PREPARING their
+    // room. A task reaches no guest, so the source gate must not apply to it.
+    const airbnb = row({ source: 'Airbnb', checkIn: '2026-08-20' });
+    expect(checkGates(airbnb, CTX)).toEqual({ ok: false, reason: 'source_not_allowed' });
+    expect(passesTaskGate(airbnb, TASK_CTX).ok).toBe(true);
+  });
+
+  it('does not care about a missing phone — a task needs no number', () => {
+    // hasPhone gates a MESSAGE; a task is internal. A booking with no phone (an
+    // OTA row awaiting enrichment) still describes a room to prepare.
+    const noPhone = row({ guestPhone: null });
+    expect(checkGates(noPhone, CTX)).toEqual({ ok: false, reason: 'no_phone' });
+    expect(passesTaskGate(noPhone, TASK_CTX).ok).toBe(true);
   });
 });
