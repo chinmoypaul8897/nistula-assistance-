@@ -208,7 +208,22 @@ export async function appendToTask(db: DbLike, taskId: string, extra: string): P
   const [row] = await db
     .update(tasks)
     .set({
-      detail: sql`concat_ws(chr(10), ${tasks.detail}, ${extra})`,
+      // 🚨 THE `::text` CAST IS LOAD-BEARING, NOT TIDINESS. Without it this
+      // threw `could not determine data type of parameter $1` on EVERY call,
+      // against every branch — `concat_ws` is variadic `"any"`, so Postgres
+      // cannot infer a bare bound parameter's type and refuses to plan the
+      // statement. Both append paths (GATE 3's near-duplicate, GATE 4's
+      // at-cap) were therefore DEAD from the moment they were written, and two
+      // later "fixes" built on them were fiction.
+      //
+      // It survived 33 green tests because this suite used a hand-rolled fake
+      // `db` whose `update()` pushed to an array and ran no SQL — a database
+      // that cannot fail cannot falsify anything. The suite now runs on real
+      // Postgres, which found it on the first run.
+      //
+      // WHY concat_ws in SQL rather than read-modify-write in code: it is
+      // atomic. Two appends racing would otherwise lose one.
+      detail: sql`concat_ws(chr(10), ${tasks.detail}, ${extra}::text)`,
     })
     .where(and(eq(tasks.id, taskId), inArray(tasks.status, [...LIVE_TASK_STATUSES])))
     .returning();
