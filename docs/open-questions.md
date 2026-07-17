@@ -80,7 +80,7 @@
 | OQ-16 | RateplanCode → ep/cp map | Paul (website) | block [5] · breakfast | ✅ DO NOT BUILD IT |
 | OQ-17 | Should a guest ASSERTING a booking we cannot see fetch a human? | Paul + planning | CH-14 | ⬜ |
 | OQ-18 | Website has an UNGATED route that creates real bookings | Paul (website) | pre-launch safety | ⬜ |
-| **OQ-19** | **🚨 A guest cannot book a specific house — eZee picks it. PROVEN.** | **Paul + eZee acct mgr** | **BLOCKS website launch** | 🚨 |
+| **OQ-19** | **A guest cannot book a specific house — eZee picks it. PROVEN.** ✅ SYMPTOM CLOSED 2026-07-16: the website ABOLISHED house-choice (sells the 3 types). Launch unblocked; CH-13 unblocked (route off eZee BKG-03 RoomID). **Open business Q: are Apt 06/09/11 really interchangeable?** | **Paul + eZee acct mgr** | website launch · CH-13 | 🟡 |
 
 ---
 
@@ -353,7 +353,56 @@ hand inside eZee. **This breaks the moment the site launches.**
 **Owner:** Paul + the eZee account manager (this is a PMS configuration decision, not a code fix)
 **and** the website repo. **Feeds:** the website launch · CH-13 task cards · CH-12 pre-arrival copy ·
 OQ-15 (now largely answered by this).
-**Answer:**
+
+**Answer — 2026-07-16, from a website-side re-audit (branch `v2`, commit `b9a0fac`). ✅ THE SYMPTOM
+IS CLOSED, AND NOT THE WAY ANYONE EXPECTED: THE HOUSE-LEVEL CHOICE WAS ABOLISHED.**
+
+The website no longer sells "Apartment 09". It collapsed the 8 per-unit products into **the same 3
+room TYPES eZee already has** — it now mirrors eZee's shape instead of fighting it. So:
+- **No house is offered, chosen, or displayed.** The guest cannot be shown a different house from
+  the one they picked, because they never pick one. *"Guest pays for Apt 09, is shown Apt 06"* is now
+  unreachable.
+- The confirmation page still READS the house from eZee (BKG-03 `tran.RoomID`) and then deliberately
+  **reverse-maps it up to the owning category** and shows that. There is no confirmation email at all.
+- The earlier per-villa `AssignRoom` pinning approach was **built and then reverted** in favour of
+  this. Nothing contests eZee's auto-assignment, so finding 4 (lowest-number-first) stands.
+
+**🚨 THE PART THAT CHANGES OUR PLAN — the July conclusion "we must wait for a PMS re-model" is NOT
+binding.** The reasoning was: `physical_room_label` is eZee's guess, not the guest's house. **There
+is no longer a "guest's house" for it to contradict.** eZee's assignment simply IS the house the
+guest will occupy, and eZee is now the ONLY system that knows it (`BKG-03 tran.RoomID`, at confirm).
+**We can route staff off that directly — we need neither the website's database nor the re-model.**
+
+**Two eZee facts learned from the website's own scars — both new to us:**
+1. **BKG-03 cannot read an UNCONFIRMED booking.** It returns `503 No Reservation Found` for a live
+   status-10 hold. **"Unreadable" NEVER means "cancelled"** — conflating them caused a real bug on
+   their side. A house only exists after confirm, because eZee only assigns at confirm.
+   **🚨 TODO(CH-17): the deferred `ezee_cancel_conflict` / `partial_cancel_suspect` re-sync is exactly
+   a BKG-03 call. Whoever builds it must not read 503 as a cancellation.**
+2. **An unconfirmed (status-10) hold reserves NOTHING at eZee** — it blocks no inventory. That
+   defuses part of OQ-18 and bears on OQ-21.
+
+**🚨 STILL OPEN AND NOT OURS TO FIX — OQ-18.** `/api/debug/booking/create` remains **ungated and
+unauthenticated**, with no middleware anywhere in the website repo, and it writes to the live PMS.
+Blast radius is smaller than feared (it takes no money and creates only an unconfirmed hold, which
+reserves nothing) — but it is unauthenticated writes into the real booking book. Their Chunk 14,
+pre-launch. *(Production almost certainly holds evidence of it: reservations 973–976 were created
+within 0.13 s of each other on 2026-07-16 and cancelled a minute later.)*
+
+**⚠️ A LANDMINE THAT MISSES US, recorded so nobody re-derives it:** `bookings_log.villa_id` silently
+changed meaning today (physical RoomID → RoomTypeID) with **no migration and no discriminator** —
+only `created_at` separates the two namespaces. **It cannot reach us: we hold zero references to
+`bookings_log`, `villa_id` or their Neon database** (verified by grep over `src/`). Our label comes
+from our own poller (`normalize.ts:174`), off eZee's RoomID.
+
+**🚨 SO THE ENGINEERING QUESTION IS ANSWERED AND A BUSINESS ONE TAKES ITS PLACE — for Paul, not for
+the code:** the fix removed the choice rather than honouring it. **Are Apartment 06, 09 and 11
+genuinely interchangeable?** If yes, this is the right model, it matches how Airbnb and Booking.com
+already sell your inventory, and OQ-19 is finished. **If they are not** — different views, layouts,
+light — then *"the guest is shown the wrong house"* has been traded for *"the guest cannot book the
+house they want"*, which is a smaller problem but not zero, and the PMS re-model (one house = one
+product, as Siolim already is) becomes a revenue decision rather than a correctness one.
+**Status stays 🚨 until Paul answers that.**
 
 ---
 

@@ -727,8 +727,16 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 > landed in Apartment 06). `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`. **The `<villa>` slot in step 2
 > and `assignFor(kind, villa)` in step 1 may NOT be filled from that label — it would send housekeeping
 > to the wrong door.** A type-only card matches no role+villa and falls back to the frontdesk lead,
-> which is the correct fail-closed default. **CH-13's villa ROUTING is blocked on the OQ-19 PMS
-> re-model, not on code.** Full analysis: CLAUDE.md 🚨 OQ-19 · `docs/open-questions.md` OQ-19.
+> which is the correct fail-closed default.
+>
+> **🚨 UPDATED 2026-07-16 — CH-13 IS NO LONGER BLOCKED, and the reason the label was banned has
+> changed.** The website abolished house-choice, so there is no "guest's house" for eZee's assignment
+> to contradict: **eZee's assignment IS the physical door.** Route the card off a FRESH
+> `BKG-03 tran.RoomID` read by reservation number at task time — NOT off
+> `bookings_mirror.physical_room_label`, which is a snapshot frozen at CH-11's 14 Jul reconcile
+> (only BKG-03 carries a room; the poller never does). **BKG-03 returns 503 for an unconfirmed hold
+> and "unreadable" NEVER means "cancelled".** What the AI may SAY to a guest is a separate question,
+> still gated on OQ-15. Full analysis: CLAUDE.md OQ-19 · `docs/open-questions.md` OQ-19.
 
 **Goal.** Tasks flow: created → notified → staff replies DONE → closed → guest informed; overdue tasks nudge staff and update the AI's honesty.
 

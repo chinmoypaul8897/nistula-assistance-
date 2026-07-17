@@ -8,82 +8,67 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Current state: CH-00 → CH-12 are DONE, merged, tagged (`vCH-00`…`vCH-12`) and LIVE on Railway (CH-09 merged via PR #27 after a 24-agent pre-push audit fixed a money BLOCKER; its live three-probe demo passed 2026-07-13 with real facts saved in the production DB).** The service takes real WhatsApp messages on the Meta test number, replies in Nistula's voice through Claude, quotes live website-identical prices via tools, answers villa/policy/FAQ questions from the compiled knowledge base (prompt block [3]), brackets every model turn with deterministic code (§6.7 policy routing before, the complete §6.5 guardrail pipeline after — every hit persisted to `raw_events`), carries §6.3 short-term memory (token-budgeted transcript window + the `[EARLIER CONTEXT]` rolling summary + the nightly 04:00 IST summariser), and now has §6.4 long-term memory: `remember_fact` saves durable guest facts behind deterministic sensitive/instruction/entitlement screens (any rate or authority claim refused fail-closed), block [5] GUEST CONTEXT renders the full profile (name + detected register/lang prefs + newest 15 facts; stays/tasks stubbed for CH-11/13), memory promises need a real save (guardrail-2 class C4 + the `fact_saved` evidence row), and `POST /admin/guest-lookup` peeks a guest's memory (bearer + flag; enabled in local dev only — Railway carries no admin vars). **CH-10 (eZee mirror) is DONE and LIVE (2026-07-13, 761 tests):** the 60s poller mirrors eZee bookings into `bookings_mirror`, ACKs only what committed, and emits `booking.*` events for CH-12. Its live run drained the property's whole un-ACKed backlog — 62 items, 0 errors — and the pre-push audit's BLOCKER (multi-room full-cancels arriving as suffixed `-1/-2/-3` entries with no bare entry) turned out to be **sitting in production waiting**. **BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — only Railway may run the poller, or dev would ACK-consume real bookings prod never sees (runbook §CH-10). Move secrets to Railway with **Node**, never a PowerShell pipe (it prepends a UTF-8 BOM into the stored value). BKG-20 "ReadBooking" is broken — never used; `InsertBooking` needs POST + per-night comma-separated rates (the vendor docs are wrong). Website (Internet Booking Engine) bookings **DO** reach the queue — verified end to end (booking 953: create → mirror → cancel → mirror, dates/amount verbatim). An earlier "they don't" reading was a queue-BATCHING artifact; **a poll against a backlogged eZee queue proves nothing — only test against a drained queue.** **CH-12's backlog precondition is DISCHARGED** — the `booking.*` queue was purged 85→0 at the 2026-07-16 cutover and CH-12's workers now consume it live. **Do NOT re-run the purge: `DELETE FROM pgboss.job WHERE name LIKE 'booking.%'` now destroys real arriving guests' events.** The date gate shipped on both legs (`reconcile.ts` GATE 2 + `gates.ts passesDate`), so the mirror's 123 historical bookings schedule nothing — proven live at 199 pre-epoch rows → **0**. **Next chunk: CH-13 (Staff tasks) — read the 🚨 OQ-19 section below FIRST; it blocks the task card, and plan.md does NOT know that.** `progress.md` is authoritative for exactly what exists and what each chunk learned — read it, not this paragraph, for detail.
 
-## 🚨 OQ-19 — a guest cannot book a specific HOUSE. eZee picks it. (Found 2026-07-14, CH-11)
+## OQ-19 — the house problem: SYMPTOM CLOSED 2026-07-16. Read this before naming a villa.
 
-**BLOCKS THE WEBSITE LAUNCH. Read before touching anything that names a villa.**
+**Found 2026-07-14 (CH-11); answered 2026-07-16 by a website-side re-audit — and the answer INVERTS
+the old conclusion, so do not act on any older note.**
 
-eZee is configured as a **hotel**: 8 houses inside only **3 room types**, so Apartment 06/09/11 are
-the SAME bookable product. `InsertBooking` therefore has **no field for a house at all** — the
-website drops the guest's choice at that boundary, and **eZee auto-assigns lowest-number-first**
-(reservations 953 AND 957, both "Nistula Apartment", both landed in **Apartment 06**). The website's
-confirmation page then reads the house back FROM eZee — so **a guest can pay for Apartment 09 and be
-told on their own receipt that they have Apartment 06.**
+**What was true, and still is.** eZee is configured as a **hotel**: 8 houses inside only **3 room
+types**, so Apartment 06/09/11 are the SAME bookable product. `InsertBooking` has **no field for a
+house at all**, and **eZee auto-assigns lowest-number-first** (953 and 957 both landed in
+**Apartment 06**). None of that changed.
 
-**CONSEQUENCE FOR THIS CODEBASE:** `bookings_mirror.physical_room_label` is **eZee's GUESS, not the
-guest's house.** `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` — **the AI speaks the villa TYPE and
-names NO house.** Do not "fix" this by flipping it on because a label exists; the label is the bug.
-(I hydrated 143 of them and briefly armed the AI with them — see the OQ-19 addendum in progress.md.)
+**What changed: the website ABOLISHED the house-level choice** (branch `v2`, commit `b9a0fac`). It
+now sells the same 3 types eZee has — it mirrors eZee's shape instead of fighting it. So a guest
+never picks a house, is never shown one (the confirmation page reads eZee's `RoomID` and deliberately
+reverse-maps it UP to the category), and **"pays for Apt 09, told they have Apt 06" is now
+unreachable. The website launch is not blocked by this.**
 
-**CH-13: the staff task card CANNOT be built on that label** — it would send housekeeping to the
-wrong door.
+**🚨 THE CONSEQUENCE THAT MATTERS, AND IT IS THE OPPOSITE OF WHAT THIS FILE USED TO SAY:** the old
+rule was *"`physical_room_label` is eZee's GUESS, not the guest's house."* **There is no longer a
+guest's house for it to contradict.** eZee's assignment simply IS the house the guest will occupy,
+and eZee is now the ONLY system that knows it — the website keeps no house at all. **So CH-13's task
+card is UNBLOCKED, and the PMS re-model is no longer a precondition for it.**
 
-**🚨 AND plan.md IS STALE HERE — THIS SECTION OVERRIDES IT.** The session protocol calls plan.md the
-single source of truth, so this is the one place it is not. §8 CH-13's Context still opens
-*"Villa B3 · Rahul · 2 towels"* and step 2 still prescribes a `<villa>` slot; §5.4 and §8 CH-11 step 4
-still said a unit may be named once `physical_room_label` exists. **All of that is INVERTED — the
-label IS the bug.** (Each is now marked SUPERSEDED in place, and `docs/product-picture.md` S3 — which
-CH-19 asserts against — was amended, because it encoded "Villa B3" as the expected card.)
-*(CH-12's date-filter requirement is discharged: the gate shipped on both legs.)*
+**But route it off a FRESH read, not off the mirror.** `bookings_mirror.physical_room_label` is a
+SNAPSHOT: only BKG-03 carries a room, our poller never does (that is why `coalesceMirrorInput`
+protects the label from being erased), so most stored labels are frozen at CH-11's 14 Jul reconcile
+and may be months stale by arrival. **CH-13 should read `BKG-03 tran.RoomID` by reservation number at
+task time.** Two traps, learned from the website's own scars:
+- **BKG-03 returns `503 No Reservation Found` for an UNCONFIRMED (status-10) hold. "Unreadable" NEVER
+  means "cancelled"** — that conflation caused a real bug there. A house exists only after confirm.
+- An unconfirmed hold **reserves nothing** at eZee.
 
-**The fix is a PMS re-model, not code:** one house = one bookable product (Siolim already is, and is
-the one house eZee never gets wrong). None of eZee's ~92 endpoints can create a room type — it
-happens in eZee's back office. Full analysis + the eZee account-manager script: `docs/open-questions.md` OQ-19.
+**`TRUST_EZEE_ROOM_ASSIGNMENT` stays `false` — for a NEW reason, so do not flip it on the old one.**
+It governs what the AI **says to a GUEST**, which is a different question from where housekeeping is
+sent. Naming a house to a guest is now *safe from the OQ-19 contradiction* but still gated on
+**OQ-15** (may we name it pre-arrival at all?) and on staleness (an assignment can move before
+arrival). **In-house is the easy case; pre-arrival is the policy question.** Guard by the contract:
+*"is this the physical door?"* (staff, fresh read) and *"may we promise this to a guest?"* (policy)
+are not the same predicate.
 
-## 🚨 CH-12 is DONE and the system now SPEAKS FIRST (2026-07-16, `vCH-12`, 1243 tests)
+**🚨 THE BUSINESS QUESTION THAT REPLACES THE ENGINEERING ONE — Paul's call, `docs/open-questions.md`
+OQ-19:** the fix REMOVED the choice rather than honouring it. **Are Apartment 06, 09 and 11 genuinely
+interchangeable?** If yes, this is the right model (it matches how Airbnb and Booking.com already
+sell the inventory) and OQ-19 is finished. If they differ in view, layout or light, then *"the guest
+is shown the wrong house"* has been traded for *"the guest cannot book the house they want"* — a
+smaller problem, but not zero, and the re-model (one house = one product, as **Siolim already is**)
+becomes a revenue decision rather than a correctness one.
 
-Everything before CH-12 only ever *replied* to someone who had messaged us. A booking landing in
-eZee now causes an **unprompted WhatsApp to a real person who never contacted this number.** That
-inverts the risk, and **it is LIVE and ARMED** (`LIFECYCLE_SEND_ENABLED=1` on Railway): a real
-confirmation has been sent to and read on a real phone. What holds it back is four fail-closed
-gates — **epoch** (proven on production data: 199 pre-epoch mirror rows → **0** scheduled),
-**date**, **status**, **source**. `WA_TEMPLATE_MODE` is unset ⇒ `simulate`, so until Meta approves
-the templates a website guest who has never messaged us gets **nothing** (defers on a shut window,
-skipped at 36h) — correct. **There is no manual step for you here** (plan §8 CH-12: "None now"):
-template approval belongs to the REAL number's WABA, which does not exist yet, so it happens at
-real-number cutover — an ops event between CH-18 and CH-19. `pnpm templates:pack` generates the
-exact bodies to paste THEN.
+**⚠️ ALSO OPEN, AND NOT OURS: OQ-18.** The website's `/api/debug/booking/create` is still **ungated
+and unauthenticated** and writes to the live PMS (no middleware exists in that repo). It takes no
+money and creates only an unconfirmed hold, which reserves nothing — so the blast radius is
+unauthenticated writes, not stolen inventory. Their pre-launch chunk. *(Production shows the
+fingerprint: reservations 973–976 created within 0.13 s of each other on 2026-07-16.)*
 
-**The fact that changes how you think about this system:** the comfortable belief that OTA phone
-numbers are masked — and that OTA guests are therefore unreachable by accident — is **FALSE**.
-makemytrip and go-mmt mask them. **Airbnb and Booking.com do not.** Production holds **12 real OTA
-guests arriving soon, with real phone numbers**. `LIFECYCLE_SOURCES` (direct-only, fail-closed) is
-the only thing standing between them and a WhatsApp nobody authorised (**OQ-20**, 🔴 unanswered).
+**⚠️ A landmine that MISSES us:** their `bookings_log.villa_id` changed meaning today (RoomID →
+RoomTypeID) with no migration and no discriminator. **We hold zero references to their database** —
+our label comes from our own poller (`ezee/normalize.ts`). Verified, not assumed.
 
-## 🚨 THE RECURRING FAILURE CLASS reached ELEVEN — and it has TWO axes
-
-**Nine adversarial review rounds found 17 blocker-class defects. The suite was green every single
-time. FIVE were regressions introduced by the previous round's own fix** — so on this codebase *a
-fix is the most dangerous thing in the room*, and an unverified one is not a fix.
-
-> **Guard by the CONTRACT — never by the ENUM, the LIST, the CLOCK, or a MUTABLE FIELD.**
-
-1. **The QUESTION.** What does this predicate *actually* answer — the thing its caller needs, or a
-   proxy that merely coincides today? *(The sender re-used the SCHEDULING allowlist at SEND time, so
-   every stay that actually happened lost its welcome, thank-you and win-back. One plan-age clock
-   judged every kind, so every last-minute booking silently lost its pre-arrival — and the same rule
-   also SENT "we look forward to welcoming you" to guests who had already arrived. A proxy wrong in
-   both directions is the tell that it was a proxy at all.)*
-2. **The VERB.** Skipping is **TERMINAL** — a resolved row is never rescheduled. So a rule may only
-   SKIP on **a fact that cannot come back**; reading a mutable field it must **DEFER**, which is
-   reversible. *(An arrival date mistyped for ONE MINUTE and corrected permanently cost the guest
-   their pre-arrival and welcome, because the correcting event no-ops against a resolved row.)*
-   **Choose the verb the contract can survive being wrong about.**
-
-**And the test that "covers" it may be the reason it shipped.** The proof that last-minute
-pre-arrivals send was deleted and replaced with one asserting `sendAt < NOW` — *due*-ness, not
-outcome. Due, yes; sent, no. **Assert the OUTCOME, and drive the REAL event path
-(`handleBookingEvent`), never `runSender` directly.** A suite that reads the wall clock is lying
-too: the guest-quiet window turned `main` red ten hours a night while looking green at 6 p.m.
+**plan.md is still stale here and this section overrides it:** §8 CH-13's Context opens *"Villa B3 ·
+Rahul · 2 towels"* and §5.4 / §8 CH-11 step 4 said a unit may be named once `physical_room_label`
+exists. Each is marked SUPERSEDED in place; `docs/product-picture.md` S3 (which CH-19 asserts
+against) was amended off "Villa B3".
 
 ## Session protocol (mandatory — from plan.md §0)
 
