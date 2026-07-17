@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createStaffTaskTool, similar } from '../src/brain/tools/createStaffTask.js';
 import type { ToolContext, ToolTaskContext } from '../src/brain/tools/registry.js';
-import type { DescribedStay, StayView } from '../src/brain/stayView.js';
+import type { DescribedStay } from '../src/brain/stayView.js';
 import type { Task } from '../src/db/tasks.js';
 
 const TODAY = '2026-07-17';
