@@ -67,7 +67,18 @@ const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
   // THING ("the refund has been logged", "the issue has been raised"), so they
   // are C5. Only verbs whose object can ONLY be a person stay.
   { cls: 'C1', re: /\b(?:has|have|had)\s+been\s+(?:informed|notified|told|alerted)\b/i },
-  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+(?:informed|notified|told|alerted|nudged|messaged|pinged|updated)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
+  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+(?:informed|notified|told|alerted|nudged|messaged|pinged|updated|asked)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
+  // 🚨 C1 IS STILL A DENYLIST, and round 3 proved it narrower than its own
+  // stated contract ("the object is the TEAM"). "I've let housekeeping know",
+  // "I've flagged this with the team" and "I've spoken to housekeeping" all name
+  // a PERSON as object — they are C1 by the docstring — yet shipped FREE with
+  // the create_staff_task NOT_NOTIFIED veto armed, telling a guest staff knew
+  // when the card reached nobody. These close the reproduced phrasings; the
+  // structural cure (invert the guard) carries false-positive risk on the
+  // revenue path and stays a planning-chat item (see the recorded residual).
+  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+let\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\s+know\b/i },
+  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+flagged\s+(?:it|this|that)\s+(?:with|to)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
+  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+spoken\s+(?:to|with)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have|\s+had)?\s+passed\s+(?:it|this|that)\s+on\b/i },
   // Subject-anchored: "daily housekeeping is taken care of" must NOT match.
   { cls: 'C1', re: /\b(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\s+(?:knows|(?:is|are)\s+aware|(?:is|are)\s+looking\s+into|(?:is|are)\s+on\s+(?:it|this|that))\b/i },

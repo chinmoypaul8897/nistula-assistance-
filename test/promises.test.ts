@@ -177,26 +177,57 @@ describe('🚨 C1/C2 — create_staff_task licenses ONLY a delivered task (CH-13
     result: { ok: false, error: 'NOT_NOTIFIED', data: { shortId: 'A3F2K9' } },
   };
 
-  it.each([
-    'Two fresh towels are on their way up.',
-    'The team has been informed.',
-    "I've let housekeeping know.",
-    'Housekeeping is on their way.',
-  ])('a DELIVERED task licenses "%s"', (draft) => {
+  // 🚨 EVERY draft here is tested in BOTH directions below. Round 3 found the
+  // asymmetry that hid a blocker: "I've let housekeeping know." was in the
+  // DELIVERED-licenses list but NOT the UNDELIVERED-is-a-violation list, so it
+  // passed VACUOUSLY — no LEXICON entry matched it, so covered() had nothing to
+  // cover and returned true, "licensing" a claim that in fact shipped FREE with
+  // no task at all. The two lists are now the same list.
+  const TEAM_TOLD_AND_DISPATCH = [
+    'Two fresh towels are on their way up.', // C2
+    'The team has been informed.', // C1 passive
+    'Housekeeping is on their way.', // C2
+    "I've let housekeeping know.", // C1 — round-3 gap, shipped free
+    "I've asked housekeeping to bring those up.", // C1 — round-3 gap
+    "I've flagged this with the team.", // C1 — round-3 gap
+    "I've spoken to housekeeping about it.", // C1 — round-3 gap
+  ];
+
+  it.each(TEAM_TOLD_AND_DISPATCH)('a DELIVERED task licenses "%s"', (draft) => {
     expect(scanPromises(draft, { ...NO_EVIDENCE, toolRuns: [delivered] }).violations).toEqual([]);
   });
 
+  it.each(TEAM_TOLD_AND_DISPATCH)(
+    'an UNDELIVERED task licenses NOTHING — "%s" is a violation',
+    (draft) => {
+      // CH-12's blocker #5, held by construction: covered() counts successful
+      // runs only, so the tool's ok:false is the whole mechanism. A row in a
+      // table is not a person moving. And — the round-3 fix — each draft must
+      // actually MATCH a class, or "licensed" would again mean "unrecognised".
+      expect(
+        scanPromises(draft, { ...NO_EVIDENCE, toolRuns: [undelivered] }).violations.length,
+      ).toBeGreaterThan(0);
+    },
+  );
+
   it.each([
-    'Two fresh towels are on their way up.',
-    'The team has been informed.',
-    'Housekeeping is on their way.',
-  ])('an UNDELIVERED task licenses NOTHING — "%s" is a violation', (draft) => {
-    // CH-12's blocker #5, held by construction: covered() counts successful
-    // runs only, so the tool's ok:false is the whole mechanism. A row in a
-    // table is not a person moving.
-    expect(
-      scanPromises(draft, { ...NO_EVIDENCE, toolRuns: [undelivered] }).violations.length,
-    ).toBeGreaterThan(0);
+    "I've let housekeeping know.",
+    "I've asked the team to sort it.",
+    "I've flagged this with the front desk.",
+    "I've spoken to housekeeping.",
+  ])('🚨 the round-3 gap: "%s" is a C1 claim, NOT free text (needs evidence)', (draft) => {
+    // With NO evidence at all these must be violations. Before the fix they
+    // matched no class and shipped straight to the guest with the veto armed.
+    expect(scanPromises(draft, NO_EVIDENCE).violations.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    "I'll ask housekeeping about that.", // future = referral, not a claim
+    'Let me know if you need anything else.', // "let ME know" — not a role
+    "You asked about breakfast earlier.", // "you asked" — not the AI's claim
+    "I've asked for your check-in time.", // "asked for" — object is not a role
+  ])('the widening did NOT over-block "%s"', (draft) => {
+    expect(scanPromises(draft, NO_EVIDENCE).violations).toEqual([]);
   });
 });
 
