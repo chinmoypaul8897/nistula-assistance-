@@ -450,6 +450,18 @@ export const taskStatusEnum = pgEnum('task_status', [
  * WHY the villa is stored at all rather than re-read: this column is the record
  * of where we ACTUALLY sent someone, which is an audit fact. Re-reading it later
  * would answer a different question (where eZee thinks they are NOW).
+ *
+ * 🚨 TODO(CH-18): DELETE_GUEST must reach `summary`/`detail` here, and this is
+ * NOT the same erasure as guest_facts'. §4 says "tasks retained unlinked", which
+ * was written when a task was assumed to be a bare work item — but `summary` is
+ * the GUEST'S OWN WORDS, and it is deliberately NOT screened for sensitive
+ * content the way guest_facts is (factScreens refuses "allergic to shellfish";
+ * this column would hold it). That is a considered decision, not an oversight —
+ * the two predicates differ: guest_facts asks "may we REMEMBER this for ever?",
+ * a task asks "does a human need this to do the work NOW?", and a screen here
+ * would refuse a wheelchair-ramp request, which is the opposite of safe. But it
+ * means unlinking a task is not erasing it: the body must be scrubbed, exactly
+ * as CH-07's telemetry payloads are. See progress.md CH-13a's open questions.
  */
 export const tasks = pgTable(
   'tasks',
