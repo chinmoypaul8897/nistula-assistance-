@@ -31,8 +31,10 @@
  *     of both. CH-11 built the enrichment: `pnpm ezee:reconcile --apply` hydrates
  *     the label via BKG-03 through the event-free backfill writer, and the poller
  *     diff now COALESCEs a null-from-poll so a later poll cannot erase it.
- *     🚨 TODO(CH-13) — do NOT build the staff task card on THIS label, but the
- *     reason INVERTED on 2026-07-16 and the old one is gone. The website
+ *     🚨 NOT A TODO ANY MORE — CH-13a HELD IT: the staff task card is not built
+ *     on THIS label (staff/villaRoute.ts reads BKG-03 fresh). Kept as the
+ *     standing rule for whoever reaches for this field next. The reason
+ *     INVERTED on 2026-07-16 and the old one is gone. The website
  *     abolished house-level choice, so there is no longer a "guest's house" for
  *     eZee's assignment to contradict: eZee's assignment IS the physical door,
  *     CH-13's routing is UNBLOCKED, and the PMS re-model is not a precondition.

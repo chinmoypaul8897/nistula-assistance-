@@ -1,7 +1,8 @@
 /**
  * Block [5] GUEST CONTEXT — full version (plan.md §6.2 [5], CH-09 step 3):
- * name + address/language preference + saved facts + linked stays (CH-11), with
- * open tasks (CH-13) still stubbed. Split from prompt.ts (~300-line rule); the
+ * name + address/language preference + saved facts + linked stays (CH-11) +
+ * open tasks (CH-13a — real since this chunk; the header said "still stubbed"
+ * for the whole of it). Split from prompt.ts (~300-line rule); the
  * DIRECTION matters: prompt.ts is the import-free leaf guardrails sits on,
  * so this module imports the framing + hygiene FROM prompt.ts, never the
  * other way (the CH-06 cycle lesson).
