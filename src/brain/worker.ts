@@ -176,6 +176,17 @@ export async function processConversation(
         // remember_fact provenance (CH-09): a fact saved this turn points at
         // the newest batch message.
         newestGuestMsgId: newest.id,
+        // create_staff_task's retry key (CH-13a) — the OLDEST, and the two are
+        // NOT interchangeable. Provenance asks "which message did this come
+        // from?"; a retry key asks "which REQUEST is this?" — and only the
+        // second must survive the batch changing under a retry. It can: the
+        // tool loop runs BEFORE the claim, so a throw there leaves the cursor
+        // unmoved and pg-boss re-runs this function; if the guest typed again
+        // meanwhile, decideDebounce requeues and the eventual batch has a NEW
+        // newest. `oldest` is pinned by the unmoved cursor, so it is the same
+        // in both attempts. Keyed on `newest`, attempt 2 computed a different
+        // key, sailed through GATE 0 and raised a SECOND card.
+        oldestGuestMsgId: oldest.id,
       })
     : null;
   const body = turn !== null ? turn.text : plan.send !== null ? PHRASEBOOK[plan.send] : null;

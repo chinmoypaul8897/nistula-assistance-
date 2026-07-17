@@ -20,6 +20,7 @@ import {
   type Message,
 } from '../db/repos.js';
 import { getActiveGuestFacts } from '../db/guestMemory.js';
+import { getLiveTasksForGuest } from '../db/tasks.js';
 import { countUncoveredMessages, getSystemContextKinds } from '../db/summaries.js';
 import { isNightIST, istCalendarDay } from '../lib/time.js';
 import { isWindowOpen } from './draftGuards.js';
@@ -127,6 +128,11 @@ export async function buildTurnContext(
 
   // Block [5] (CH-09): live facts, newest 15 — pre-claim like every read here.
   const facts = await getActiveGuestFacts(deps.db, args.conversation.guestId);
+  // Block [5] (CH-13a): the guest's open requests. `notify_failed` tasks are
+  // filtered out at the repo — a card nobody received is a hole, not work in
+  // hand, and rendering it would tell the model a task is with someone when it
+  // is with nobody.
+  const openTasks = await getLiveTasksForGuest(deps.db, args.conversation.guestId);
   const summaryBlock = buildSummaryBlock(args.conversation.summary);
   const plan = planWindow(fetched, transcriptBudgetFor(args.conversation.summary));
   const baseMessages = mapTranscript(plan.window);
@@ -161,6 +167,15 @@ export async function buildTurnContext(
       facts,
       stays: selectStays(stays, today),
       bookingNeedsHuman: needsHuman(stays, today),
+      // Projected, not passed whole: the assignee's phone, the detail and the
+      // booking id are none of the model's business (the profileBlock rule —
+      // a raw row must never reach that file).
+      openTasks: openTasks.map((t) => ({
+        shortId: t.shortId,
+        summary: t.summary,
+        status: t.status === 'nudged' ? ('nudged' as const) : ('open' as const),
+        openedAt: t.openedAt,
+      })),
     }),
     summaryBlock,
   });

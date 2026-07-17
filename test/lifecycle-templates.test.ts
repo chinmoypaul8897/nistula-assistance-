@@ -174,6 +174,66 @@ describe('param validation — what Meta would reject at send time', () => {
   });
 });
 
+describe('🚨 staffParam vs param — two audiences, two contracts (CH-13a)', () => {
+  const card = (over: Partial<Record<string, string>> = {}) => ({
+    shortId: 'A3F2K9',
+    villa: 'Apartment 06',
+    guestName: 'Rahul',
+    summary: '2 extra towels',
+    ...over,
+  });
+
+  it('the STAFF card names the house — it is the door housekeeping walks to', () => {
+    // The whole of OQ-19's 2026-07-16 answer, in one assertion. Before the
+    // schema split this threw, which is why templates.ts carried a TODO(CH-13)
+    // warning that the guard would block the card.
+    expect(renderTemplate('task_card', card())).toContain('Apartment 06');
+    expect(renderTemplate('task_card', card({ villa: 'Villa B3' }))).toContain('Villa B3');
+    expect(renderTemplate('task_card', card({ villa: 'Apartment 11' }))).toContain('Apartment 11');
+    expect(renderTemplate('task_card', card({ villa: 'Siolim 4BHK' }))).toContain('Siolim 4BHK');
+  });
+
+  it('the staff card still carries the villa TYPE when no door was resolved', () => {
+    expect(renderTemplate('task_card', card({ villa: 'Nistula Apartment' }))).toContain(
+      'Nistula Apartment',
+    );
+  });
+
+  it('🚨 and the GUEST-facing ban is UNTOUCHED — weakening it was the wrong fix', () => {
+    // The guest bodies must still refuse a house: naming one to a guest is no
+    // longer contradictory (OQ-19) but is still gated on OQ-15 and on
+    // staleness. The split exists precisely so this stays true.
+    for (const villaType of ['Apartment 06', 'Villa B3', 'Apartment 11', 'Siolim 4BHK']) {
+      expect(() => renderTemplate('welcome', { firstName: 'Rahul', villaType })).toThrow(
+        /may not name a physical house/,
+      );
+    }
+    expect(() => renderTemplate('welcome', { firstName: 'Rahul', villaType: 'Nistula Villa' })).not.toThrow();
+  });
+
+  it('a house in the SUMMARY is refused — an unverified claim may not compete with the door', () => {
+    // The model's likeliest source for a house is the guest's own guess, and a
+    // card reading "Apartment 06 · Rahul · towels for Apartment 09" is two
+    // doors. create_staff_task screens this; the schema is the backstop.
+    expect(() => renderTemplate('task_card', card({ summary: 'towels for Apartment 09' }))).toThrow(
+      /may not name a physical house/,
+    );
+  });
+
+  it('a house in the GUEST NAME is refused — the profile name is attacker-chosen', () => {
+    expect(() => renderTemplate('task_card', card({ guestName: 'Villa B3' }))).toThrow(
+      /may not name a physical house/,
+    );
+  });
+
+  it('the money rule and Meta’s wire rules bind BOTH audiences', () => {
+    expect(() => renderTemplate('task_card', card({ villa: '₹5,000' }))).toThrow(/₹ figure/);
+    expect(() => renderTemplate('task_card', card({ summary: 'Rs. 500 please' }))).toThrow(/₹ figure/);
+    expect(() => renderTemplate('task_card', card({ villa: 'a\nb' }))).toThrow(/newlines/);
+    expect(() => renderTemplate('task_card', card({ summary: 'see https://x.com' }))).toThrow(/URL/);
+  });
+});
+
 describe('templateComponents — the Graph payload', () => {
   it('emits one body component with params in declared order', () => {
     const d = LIFECYCLE_TEMPLATES.welcome;

@@ -33,11 +33,26 @@ card is UNBLOCKED, and the PMS re-model is no longer a precondition for it.**
 **But route it off a FRESH read, not off the mirror.** `bookings_mirror.physical_room_label` is a
 SNAPSHOT: only BKG-03 carries a room, our poller never does (that is why `coalesceMirrorInput`
 protects the label from being erased), so most stored labels are frozen at CH-11's 14 Jul reconcile
-and may be months stale by arrival. **CH-13 should read `BKG-03 tran.RoomID` by reservation number at
-task time.** Two traps, learned from the website's own scars:
-- **BKG-03 returns `503 No Reservation Found` for an UNCONFIRMED (status-10) hold. "Unreadable" NEVER
-  means "cancelled"** — that conflation caused a real bug there. A house exists only after confirm.
-- An unconfirmed hold **reserves nothing** at eZee.
+and may be months stale by arrival. **CH-13a SHIPPED this** (`src/staff/villaRoute.ts` reads
+`BKG-03 tran.RoomID` by reservation number at task time). An unconfirmed hold **reserves nothing** at
+eZee, and a house exists only after confirm.
+
+**🚨 BKG-03's REAL contract — probed live 14× on 2026-07-17, because the note below was wrong.**
+This section used to say *"BKG-03 returns `503 No Reservation Found` for an UNCONFIRMED (status-10)
+hold."* **BKG-03 never returned 503 once.** That string is documented for **BKG-30**, a different
+endpoint (`04_bookings.md:9097`); BKG-03's own error table lists no 503 at all. What it really does:
+- **No such reservation → `{status:'ok', reservations:[]}`** — an EMPTY OK. Key "not found" off
+  that, never off an error code, or the branch never runs.
+- **No room assigned → `RoomID: ""`** (an empty string, not an absent field).
+- **A CANCELLED or VOIDED booking → `ok`, room returned happily. A successful read is NOT proof of
+  life** — check `tran.CurrentStatus`. This matters because of **OQ-24**: a VOID emits no event, so
+  our mirror can hold a voided booking as live for ever (969 does), and a fresh read is the only
+  place anyone would learn. `villaRoute` refuses to route a dead booking and pages ops.
+- **STILL UNKNOWN:** no unconfirmed hold was reachable to probe, so the 503-on-a-hold claim is
+  **untested, not disproven**. The code treats 503, `ok`+empty and `RoomID:''` identically.
+
+**The rule that survives all of it: "UNREADABLE" NEVER MEANS "CANCELLED"** — that conflation caused
+a real bug on the website side, and `villaRoute.ts` now enforces it with a test.
 
 **`TRUST_EZEE_ROOM_ASSIGNMENT` stays `false` — for a NEW reason, so do not flip it on the old one.**
 It governs what the AI **says to a GUEST**, which is a different question from where housekeeping is

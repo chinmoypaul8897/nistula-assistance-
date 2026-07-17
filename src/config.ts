@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { normalizePhone } from './lib/phone.js';
 import { istWallClockToInstant } from './lib/time.js';
+import { resolveVilla, VILLAS } from './lib/villas.js';
 
 // Range-checked HH:mm — a "25:00" must fail BOOT, not the first night-window
 // call inside message handling.
@@ -277,7 +278,46 @@ function parseStaffRoster(json: string | undefined): StaffMember[] {
       );
     }
     nameByPhone.set(normal, member.name);
-    return { ...member, phone: normal };
+    return { ...member, phone: normal, villas: canonicaliseRosterVillas(member) };
+  });
+}
+
+/**
+ * §3.3's roster-integrity doctrine, applied to the field it forgot (CH-13a).
+ *
+ * The phone half has always been boot-validated and normalised so that all
+ * matching is normalised-vs-normalised. `villas` was left as free text — and
+ * CH-13's `assignFor(kind, villa)` compares it against a CANONICAL villa label
+ * derived from eZee's RoomID ("Villa B3"). So a roster reading `"B3"`, or
+ * `"b3 "`, or a typo'd `"B33"`, matches NOTHING: every housekeeping task for
+ * that house silently routes to the frontdesk lead instead, with no error
+ * anywhere. That is a config bug that presents as a mysterious ops workload,
+ * which is the worst way for it to present.
+ *
+ * So each entry is resolved through the ONE villa resolver and stored
+ * canonically. An entry that does not resolve to exactly one house REFUSES
+ * BOOT, naming the member and the entry — the same treatment an unnormalisable
+ * phone has always had. An ambiguous entry ("villa", "3bhk") is refused too:
+ * it names four houses, and silently expanding it would be us guessing which
+ * doors a person actually covers.
+ *
+ * `villas: []` is legal and means "no specific house" — such a member is only
+ * ever reached as a role fallback. Deliberately NOT a wildcard: an empty list
+ * meaning "everything" is exactly the kind of implicit rule this codebase keeps
+ * getting bitten by.
+ */
+function canonicaliseRosterVillas(member: StaffMember): string[] {
+  return member.villas.map((entry) => {
+    const resolution = resolveVilla(entry);
+    if (resolution.kind === 'match') return resolution.villa.label;
+    const detail =
+      resolution.kind === 'ambiguous'
+        ? `names a villa TYPE (${resolution.villas.map((v) => v.label).join(', ')}), not one house`
+        : 'is not a villa we know';
+    throw new ConfigError(
+      `STAFF_ROSTER_JSON: villa "${entry}" for "${member.name}" ${detail}. ` +
+        `Use a canonical label: ${VILLAS.map((v) => v.label).join(', ')}.`,
+    );
   });
 }
 

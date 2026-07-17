@@ -407,6 +407,119 @@ export const scheduledMessages = pgTable(
   ],
 );
 
+/** §4 tasks vocabulary. `night_queue` and `escalation` are CH-14's; CH-13a
+ * defines them so the enum never needs a second migration (the CH-12
+ * `lead_followup` precedent). */
+export const taskKindEnum = pgEnum('task_kind', [
+  'housekeeping',
+  'maintenance',
+  'frontdesk',
+  'escalation',
+  'night_queue',
+]);
+
+/**
+ * §4 lists open/nudged/done/cancelled. `notify_failed` is a CH-13a ADDITION
+ * (recorded): a card that never reached a human is neither `open` (nobody is
+ * looking at it) nor `done`. It has to be its own fact, because it is the state
+ * guardrail 2 keys off — the AI may not say "the team has been informed" about
+ * a task nobody received. Without it the SLA nudger would also chase a task no
+ * human has ever seen, which is not a nudge, it is noise.
+ */
+export const taskStatusEnum = pgEnum('task_status', [
+  'open',
+  'nudged',
+  'done',
+  'cancelled',
+  'notify_failed',
+]);
+
+/**
+ * Staff work items (§4, CH-13a) — the AI's hands.
+ *
+ * WHY `villa_label` is nullable and carries no default: it is resolved at task
+ * time from a FRESH BKG-03 `tran.RoomID` read (staff/villaRoute.ts), NEVER from
+ * `bookings_mirror.physical_room_label` (a snapshot frozen at CH-11's 14 Jul
+ * reconcile — only BKG-03 carries a room, the poller never does) and NEVER from
+ * a model argument (plan §6.4, decided 2026-07-16 — a model-supplied villa is
+ * the model guessing a house, and its likeliest source is the guest's own
+ * guess). Null means "we could not establish the physical door" — the card then
+ * names the villa TYPE and routes to the frontdesk lead. It is deliberately NOT
+ * an error: eZee flaps, and a task must never fail because of it.
+ *
+ * WHY the villa is stored at all rather than re-read: this column is the record
+ * of where we ACTUALLY sent someone, which is an audit fact. Re-reading it later
+ * would answer a different question (where eZee thinks they are NOW).
+ *
+ * 🚨 TODO(CH-18): DELETE_GUEST must reach `summary`/`detail` here, and this is
+ * NOT the same erasure as guest_facts'. §4 says "tasks retained unlinked", which
+ * was written when a task was assumed to be a bare work item — but `summary` is
+ * the GUEST'S OWN WORDS, and it is deliberately NOT screened for sensitive
+ * content the way guest_facts is (factScreens refuses "allergic to shellfish";
+ * this column would hold it). That is a considered decision, not an oversight —
+ * the two predicates differ: guest_facts asks "may we REMEMBER this for ever?",
+ * a task asks "does a human need this to do the work NOW?", and a screen here
+ * would refuse a wheelchair-ramp request, which is the opposite of safe. But it
+ * means unlinking a task is not erasing it: the body must be scrubbed, exactly
+ * as CH-07's telemetry payloads are. See progress.md CH-13a's open questions.
+ */
+export const tasks = pgTable(
+  'tasks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id').references(() => conversations.id),
+    guestId: uuid('guest_id').references(() => guests.id),
+    bookingId: uuid('booking_id').references(() => bookingsMirror.id),
+    /** The physical door as eZee reported it AT TASK TIME, or the villa TYPE
+     * when we could not resolve one. Never a guest's or a model's claim. */
+    villaLabel: text('villa_label'),
+    kind: taskKindEnum('kind').notNull(),
+    /** 6-char base32, unique — the id a human types back as `DONE <id>`. */
+    shortId: text('short_id').notNull().unique(),
+    /**
+     * 🚨 THE RETRY KEY (CH-13a pre-push review) — `${conversationId}:${newest
+     * guest message id}:${kind}`, or NULL for a task no guest message asked for
+     * (CH-13b's booking.created auto-tasks). Unique; Postgres allows many NULLs.
+     *
+     * WHY it exists: `create_staff_task` runs PRE-claim (CH-03 D2), so a
+     * `converse()` failure later in the turn makes pg-boss retry the WHOLE tool
+     * loop. The near-duplicate guard was named as the thing that absorbed that
+     * replay — and it cannot be, because it compares MODEL-AUTHORED PROSE with
+     * word overlap, and a retry is a fresh sample of a stochastic model that
+     * does not reproduce its own wording. Reproduced: turn 1 "2 extra towels",
+     * turn 2 "two towels for the bathroom" → 2 tasks, 2 cards, one guest ask.
+     *
+     * The remember_fact precedent did NOT transfer, and that is the lesson: it
+     * accepted naive similarity for a SILENT side effect (a duplicate row).
+     * A duplicate task buzzes a real housekeeper twice, starts a second SLA
+     * clock, and demands a second DONE.
+     *
+     * The contract this key states: ONE guest message asking for ONE KIND of
+     * help is ONE errand. Two towels and a bathrobe in one message is one
+     * housekeeping trip, not two.
+     */
+    requestKey: text('request_key').unique(),
+    summary: text('summary').notNull(),
+    detail: text('detail'),
+    status: taskStatusEnum('status').notNull().default('open'),
+    assignedPhone: text('assigned_phone'),
+    slaMinutes: integer('sla_minutes').notNull(),
+    slaDeadline: timestamp('sla_deadline', { withTimezone: true }).notNull(),
+    openedAt: timestamp('opened_at', { withTimezone: true }).defaultNow().notNull(),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    /** E.164 of the staff member who typed DONE — not a name, so it survives a
+     * roster edit and stays matchable normalised-vs-normalised (§3.3). */
+    closedBy: text('closed_by'),
+    ...timestamps,
+  },
+  (table) => [
+    // §4 index list: the 5-minutely nudger scans overdue open tasks.
+    index('tasks_status_sla_deadline_idx').on(table.status, table.slaDeadline),
+    // Block [5] renders a guest's open tasks on every turn.
+    index('tasks_guest_status_idx').on(table.guestId, table.status),
+  ],
+);
+
 /**
  * 24h-window tracking for NON-guest numbers — staff and ops (§4, §5.3). Guest
  * windows live on conversations.service_window_expires_at; these numbers have

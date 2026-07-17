@@ -58,7 +58,17 @@ export interface EzeeClientDeps {
 export interface EzeeClient {
   fetchPendingBookings(): Promise<EzeePollOutcome>;
   ackBookings(items: EzeeAckItem[]): Promise<EzeeAckOutcome>;
-  fetchSingleBooking(filter: { bookingId: string; guestMobileNo?: string }): Promise<EzeePollOutcome>;
+  /**
+   * BKG-03 — the ONLY call that returns a physical room. `timeoutMs` overrides
+   * the §5.2 default: CH-13a calls this from inside the model's tool loop,
+   * where the whole turn has a 150s budget, so the poller's patient 15s (× the
+   * lib/http 3-try retry) is the wrong clock. A guest waiting on "two towels"
+   * must not wait on eZee.
+   */
+  fetchSingleBooking(
+    filter: { bookingId: string; guestMobileNo?: string },
+    opts?: { timeoutMs?: number },
+  ): Promise<EzeePollOutcome>;
   /** BKG-05 ArrivalList — bookings by arrival DATE (CH-11's reconcile). A read:
    * it never ACKs, so it cannot consume the shared queue. */
   fetchArrivals(range: { fromDate: string; toDate: string }): Promise<EzeePollOutcome>;
@@ -74,7 +84,11 @@ export function createEzeeClient(deps: EzeeClientDeps): EzeeClient {
 
   /** POSTs one RES_Request and returns the parsed+scrubbed body, or null on
    * transport/parse failure (already logged — a body would leak the auth). */
-  async function post(requestType: string, fields: Record<string, unknown>): Promise<unknown | null> {
+  async function post(
+    requestType: string,
+    fields: Record<string, unknown>,
+    timeoutMs: number = EZEE_TIMEOUT_MS,
+  ): Promise<unknown | null> {
     const body = JSON.stringify({
       RES_Request: {
         Request_Type: requestType,
@@ -88,7 +102,7 @@ export function createEzeeClient(deps: EzeeClientDeps): EzeeClient {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'user-agent': deps.userAgent },
         body,
-        timeoutMs: EZEE_TIMEOUT_MS,
+        timeoutMs,
       });
     } catch (error) {
       deps.log.error(
@@ -156,20 +170,40 @@ export function createEzeeClient(deps: EzeeClientDeps): EzeeClient {
     };
   }
 
-  async function fetchSingleBooking(filter: {
-    bookingId: string;
-    guestMobileNo?: string;
-  }): Promise<EzeePollOutcome> {
+  async function fetchSingleBooking(
+    filter: { bookingId: string; guestMobileNo?: string },
+    opts?: { timeoutMs?: number },
+  ): Promise<EzeePollOutcome> {
     // BKG-03 stars BookingId as required (04_bookings.md:1456), so a
     // GuestMobileNo-ONLY lookup is not a documented shape — we never send one.
     // BKG-03 is also the only call that returns RoomID/RoomName, which is the
     // only source of a real villa label (the poll carries none): CH-11's
-    // reconcile hydrates through here.
+    // reconcile hydrates through here, and CH-13a routes staff off it live.
+    //
+    // 🚨 OBSERVED 2026-07-17 (14 live probes, CH-13a) — the doc AND this repo's
+    // own field note were both wrong, so read this before writing a caller:
+    //  - A reservation that does not exist returns `{status:'ok', reservations:[]}`.
+    //    It does NOT return 503. This file's callers must therefore discriminate
+    //    "no such booking" from an EMPTY OK, not from an error code. (The
+    //    "503 No Reservation Found" note in CLAUDE.md/open-questions.md is
+    //    documented for BKG-30, a DIFFERENT endpoint — 04_bookings.md:9097 —
+    //    which is the likeliest origin of the mix-up. BKG-03's own error table
+    //    at 04_bookings.md:1737-1749 lists no 503 at all.)
+    //  - A booking with no room yet returns RoomID as an EMPTY STRING, not an
+    //    absent field.
+    //  - A CANCELLED or VOIDED booking returns its room happily. A successful
+    //    read is NOT proof the booking is alive — check tran.CurrentStatus.
+    // Either way the rule stands and is now enforced in staff/villaRoute.ts:
+    // UNREADABLE NEVER MEANS CANCELLED.
     return toPollOutcome(
-      await post('FetchSingleBooking', {
-        BookingId: filter.bookingId,
-        ...(filter.guestMobileNo === undefined ? {} : { GuestMobileNo: filter.guestMobileNo }),
-      }),
+      await post(
+        'FetchSingleBooking',
+        {
+          BookingId: filter.bookingId,
+          ...(filter.guestMobileNo === undefined ? {} : { GuestMobileNo: filter.guestMobileNo }),
+        },
+        opts?.timeoutMs,
+      ),
     );
   }
 

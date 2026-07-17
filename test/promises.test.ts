@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   classesFromContextKinds,
+  vetoedByFailures,
   scanPromises,
   TOOL_CLAIMS,
   type ClaimClass,
@@ -134,12 +135,257 @@ describe('evidence channels', () => {
     expect(withFailure.violations.length).toBeGreaterThan(0);
   });
 
-  it('price tools license NOTHING (only remember_fact is registered)', () => {
+  it('price tools license NOTHING', () => {
     const quoteRun: ToolRun = { name: 'get_quote', input: {}, result: { ok: true, data: { total: 1 } } };
     const scan = scanPromises('The team has been informed.', { ...NO_EVIDENCE, toolRuns: [quoteRun] });
     expect(scan.violations.length).toBeGreaterThan(0);
-    expect([...TOOL_CLAIMS.keys()]).toEqual(['remember_fact']);
+  });
+
+  it('the registry is EXACTLY these two, and get_booking is deliberately absent', () => {
+    // get_booking is registered in NO class on purpose (CH-11 D2): C1's regex
+    // packs `confirmed` in with `informed`, so registering it would license
+    // "the team has been informed" off a mere booking lookup.
+    expect([...TOOL_CLAIMS.keys()].sort()).toEqual(['create_staff_task', 'remember_fact']);
     expect([...(TOOL_CLAIMS.get('remember_fact') ?? [])]).toEqual(['C4']);
+    expect([...(TOOL_CLAIMS.get('create_staff_task') ?? [])].sort()).toEqual(['C1', 'C2']);
+  });
+
+  it('a memory save still never cross-licenses a staff claim, and vice versa', () => {
+    const saved: ToolRun = { name: 'remember_fact', input: {}, result: { ok: true, data: {} } };
+    expect(
+      scanPromises('The team has been informed.', { ...NO_EVIDENCE, toolRuns: [saved] }).violations
+        .length,
+    ).toBeGreaterThan(0);
+    const tasked: ToolRun = { name: 'create_staff_task', input: {}, result: { ok: true, data: {} } };
+    expect(
+      scanPromises("I'll remember that for next time.", { ...NO_EVIDENCE, toolRuns: [tasked] })
+        .violations.length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe('🚨 C1/C2 — create_staff_task licenses ONLY a delivered task (CH-13a)', () => {
+  const delivered: ToolRun = {
+    name: 'create_staff_task',
+    input: {},
+    result: { ok: true, data: { shortId: 'A3F2K9' } },
+  };
+  const undelivered: ToolRun = {
+    name: 'create_staff_task',
+    input: {},
+    // What the tool returns when the card reached nobody. The task EXISTS.
+    result: { ok: false, error: 'NOT_NOTIFIED', data: { shortId: 'A3F2K9' } },
+  };
+
+  // 🚨 EVERY draft here is tested in BOTH directions below. Round 3 found the
+  // asymmetry that hid a blocker: "I've let housekeeping know." was in the
+  // DELIVERED-licenses list but NOT the UNDELIVERED-is-a-violation list, so it
+  // passed VACUOUSLY — no LEXICON entry matched it, so covered() had nothing to
+  // cover and returned true, "licensing" a claim that in fact shipped FREE with
+  // no task at all. The two lists are now the same list.
+  const TEAM_TOLD_AND_DISPATCH = [
+    'Two fresh towels are on their way up.', // C2
+    'The team has been informed.', // C1 passive
+    'Housekeeping is on their way.', // C2
+    "I've let housekeeping know.", // C1 — round-3 gap, shipped free
+    "I've asked housekeeping to bring those up.", // C1 — round-3 gap
+    "I've flagged this with the team.", // C1 — round-3 gap
+    "I've spoken to housekeeping about it.", // C1 — round-3 gap
+  ];
+
+  it.each(TEAM_TOLD_AND_DISPATCH)('a DELIVERED task licenses "%s"', (draft) => {
+    expect(scanPromises(draft, { ...NO_EVIDENCE, toolRuns: [delivered] }).violations).toEqual([]);
+  });
+
+  it.each(TEAM_TOLD_AND_DISPATCH)(
+    'an UNDELIVERED task licenses NOTHING — "%s" is a violation',
+    (draft) => {
+      // CH-12's blocker #5, held by construction: covered() counts successful
+      // runs only, so the tool's ok:false is the whole mechanism. A row in a
+      // table is not a person moving. And — the round-3 fix — each draft must
+      // actually MATCH a class, or "licensed" would again mean "unrecognised".
+      expect(
+        scanPromises(draft, { ...NO_EVIDENCE, toolRuns: [undelivered] }).violations.length,
+      ).toBeGreaterThan(0);
+    },
+  );
+
+  it.each([
+    "I've let housekeeping know.",
+    "I've asked the team to sort it.",
+    "I've flagged this with the front desk.",
+    "I've spoken to housekeeping.",
+  ])('🚨 the round-3 gap: "%s" is a C1 claim, NOT free text (needs evidence)', (draft) => {
+    // With NO evidence at all these must be violations. Before the fix they
+    // matched no class and shipped straight to the guest with the veto armed.
+    expect(scanPromises(draft, NO_EVIDENCE).violations.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    "I've reached out to housekeeping.",
+    "I've contacted the front desk.",
+    "I've checked with housekeeping.", // 🚨 the DoD forbids this exact wording
+    "I've got housekeeping onto it.",
+    "I've got onto the team.",
+    "I've passed this to housekeeping.", // "passed X to ROLE", not only "passed it on"
+  ])('🚨 the round-4 gap: "%s" is a C1 claim — an UNCAUGHT one SENDS, it does not regenerate', (
+    draft,
+  ) => {
+    expect(scanPromises(draft, NO_EVIDENCE).violations.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    "I'll check with the team.", // future = referral
+    "I'll reach out to housekeeping.", // future
+    "I've reached out to you.", // "you" — not a role
+    "I've contacted the owner.", // owner is not a rostered role
+    "I've got your booking confirmed.", // "got YOUR booking", not "got ROLE onto it"
+  ])('the round-4 widening did NOT over-block "%s"', (draft) => {
+    expect(scanPromises(draft, NO_EVIDENCE).violations).toEqual([]);
+  });
+
+  it.each([
+    "I'll ask housekeeping about that.", // future = referral, not a claim
+    'Let me know if you need anything else.', // "let ME know" — not a role
+    "You asked about breakfast earlier.", // "you asked" — not the AI's claim
+    "I've asked for your check-in time.", // "asked for" — object is not a role
+  ])('the widening did NOT over-block "%s"', (draft) => {
+    expect(scanPromises(draft, NO_EVIDENCE).violations).toEqual([]);
+  });
+});
+
+describe('🚨 task_done / sla_nudge — the out-of-turn evidence channel (CH-13a)', () => {
+  it('sla_nudge licenses scenario 3\'s exact line', () => {
+    // "I've just nudged housekeeping" is the ONLY honest answer to "where are
+    // those?" 32 minutes in, and this row is the only thing that licenses it.
+    const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds(['sla_nudge']) };
+    expect(scanPromises("I've just nudged housekeeping.", evidence).violations).toEqual([]);
+  });
+
+  it('🚨 task_done licenses NO C5 claim — a context row has no referent', () => {
+    // This test used to assert `task_done` licensed "That is sorted." It did —
+    // via C5 — and that RE-OPENED the exact bug the C1/C5 split was for: after
+    // ANY done task, "the airport transfer has been booked for Friday", "I've
+    // arranged a late checkout" and "your refund has been logged" all shipped.
+    // A towels DONE licensed a claim about an airport transfer, because
+    // `covered()` is class-scoped and cannot see WHICH outcome a draft names.
+    const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds(['task_done']) };
+    for (const draft of [
+      'Of course — the airport transfer has been booked for Friday.',
+      "I've arranged a late checkout for you.",
+      'Your refund has been logged.',
+      'The issue has been escalated.',
+    ]) {
+      expect(scanPromises(draft, evidence).violations.length).toBeGreaterThan(0);
+    }
+    // The recorded, accepted residual: a TRUE anaphoric claim is refused too.
+    // It fails toward an escalation, not a lie, and the deterministic close line
+    // has already told the guest the work is done.
+    expect(scanPromises('That is sorted.', evidence).violations.length).toBeGreaterThan(0);
+  });
+
+  it('but task_done still licenses what it genuinely proves — C1', () => {
+    const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds(['task_done']) };
+    for (const draft of ['The team has been informed.', 'Housekeeping knows.', "I've passed it on."]) {
+      expect(scanPromises(draft, evidence).violations).toEqual([]);
+    }
+  });
+
+  it('🚨 the C1/C5 split lost NO coverage main had', () => {
+    // A phrase falling BETWEEN the two classes would ship unbacked — worse than
+    // the bug the split fixed. Every phrase main's original 7 C1 regexes caught
+    // must still be caught by C1 or C5.
+    const MAIN_C1 = [
+      'The team has been informed.', 'It has been notified.', 'You have been told.',
+      'The staff have been alerted.', 'It has been arranged.', 'The room has been booked.',
+      'It has been sent.', 'Someone has been dispatched.', 'The issue has been escalated.',
+      'It has been raised.', 'Your refund has been logged.', 'The problem has been resolved.',
+      'Your booking has been confirmed.', "I've informed the team.",
+      'We have notified housekeeping.', "I've just told the front desk.", "I've nudged maintenance.",
+      "I've arranged it.", "We've organised that.", "I've booked it.", "I've sent it.",
+      "I've raised it.", "I've logged it.", "I've escalated it.", "I've passed it on.",
+      'Consider it done.', 'Consider it sorted.', "That's sorted.", 'This is done.',
+      'It has been taken care of.', 'Housekeeping knows.', 'The team is aware.',
+      'The team are looking into it.', 'Housekeeping is on it.',
+    ];
+    for (const draft of MAIN_C1) {
+      const scan = scanPromises(draft, NO_EVIDENCE);
+      expect(scan.violations.length > 0 || scan.referral).toBe(true);
+    }
+  });
+
+  it('🚨 but NEITHER licenses C2 — a nudge puts nobody in motion', () => {
+    for (const kind of ['sla_nudge', 'task_done']) {
+      const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds([kind]) };
+      expect(
+        scanPromises('Housekeeping is on their way.', evidence).violations.length,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('and neither licenses a memory promise', () => {
+    const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds(['task_done']) };
+    expect(scanPromises("I'll remember that.", evidence).violations.length).toBeGreaterThan(0);
+  });
+});
+
+const stale = classesFromContextKinds(['task_done']);
+const failed = (error: string): ToolRun => ({
+  name: 'create_staff_task',
+  input: {},
+  result: { ok: false, error: error as never },
+});
+
+describe('🚨 the veto — a failure THIS TURN outranks a stale row (CH-13a)', () => {
+
+  it.each([
+    ['NOT_NOTIFIED', 'the card reached nobody'],
+    // 🚨 The decision audit's finding: my first cut vetoed ONLY on
+    // NOT_NOTIFIED — a PROXY for the contract "we tried and did not
+    // demonstrably succeed". The handler's own catch returns UPSTREAM_DOWN (a
+    // DB failure in insertTask; Railway deploys and OOMs are cited as live
+    // causes), so a stale task_done licensed "the team has been informed" past
+    // a turn whose task never even inserted. F4's shape, third door.
+    ['UPSTREAM_DOWN', 'the insert itself failed'],
+  ])('%s vetoes C1 — %s', (error) => {
+    const evidence = { ...NO_EVIDENCE, toolRuns: [failed(error)], systemEvidence: stale };
+    expect(scanPromises('The team has been informed.', evidence).violations.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['REFUSED', 'a gate refused before we touched the world'],
+    ['INVALID', 'the model fumbled the call'],
+  ])('%s does NOT veto — %s, so nothing is disproved', (error) => {
+    // Absence of a run is not evidence of absence. A turn that never tried may
+    // still lean on a genuine row from the turn before.
+    const evidence = { ...NO_EVIDENCE, toolRuns: [failed(error)], systemEvidence: stale };
+    expect(scanPromises('The team has been informed.', evidence).violations).toEqual([]);
+  });
+
+  it('🚨 the veto SURVIVES a regenerate — a second pass is never weaker than the first', () => {
+    // `toolRuns` is per-LOOP: turn.ts's regenerate returns a FRESH array. So
+    // pass 1 fails to reach a human, vetoes C1 and blocks the claim; pass 2 —
+    // in which the model, correctly told not to claim, does NOT call the tool
+    // again — arrived with an EMPTY toolRuns, no veto, and the stale task_done
+    // row still in the per-turn systemEvidence. The second pass shipped exactly
+    // what the first one caught. turn.ts now carries the veto across loops.
+    const pass2 = { ...NO_EVIDENCE, toolRuns: [], systemEvidence: stale };
+    // Without the carried veto — the bug:
+    expect(scanPromises('The team has been informed.', pass2).violations).toEqual([]);
+    // With it, as turn.ts now passes:
+    expect(
+      scanPromises('The team has been informed.', {
+        ...pass2,
+        vetoed: vetoedByFailures([failed('NOT_NOTIFIED')]),
+      }).violations.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('an UNKNOWN future error code defaults to VETO, not to a licence', () => {
+    // The list enumerates what is ALLOWED, never what is forbidden — the lesson
+    // this repo has paid for five times. A code added later fails safe.
+    const evidence = { ...NO_EVIDENCE, toolRuns: [failed('SOME_FUTURE_CODE')], systemEvidence: stale };
+    expect(scanPromises('The team has been informed.', evidence).violations.length).toBeGreaterThan(0);
   });
 });
 

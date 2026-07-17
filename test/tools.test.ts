@@ -53,9 +53,10 @@ function ctx(overrides?: {
 const registry = buildToolRegistry();
 
 describe('registry framework', () => {
-  it('exposes the CH-05 tools + remember_fact + get_booking with object input schemas', () => {
+  it('exposes the CH-05 tools + remember_fact + get_booking + create_staff_task', () => {
     const names = registry.specs().map((s) => s.name).sort();
     expect(names).toEqual([
+      'create_staff_task',
       'get_availability',
       'get_booking',
       'get_booking_link',

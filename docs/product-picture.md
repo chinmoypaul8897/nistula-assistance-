@@ -48,16 +48,31 @@ Precondition: Rahul linked to an ACTIVE stay in Villa B3.
   **🚨 The AI's REPLY names no house, and that is a DIFFERENT rule from the card above.**
   `TRUST_EZEE_ROOM_ASSIGNMENT = false` still gates what we SAY to a guest (OQ-15: may we promise a
   specific house at all?), even though the staff card may now route on one. An earlier draft of this
-  line read "on their way to Villa B3" — CH-11's `scanUnitAssertions` guardrail would have
-  deterministically escalated the very reply this scenario asserts.
+  line read "on their way to Villa B3".
+  > **⚠️ CORRECTION 2026-07-17 (CH-13a).** That sentence used to end *"— CH-11's
+  > `scanUnitAssertions` guardrail would have deterministically escalated the very reply this
+  > scenario asserts."* **It would NOT.** Traced against the real guard: *"Two towels on their way to
+  > Villa B3"* carries **no binding cue** — no `you…in/at`, no `your`, no echo of the guest's own
+  > words — so it walks straight through. The rule that the reply names no house is real and is what
+  > we ship; the claim that a GUARD enforces it was false, and a false belief about which guard
+  > covers you is worse than a known gap. Today the protection is that block [2] no longer TEACHES
+  > the sentence (`REGISTER_EXEMPLARS[0]` was that exact line and is now "Two towels are on their way
+  > up."). Widening the guard's cues is CH-11 surface with real false-positive risk on the pre-sales
+  > quote path — filed, not hot-fixed under merge pressure.
 - STAFF 15:20 — task card: `NISTULA TASK #<id> · Nistula Villa (Assagao) · Rahul · 2 extra towels · Reply DONE <id>`
   **🚨 OQ-19 amendment, REVISED 2026-07-16 (this supersedes the earlier amendment on this line —
   which said the card must never name a house and was written before the answer landed): the card MAY
   name the house, sourced from a FRESH `BKG-03 tran.RoomID` read at task time — NEVER from
   `bookings_mirror.physical_room_label`, a snapshot frozen at CH-11's 14 Jul reconcile.
   `assignFor(kind, villa)` may key off that fresh read; it falls back to the frontdesk lead only when
-  BKG-03 cannot resolve a room (it returns 503 for an unconfirmed hold — "unreadable" NEVER means
-  "cancelled"). The PMS re-model is NOT a precondition. CH-19 asserts THIS.**
+  BKG-03 cannot resolve a room. The PMS re-model is NOT a precondition. CH-19 asserts THIS.**
+  > **⚠️ CORRECTED 2026-07-17 (CH-13a).** This line used to read *"(it returns 503 for an unconfirmed
+  > hold …)"*. **BKG-03 never returned 503 in 14 live probes** — "no such reservation" is an EMPTY OK
+  > (`{status:'ok', reservations:[]}`), no room yet is `RoomID:""`, and a CANCELLED or VOIDED booking
+  > returns its room happily (so a successful read is NOT proof of life). The 503 string is
+  > documented for **BKG-30**, a different endpoint. The unconfirmed-hold case specifically is
+  > **untested, not disproven** — none was reachable to probe. `staff/villaRoute.ts` treats all of
+  > them identically, so **the rule survives unchanged: "unreadable" NEVER means "cancelled".**
 - G 15:52 — "where are those?"
 - A 15:52 — HONEST wording: references the open task and the nudge — "I've just nudged housekeeping — your towels are marked on the way. Sorry for the wait, Rahul." (Never "I checked with housekeeping" — it checked the task record.)
 - STAFF 15:52 — SLA nudge (task open 32 min > 30-min SLA): re-ping + cc lead.

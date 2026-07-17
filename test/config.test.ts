@@ -112,13 +112,22 @@ describe('roster integrity at config load (§3.3)', () => {
     );
   });
 
-  it('parses and normalises STAFF_ROSTER_JSON', () => {
+  it('parses and normalises STAFF_ROSTER_JSON — phones AND villas (CH-13a)', () => {
     const roster = JSON.stringify([
       { name: 'Meera', phone: '91 77009 00010', role: 'frontdesk', villas: ['B1', 'B3'] },
     ]);
     const config = loadConfig({ ...minimalEnv, STAFF_ROSTER_JSON: roster });
     expect(config.staffRoster).toEqual([
-      { name: 'Meera', phone: '+917700900010', role: 'frontdesk', villas: ['B1', 'B3'] },
+      {
+        name: 'Meera',
+        phone: '+917700900010',
+        role: 'frontdesk',
+        // CH-13a: villas are canonicalised at boot for the same reason phones
+        // are — assignFor matches them against eZee-derived labels, and
+        // "B1" would match nothing, silently routing every task to the front
+        // desk. Full battery in test/staff-roster.test.ts.
+        villas: ['Villa B1', 'Villa B3'],
+      },
     ]);
   });
 
@@ -127,6 +136,10 @@ describe('roster integrity at config load (§3.3)', () => {
     { name: 'unknown role', value: JSON.stringify([{ name: 'X', phone: '8810358517', role: 'chef', villas: [] }]) },
     { name: 'unnormalisable phone', value: JSON.stringify([{ name: 'X', phone: '12', role: 'frontdesk', villas: [] }]) },
     { name: 'missing name', value: JSON.stringify([{ phone: '8810358517', role: 'frontdesk', villas: [] }]) },
+    {
+      name: 'an unknown villa (CH-13a)',
+      value: JSON.stringify([{ name: 'X', phone: '8810358517', role: 'housekeeping', villas: ['B99'] }]),
+    },
   ])('fails boot on STAFF_ROSTER_JSON with $name', ({ value }) => {
     expect(() => loadConfig({ ...minimalEnv, STAFF_ROSTER_JSON: value })).toThrow(ConfigError);
   });

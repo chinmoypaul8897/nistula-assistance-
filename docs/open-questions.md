@@ -82,6 +82,7 @@
 | OQ-18 | Website has an UNGATED route that creates real bookings | Paul (website) | pre-launch safety | ⬜ |
 | **OQ-24** | **🚨 Does VOIDING a booking in eZee reach the queue? CANCEL does; a void has produced NOTHING in 2h.** If the front desk voids, we message guests about dead stays. | front desk + Paul | CH-10 mirror truth · CH-12 sends | 🔴 |
 | **OQ-19** | **A guest cannot book a specific house — eZee picks it. PROVEN.** ✅ SYMPTOM CLOSED 2026-07-16: the website ABOLISHED house-choice (sells the 3 types). Launch unblocked; CH-13 unblocked (route off eZee BKG-03 RoomID). **Open business Q: are Apt 06/09/11 really interchangeable?** | **Paul + eZee acct mgr** | website launch · CH-13 | 🟡 |
+| **OQ-25** | **🚨 Will the villa team actually MESSAGE the WhatsApp line, and how often?** A staff number quiet for 24h is unreachable by free-form, so every task card to it fails and the guest is (correctly) promised nothing. The whole hands-of-the-AI mechanism rests on this. | front desk + villa team | CH-13a task cards · cutover | 🔴 |
 
 ---
 
@@ -374,12 +375,33 @@ is no longer a "guest's house" for it to contradict.** eZee's assignment simply 
 guest will occupy, and eZee is now the ONLY system that knows it (`BKG-03 tran.RoomID`, at confirm).
 **We can route staff off that directly — we need neither the website's database nor the re-model.**
 
-**Two eZee facts learned from the website's own scars — both new to us:**
-1. **BKG-03 cannot read an UNCONFIRMED booking.** It returns `503 No Reservation Found` for a live
-   status-10 hold. **"Unreadable" NEVER means "cancelled"** — conflating them caused a real bug on
-   their side. A house only exists after confirm, because eZee only assigns at confirm.
-   **🚨 TODO(CH-17): the deferred `ezee_cancel_conflict` / `partial_cancel_suspect` re-sync is exactly
-   a BKG-03 call. Whoever builds it must not read 503 as a cancellation.**
+**Two eZee facts learned from the website's own scars — the FIRST one was WRONG, corrected below:**
+1. ~~**BKG-03 cannot read an UNCONFIRMED booking.** It returns `503 No Reservation Found` for a live
+   status-10 hold.~~
+   > **🚨 CORRECTED 2026-07-17 by CH-13a, which probed BKG-03 live 14 times before building on it.
+   > BKG-03 NEVER RETURNED 503 ONCE.** That string is documented for **BKG-30**, a different
+   > endpoint (`04_bookings.md:9097`) — the likeliest origin of the mix-up; BKG-03's own error table
+   > (`:1737-1749`) lists no 503 at all. What it ACTUALLY does:
+   > - **a reservation that does not exist → `{status:'ok', reservations:[]}`** — an EMPTY OK. Any
+   >   caller keying "no such booking" off an ERROR CODE has a branch that never runs. (CH-13a's own
+   >   approved plan said to build exactly that; the probe is why it does not.)
+   > - **no room assigned yet → `RoomID: ""`** — an empty string, not an absent field.
+   > - **a CANCELLED or VOIDED booking → `ok`, room returned happily.** A successful read is NOT
+   >   proof the booking is alive; check `tran.CurrentStatus`. This matters for **OQ-24**: a VOID
+   >   emits no event, so the mirror can hold a dead booking as live for ever (969 does), and a
+   >   fresh read is the only place anyone would learn.
+   >
+   > **STILL UNKNOWN, and not claimed either way:** no unconfirmed hold was reachable to probe (every
+   > one had since been cancelled), so *"503 for an unconfirmed hold"* is **untested, not
+   > disproven**. `staff/villaRoute.ts` treats 503, `ok`+empty AND `RoomID:''` identically — correct
+   > in both worlds.
+
+   **The rule survives all of it, unchanged: "UNREADABLE" NEVER MEANS "CANCELLED"** — conflating them
+   caused a real bug on the website's side. A house only exists after confirm, because eZee only
+   assigns at confirm. **🚨 TODO(CH-17): the deferred `ezee_cancel_conflict` /
+   `partial_cancel_suspect` re-sync is exactly a BKG-03 call. Whoever builds it must not read an
+   error — OR AN EMPTY OK — as a cancellation.** `villaRoute.resolveDoor` already does this
+   correctly and is the reference implementation.
 2. **An unconfirmed (status-10) hold reserves NOTHING at eZee** — it blocks no inventory. That
    defuses part of OQ-18 and bears on OQ-21.
 
@@ -556,3 +578,27 @@ reactively to one guest is not the same as one made automatically to every guest
 
 **What changes once they answer:** the pin goes into the KB, and CH-13 turns the guest's reply into a
 frontdesk task so nobody has to notice it by hand.
+
+### OQ-25 — 🚨 Will the villa team actually message the WhatsApp line, and how often?
+**Question:** The task card only reaches a staff member if THEIR OWN 24h WhatsApp window is open —
+i.e. if they have messaged the business line within the last day. Meta treats a card to a quiet staff
+number as business-initiated, exactly like a message to a stranger. Two things we need from the team:
+(a) do housekeeping/maintenance staff actually use WhatsApp on these numbers day to day, and will they
+message the line (even "ok") most days? (b) if not, who is the ONE person we should route everything
+to, who does?
+**Why / matters to a real guest:** this is the whole hands-of-the-AI mechanism. If the window is shut,
+the card fails, the task is recorded as `notify_failed`, ops is alerted, and the AI honestly tells the
+guest it is bringing the team in rather than claiming anyone is coming. **Nobody is lied to — but
+nobody does the work either.** In dev today every card fails this way; it is proven, not theoretical.
+**What we shipped meanwhile:** fail-closed. `create_staff_task` returns `ok:false NOT_NOTIFIED` when a
+card reaches nobody, so guardrail 2 refuses every "on their way"/"the team has been informed" claim;
+the task is still recorded so the work is not lost, and ops is paged. A rising `notify_failed` count
+in `tasks` IS the signal that this question has gone unanswered.
+**What changes once they answer:** the permanent fix is not operational at all — it is **template
+approval on the REAL number's WABA** (`nst_task_card_v1`, an ops event at real-number cutover between
+CH-18 and CH-19), after which a shut window no longer matters because the card goes as a template.
+Until then, the runbook's "every staff number messages the line once" **buys 24 hours, not for ever**
+(plan.md:727). If the answer to (a) is "no", the roster should name the one reachable person and
+`assignFor`'s frontdesk-lead fallback becomes the normal path rather than the exception.
+**Owner:** front desk + villa team. **Feeds:** CH-13a task cards · the cutover checklist.
+**Status:** 🔴 OPEN

@@ -31,8 +31,10 @@
  *     of both. CH-11 built the enrichment: `pnpm ezee:reconcile --apply` hydrates
  *     the label via BKG-03 through the event-free backfill writer, and the poller
  *     diff now COALESCEs a null-from-poll so a later poll cannot erase it.
- *     🚨 TODO(CH-13) — do NOT build the staff task card on THIS label, but the
- *     reason INVERTED on 2026-07-16 and the old one is gone. The website
+ *     🚨 NOT A TODO ANY MORE — CH-13a HELD IT: the staff task card is not built
+ *     on THIS label (staff/villaRoute.ts reads BKG-03 fresh). Kept as the
+ *     standing rule for whoever reaches for this field next. The reason
+ *     INVERTED on 2026-07-16 and the old one is gone. The website
  *     abolished house-level choice, so there is no longer a "guest's house" for
  *     eZee's assignment to contradict: eZee's assignment IS the physical door,
  *     CH-13's routing is UNBLOCKED, and the PMS re-model is not a precondition.
@@ -41,8 +43,14 @@
  *     labels are frozen at CH-11's 14 Jul reconcile and may be months stale by
  *     arrival. The stale-label problem is now PRIMARY, not secondary.
  *     Route off a FRESH BKG-03 tran.RoomID read by reservation number AT TASK
- *     TIME. BKG-03 returns 503 for an unconfirmed hold, and "unreadable" NEVER
- *     means "cancelled". (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` survives,
+ *     TIME. 🚨 CORRECTED 2026-07-17 (CH-13a BUILT it — staff/villaRoute.ts):
+ *     this used to say "BKG-03 returns 503 for an unconfirmed hold". IT DOES
+ *     NOT — 14 live probes, never once. "No such reservation" is an EMPTY OK
+ *     (`{status:'ok', reservations:[]}`); no room yet is `RoomID:""`; and a
+ *     CANCELLED/VOIDED booking returns its room happily, so a successful read is
+ *     NOT proof of life. (503 is documented for BKG-30, a different endpoint.)
+ *     The unconfirmed-hold case is untested, not disproven. The rule survives:
+ *     "unreadable" NEVER means "cancelled". (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` survives,
  *     but for a DIFFERENT reason: it gates what the AI SAYS TO A GUEST, which is
  *     not the same predicate as where housekeeping is sent — still gated on
  *     OQ-15.) Full analysis: CLAUDE.md §OQ-19 · docs/open-questions.md OQ-19.
@@ -63,6 +71,36 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** eZee's own change-verb vocabulary — echoed VERBATIM in ACK Status. */
 const ACK_STATUSES = new Set(['new', 'modify', 'cancel']);
 
+/**
+ * eZee's `CurrentStatus`, folded for comparison. Spaces and underscores go:
+ * "Checked Out" and "checked_out" are the same word to eZee's back office.
+ * EXPORTED (CH-13a) so nothing re-implements it — see isDeadCurrentStatus.
+ */
+export function normaliseCurrentStatus(currentStatus: string | undefined): string {
+  return (currentStatus ?? '').toLowerCase().replace(/[\s_]+/g, '');
+}
+
+/**
+ * Does eZee's word mean this booking is OVER? (CH-13a extraction.)
+ *
+ * 🚨 EXPORTED BECAUSE staff/villaRoute.ts RE-ENUMERATED IT AND DRIFTED. That
+ * copy read `new Set(['cancel','void'])` — so "Cancelled", which this mapper
+ * has always known and which eZee's own docs list, ROUTED A HOUSEKEEPER TO A
+ * CANCELLED BOOKING'S DOOR with no ops alert. Found by CH-13a's pre-push
+ * review. There is now ONE vocabulary; a new dead word is added here and both
+ * callers get it.
+ *
+ * A DENYLIST on purpose, and this is the load-bearing half: `CurrentStatus:
+ * "Confirmed Reservation"` is what EVERY real booking carries and is NOT in
+ * eZee's documented value list (CH-10's live finding), so an unrecognised
+ * status must never be read as death — that would hide every real booking.
+ * Only a word that MEANS dead counts as dead. That is exactly why the
+ * completeness of this list is load-bearing rather than incidental.
+ */
+export function isDeadCurrentStatus(normalised: string): boolean {
+  return normalised === 'cancel' || normalised === 'cancelled' || normalised === 'void';
+}
+
 export interface StatusMapping {
   status: MirrorRowInput['status'];
   issue: string | null;
@@ -80,11 +118,11 @@ export function mapStatus(
   isConfirmed: string | undefined,
   currentStatus: string | undefined,
 ): StatusMapping {
-  const current = (currentStatus ?? '').toLowerCase().replace(/[\s_]+/g, '');
+  const current = normaliseCurrentStatus(currentStatus);
   if (current === 'arrived' || current === 'checkedin') return { status: 'checked_in', issue: null };
   if (current === 'checkedout') return { status: 'checked_out', issue: null };
   if (current === 'noshow') return { status: 'no_show', issue: null };
-  if (current === 'cancel' || current === 'cancelled' || current === 'void') {
+  if (isDeadCurrentStatus(current)) {
     return { status: 'cancelled', issue: null };
   }
   const verb = (tranStatus ?? '').toLowerCase().trim();
