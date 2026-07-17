@@ -90,15 +90,19 @@ export interface NewTask {
   now: Date;
 }
 
-/** `${conversationId}:${newest guest message id}:${kind}` — deterministic, so a
+/** `${conversationId}:${OLDEST guest message id}:${kind}` — deterministic, so a
  * pg-boss retry of the same turn computes the SAME key and collides instead of
- * being judged by word overlap. */
+ * being judged by word overlap.
+ *
+ * Oldest, not newest: the cursor does not advance until the claim, and the
+ * tool loop runs before it, so a retry sees the same oldest message however
+ * much the batch grew meanwhile. See ToolTaskContext.requestCursorId. */
 export function taskRequestKey(
   conversationId: string,
-  sourceMessageId: string,
+  requestCursorId: string,
   kind: TaskKind,
 ): string {
-  return `${conversationId}:${sourceMessageId}:${kind}`;
+  return `${conversationId}:${requestCursorId}:${kind}`;
 }
 
 /** The task a previous attempt at THIS request already created, if any. */
@@ -117,7 +121,15 @@ export async function findTaskByRequestKey(db: DbLike, requestKey: string): Prom
  * It does NOT retry a REQUEST-KEY collision, and the difference matters: a
  * short-id clash means "unlucky, try another id"; a request-key clash means
  * "this exact request already exists" — retrying would defeat the very guard.
- * That throws to the caller, which reads the existing row.
+ *
+ * That collision throws, and the caller turns it into UPSTREAM_DOWN. An
+ * earlier version of this comment claimed the caller "reads the existing row";
+ * it does not — its catch is total (pre-push review). The normal path never
+ * gets here: GATE 0 reads the existing row BEFORE the insert. Reaching this
+ * throw means a CONCURRENT attempt inserted between that read and this write,
+ * and then failing closed is right: ok:false licenses no claim, the model
+ * falls back to the C3 referral, and a human is brought in over a task that
+ * does exist. Noisy in a race we have never observed; never a lie.
  */
 export async function insertTask(db: DbLike, input: NewTask): Promise<Task> {
   const slaMinutes = SLA_MINUTES[input.kind];

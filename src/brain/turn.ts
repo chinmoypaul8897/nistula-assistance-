@@ -141,6 +141,11 @@ export interface TurnArgs {
   /** The newest batch message's id — remember_fact's source_message_id
    * provenance (CH-09). Absent ⇒ facts save with null provenance. */
   newestGuestMsgId?: string;
+  /** The OLDEST batch message's id — create_staff_task's retry key (CH-13a).
+   * Deliberately not `newestGuestMsgId`: see worker.ts, where the difference
+   * is a second card buzzing the housekeeper. Absent ⇒ GATE 0 cannot key and
+   * the tool falls back to the near-duplicate gate. */
+  oldestGuestMsgId?: string;
   /** Guardrail 5 trigger from the policy pass (CH-07 step 3). */
   botQuestion?: boolean;
   /** CH-11: this guest's stays, ALREADY projected through stayView in the
@@ -232,7 +237,7 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
             conversationId,
             guestId: args.conversation.guestId,
             guestFirstName: args.guestName ?? null,
-            sourceMessageId: args.newestGuestMsgId ?? null,
+            requestCursorId: args.oldestGuestMsgId ?? null,
             stays: args.stays ?? [],
             // The same DB clock as `booking.today` — the stage gate and block
             // [6]'s stage line must never disagree inside one turn.

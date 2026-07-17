@@ -129,7 +129,7 @@ const harness = (over: Partial<ToolTaskContext> & { delivered?: boolean } = {}):
     conversationId,
     guestId,
     guestFirstName: 'Rahul',
-    sourceMessageId: 'm-1',
+    requestCursorId: 'm-1',
     stays: [stay()],
     today: TODAY,
     now: NOW,
@@ -327,7 +327,7 @@ describe('🚨 create_staff_task — GATE 0, the retry key (real Postgres)', () 
 
   it('no source message means no key, and the task still raises', async () => {
     // CH-13b's booking.created auto-tasks have no guest message behind them.
-    const h = harness({ sourceMessageId: null });
+    const h = harness({ requestCursorId: null });
     expect(await run(h.ctx)).toMatchObject({ ok: true });
     expect((await rows())[0]?.requestKey).toBeNull();
   });

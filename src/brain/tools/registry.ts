@@ -133,11 +133,15 @@ export interface ToolTaskContext {
   guestId: string;
   /** For the card. Sanitised at render, not here. */
   guestFirstName: string | null;
-  /** The newest guest message of the batch — the same provenance cursor
-   * memory.sourceMessageId uses. It is what makes the retry key DETERMINISTIC:
-   * a pg-boss retry re-reads the same batch, so it computes the same key and
-   * collides with its own previous attempt instead of raising a second task. */
-  sourceMessageId: string | null;
+  /** The OLDEST guest message of the batch — what makes the retry key
+   * deterministic. NOT memory.sourceMessageId's cursor, and the divergence is
+   * deliberate: that one is provenance ("which message did this fact come
+   * from?" — the newest), this one is identity ("which REQUEST is this?").
+   * Only identity has to survive the batch changing under a retry, and it
+   * does change: the tool loop is pre-claim, so a retry re-reads the batch and
+   * a message that arrived meanwhile moves `newest`. The cursor does not move
+   * until the claim, so `oldest` is stable across every attempt at one turn. */
+  requestCursorId: string | null;
   /** This guest's stays, already projected (the worker's single read) — the
    * stage gate and the reservation number for the door read both come from
    * here, never from a model argument. */

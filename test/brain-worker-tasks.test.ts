@@ -378,3 +378,64 @@ describe('🚨 red team — the model tries to supply a house', () => {
     expect(said).not.toMatch(/on their way/i);
   });
 });
+
+describe('🚨 CH-13a · the retry key survives the batch growing (real worker)', () => {
+  it('a retry whose batch gained a message raises ONE card, not two', async () => {
+    // THE DEFECT, reproduced end to end. The tool loop runs PRE-claim, so a
+    // failure anywhere after it — a 529 on the prosing round, here — leaves the
+    // cursor unmoved and pg-boss retries the WHOLE function. If the guest typed
+    // again in between, attempt 2's batch is BIGGER. Keyed on the batch's
+    // NEWEST message, that is a different key: GATE 0 missed, and the
+    // housekeeper's phone buzzed a second time for one request.
+    //
+    // Asserts the OUTCOME (how many cards a human actually received), never
+    // that the keys match — the CH-12 lesson: a test on the precondition is
+    // how the last one shipped.
+    const { conversation } = await seedInHouseGuest();
+    await openStaffWindows();
+    await touchPhoneWindow(db, GUEST, new Date());
+    const first = await seedGuestMessage(db, conversation.id, 'can we get 2 extra towels', 60);
+
+    // Attempt 1: the tool succeeds, THEN the turn dies.
+    const a1 = rig({});
+    let round = 0;
+    a1.deps.converse = async (input) => {
+      round += 1;
+      if (round === 1) {
+        const use = {
+          id: 'tu_1',
+          name: 'create_staff_task',
+          input: { kind: 'housekeeping', summary: '2 extra towels' },
+        };
+        return {
+          text: '',
+          toolUses: [use],
+          stopReason: 'tool_use' as const,
+          assistantContent: [
+            { type: 'tool_use' as const, id: use.id, name: use.name, input: use.input },
+          ],
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        };
+      }
+      throw new Error('overloaded_error'); // the card is out; the turn is not
+    };
+    await expect(processConversation(a1.deps, conversation.id)).rejects.toThrow();
+    expect(a1.carded).toHaveLength(1);
+    const afterFirst = [...(await db.execute(sql`SELECT id FROM tasks`))];
+    expect(afterFirst).toHaveLength(1);
+
+    // The guest types again while pg-boss waits, so the retry's batch is
+    // [first, second] where attempt 1 saw only [first].
+    const second = await seedGuestMessage(db, conversation.id, 'and some still water please', 30);
+    expect(second.id).not.toBe(first.id);
+
+    // Attempt 2: a retry is a fresh sample of a stochastic model, so it phrases
+    // the same request differently — far enough apart that similar() cannot
+    // rescue us and GATE 0 alone has to answer.
+    const a2 = rig({ summary: 'guest would like more bath towels sent up' });
+    await processConversation(a2.deps, conversation.id);
+
+    expect([...(await db.execute(sql`SELECT id FROM tasks`))]).toHaveLength(1);
+    expect(a2.carded).toHaveLength(0); // the replay re-cards nobody
+  });
+});

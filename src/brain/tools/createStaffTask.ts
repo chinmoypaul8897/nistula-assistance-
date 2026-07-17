@@ -139,9 +139,9 @@ export const createStaffTaskTool: ToolDef = {
       // its own previous attempt already made, rather than making a second one
       // and buzzing the housekeeper twice (pre-push review; reproduced).
       const requestKey =
-        tasks.sourceMessageId === null
+        tasks.requestCursorId === null
           ? null
-          : taskRequestKey(tasks.conversationId, tasks.sourceMessageId, input.kind as TaskKind);
+          : taskRequestKey(tasks.conversationId, tasks.requestCursorId, input.kind as TaskKind);
       if (requestKey !== null) {
         const already = await findTaskByRequestKey(tasks.db, requestKey);
         if (already !== null) return await answerFromExisting(tasks, already, input);
