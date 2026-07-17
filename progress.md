@@ -4,7 +4,7 @@
 
 ## Status
 
-- **Current chunk pointer:** **CH-13 (Staff tasks).** **CH-12 (Lifecycle engine) DONE 2026-07-16 — merged to `main`, tagged `vCH-12`, LIVE and ARMED.** `pnpm check` green at **1243 tests**. **The system now SPEAKS FIRST** — a booking landing in eZee causes an unprompted WhatsApp to someone who never messaged us. **Live demo PASSED: a real confirmation was SENT and READ on a real phone** (booking 970, the whole real pipeline), and re-dating it moved the pre-arrival's `send_at` — rescheduled, not duplicated. **The gates were proven on PRODUCTION data, not in a test: with `LIFECYCLE_EPOCH` set, the sweep saw 199 pre-epoch mirror rows and scheduled ZERO** — the 123 historical bookings and the 12 real OTA guests, all held. Backlog purged 85→0. **A post-deploy read confirms the gates hold live: 199 pre-epoch rows → 0 scheduled, and a real Airbnb guest with an unmasked phone arriving 25 Jul → 0 rows (OQ-20 holding on a real person). The cancel leg IS proven live after all** — eZee's batched queue delivered the cancellation late and the revocation fired; the full create → confirm → cancel → revoke arc is demonstrated end to end. **⚠️ `LIFECYCLE_SEND_ENABLED=1` on Railway: merging now auto-deploys a system that speaks.** What makes that safe is the epoch, `LIFECYCLE_SOURCES` direct-only, and the date gate. **`WA_TEMPLATE_MODE` is unset ⇒ `simulate`, so until Meta approves the templates a real website guest who never messaged us gets NOTHING** (defers on a shut window, skipped at 36h) — correct fail-closed behaviour. **Not a manual step waiting on anyone** — plan §8 CH-12 says "None now"; template approval belongs to the real number's WABA (which does not exist yet) and happens at **real-number cutover, between CH-18 and CH-19**. **🚨 THE FINDING THAT MATTERS: the belief that OTA phone numbers are masked, and OTA guests therefore unreachable by accident, is FALSE.** makemytrip and go-mmt mask them; **Airbnb and Booking.com do NOT.** Production holds **12 real OTA guests with real, unmasked numbers** — `LIFECYCLE_SOURCES` is the only thing between them and an unauthorised WhatsApp (OQ-20 🔴). **🚨 NINE ADVERSARIAL REVIEW ROUNDS FOUND 17 BLOCKER-CLASS DEFECTS IN CODE WHOSE SUITE WAS GREEN EVERY TIME — and FIVE were regressions introduced by the previous round's own fix.** The recurring class reached **ELEVEN**, and R8 named its second axis: **a rule may only SKIP (terminal) on a fact that cannot come back; reading a mutable field it must DEFER.** *Guard by the CONTRACT — and choose the verb the contract can survive being wrong about.* R9 returned GREEN, overruling three findings by algebra and deliberately DEFERRING three real ones (poststay's anchor, behind OQ-22) because the obvious fix would have starved every guest's confirmation to save one thank-you — instance 13. Read the CH-12 entry before touching anything. **CH-11 (Booking awareness) DONE 2026-07-14 — merged to `main`, tagged `vCH-11`, live demo PASSED.** **CH-11 (Booking awareness) DONE 2026-07-14 — merged to `main`, tagged `vCH-11`, live demo PASSED.** `pnpm check` green at **998 tests** (763→934 build, →957 pre-push audit, →963 pre-merge review, →977 website audit, →982 OQ-19 fix, →998 close-out audit). The brain now sees a guest's bookings: they link on the first inbound turn, project through `stayView.ts` (the ONE door from a booking row to words), and reach the model as block [5] stays + a block [6] stage. `get_booking` takes ONE argument and verifies a reference claim against the guest's OWN typed words. **🚨 THE HEADLINE FINDING: `bookings_mirror` is a CHANGE FEED, not the property's booking book** — it holds only what eZee's queue happened to contain on 13 Jul, so a real in-house guest whose booking predates the poller is staged a LEAD and gets sold the villa they are standing in. `pnpm ezee:reconcile` (BKG-05 ArrivalList, print-only unless `--apply`) measures the gap and hydrates it. Run in production it found **21 of 144** bookings held — but the SHAPE was the point: **future arrivals 18/18 present (0 missing), recent arrivals 15/18 MISSING.** The poller is not losing bookings; the mirror captures them by when they were CREATED, not when the guest ARRIVES. `--apply` recovered 123. **🚨 THE SECOND FINDING — OQ-19 (as found on 14 Jul; ✅ ANSWERED 16 Jul and INVERTED — the correction follows this paragraph, read it before acting): a guest cannot book a specific HOUSE. eZee holds 8 houses inside 3 room TYPES, so `InsertBooking` has no field for a house at all; eZee auto-assigns lowest-number-first (bookings 953 AND 957 both landed in Apartment 06), and the website's confirmation page then reads eZee's pick back and prints it. A guest can pay for Apartment 09 and be told on their own receipt they have Apartment 06.** So `physical_room_label` is **eZee's GUESS, not the guest's house**: `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`, the AI speaks the villa TYPE and names no house, and **CH-13's task cards are BLOCKED on the OQ-19 re-model, not on hydration** **🚨 ANSWERED 2026-07-16 — AND THE ANSWER INVERTS ALL OF THIS: the website (branch `v2`, `b9a0fac`) ABOLISHED house-level choice and now sells the same 3 room types eZee has.** There is no longer a "guest's house" for eZee's assignment to contradict — **eZee's assignment IS the physical door**, and eZee is the only system that knows it. **The website launch is NOT blocked and CH-13 is NOT blocked; the PMS re-model is not a precondition.** Route the task card off a FRESH `BKG-03 tran.RoomID` read by reservation number AT TASK TIME — never off `physical_room_label`, a snapshot frozen at CH-11's 14 Jul reconcile (only BKG-03 carries a room; the poller never does). **BKG-03 returns 503 for an UNCONFIRMED hold, and "unreadable" NEVER means "cancelled".** `TRUST_EZEE_ROOM_ASSIGNMENT` stays false for a NEW reason — what the AI SAYS to a guest is a different predicate from staff routing, still gated on OQ-15. Full record: CLAUDE.md §OQ-19 · `docs/open-questions.md` OQ-19.. (I hydrated the 143 labels and briefly armed the AI with them before OQ-19 was understood — see the retraction and the OQ-19 addendum in the entry.) **Live demo PASSED** (runbook §CH-11): three probes on the test line, plus a real eZee booking created → mirrored → cancelled → mirrored, and the OQ-19 fix proven live (the production DB held "Apartment 06"; the AI still refused to name it). **⚠️ ONE LEG WAS NOT RUN LIVE, and is NOT claimed as passed: the stranger-refusal probe** (a DIFFERENT phone claiming someone else's booking reference → the byte-identical refusal + a strike). Meta test numbers can only message allowlisted recipients, so it needs a second allowlisted number Paul does not currently have. It is covered in CI (all six failure paths return the same constant) and asserted in the DB, but **it has never been exercised over the real WhatsApp path** — the one place a leak would actually land. Carry it into the next live-demo window. **CH-10 (eZee mirror) DONE 2026-07-13 — merged via PR #30, tagged `vCH-10`, CI green on main, LIVE on Railway; a close-out audit then fixed 2 more DEFECTs (PR #32).** `pnpm check` green at **763 tests** (667→752 build, →761 pre-push audit, →763 close-out audit). The poller drained the property's entire un-ACKed backlog in three polls — **62 real items mirrored and ACKed, 0 errors, 0 ops alerts** (22 confirmed stays across Airbnb/Booking.com/makemytrip/go-mmt/Walk-in + 40 cancel tombstones). **Website (Internet Booking Engine) bookings DO reach the queue** — verified end to end on booking `953` (create → mirror → cancel → mirror, dates/amount verbatim); an earlier "they don't" reading was a queue-BATCHING artifact and is retracted. **The pre-push audit's BLOCKER was real and waiting in production:** two genuine multi-room full-cancellations (`877-1/-2/-3`, `894-1/-2/-3`) arrive as suffixed entries with no bare entry. **Env (Railway):** `EZEE_HOTEL_CODE`/`EZEE_AUTH_CODE` + `EZEE_POLLER_ENABLED=1` are SET (byte-exact — a PowerShell BOM corruption was caught by the length check; move secrets with **Node**, never a PS pipe). **The split-brain rule is BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — a dev poller would ACK-consume real bookings the production mirror never sees (runbook §CH-10).
+- **Current chunk pointer:** **CH-13b (Staff tasks — the fan-out).** **CH-13a (the loop) BUILT 2026-07-17 on `chunk/CH-13a-staff-tasks` — NOT merged, NOT tagged.** `pnpm check` green at **1393 tests, gated on the EXIT CODE** (a grep for the count reads green on a red run — the reviewer's three runs all returned exit 1). **The assistant now has HANDS:** `create_staff_task` raises a task, a card goes to the staff member whose round has the house, `DONE <id>` closes it, the guest is told, and an overdue task nudges. **🚨 THE LIVE DoD IS NOT RUN AND NOT CLAIMED** — plan §8 CH-13:760 requires the towel scenario end to end with Paul playing staff on the second allowlisted number; **that number must message the business line FIRST**, because a staff number quiet for 24h is unreachable by free-form and every card becomes `notify_failed` (proven, not theoretical — my worker e2e failed on exactly this). **The local demo PASSED against LIVE eZee and proved the chunk's thesis:** the mirror said `Villa B3 (STALE)`, the card said **`Apartment 06`**, read fresh from BKG-03 at task time. **🚨 BKG-03 NEVER RETURNS 503 — 14 live probes killed the note this chunk was told to build on** (my own approved plan said to key `not_found` off code 503; that branch would never have run — "no such reservation" is an EMPTY OK, and a CANCELLED/VOIDED booking returns its room happily, so a successful read is NOT proof of life). **A 4-lens pre-push review found 6 BLOCKERs in green code; the recurring class struck twice inside guards I had just written while quoting the rule against it, and THREE of my own tests asserted the bug.** Read the CH-13a entry before touching any of it. **CH-12 (Lifecycle engine) DONE 2026-07-16 — merged to `main`, tagged `vCH-12`, LIVE and ARMED.** `pnpm check` green at **1243 tests**. **The system now SPEAKS FIRST** — a booking landing in eZee causes an unprompted WhatsApp to someone who never messaged us. **Live demo PASSED: a real confirmation was SENT and READ on a real phone** (booking 970, the whole real pipeline), and re-dating it moved the pre-arrival's `send_at` — rescheduled, not duplicated. **The gates were proven on PRODUCTION data, not in a test: with `LIFECYCLE_EPOCH` set, the sweep saw 199 pre-epoch mirror rows and scheduled ZERO** — the 123 historical bookings and the 12 real OTA guests, all held. Backlog purged 85→0. **A post-deploy read confirms the gates hold live: 199 pre-epoch rows → 0 scheduled, and a real Airbnb guest with an unmasked phone arriving 25 Jul → 0 rows (OQ-20 holding on a real person). The cancel leg IS proven live after all** — eZee's batched queue delivered the cancellation late and the revocation fired; the full create → confirm → cancel → revoke arc is demonstrated end to end. **⚠️ `LIFECYCLE_SEND_ENABLED=1` on Railway: merging now auto-deploys a system that speaks.** What makes that safe is the epoch, `LIFECYCLE_SOURCES` direct-only, and the date gate. **`WA_TEMPLATE_MODE` is unset ⇒ `simulate`, so until Meta approves the templates a real website guest who never messaged us gets NOTHING** (defers on a shut window, skipped at 36h) — correct fail-closed behaviour. **Not a manual step waiting on anyone** — plan §8 CH-12 says "None now"; template approval belongs to the real number's WABA (which does not exist yet) and happens at **real-number cutover, between CH-18 and CH-19**. **🚨 THE FINDING THAT MATTERS: the belief that OTA phone numbers are masked, and OTA guests therefore unreachable by accident, is FALSE.** makemytrip and go-mmt mask them; **Airbnb and Booking.com do NOT.** Production holds **12 real OTA guests with real, unmasked numbers** — `LIFECYCLE_SOURCES` is the only thing between them and an unauthorised WhatsApp (OQ-20 🔴). **🚨 NINE ADVERSARIAL REVIEW ROUNDS FOUND 17 BLOCKER-CLASS DEFECTS IN CODE WHOSE SUITE WAS GREEN EVERY TIME — and FIVE were regressions introduced by the previous round's own fix.** The recurring class reached **ELEVEN**, and R8 named its second axis: **a rule may only SKIP (terminal) on a fact that cannot come back; reading a mutable field it must DEFER.** *Guard by the CONTRACT — and choose the verb the contract can survive being wrong about.* R9 returned GREEN, overruling three findings by algebra and deliberately DEFERRING three real ones (poststay's anchor, behind OQ-22) because the obvious fix would have starved every guest's confirmation to save one thank-you — instance 13. Read the CH-12 entry before touching anything. **CH-11 (Booking awareness) DONE 2026-07-14 — merged to `main`, tagged `vCH-11`, live demo PASSED.** **CH-11 (Booking awareness) DONE 2026-07-14 — merged to `main`, tagged `vCH-11`, live demo PASSED.** `pnpm check` green at **998 tests** (763→934 build, →957 pre-push audit, →963 pre-merge review, →977 website audit, →982 OQ-19 fix, →998 close-out audit). The brain now sees a guest's bookings: they link on the first inbound turn, project through `stayView.ts` (the ONE door from a booking row to words), and reach the model as block [5] stays + a block [6] stage. `get_booking` takes ONE argument and verifies a reference claim against the guest's OWN typed words. **🚨 THE HEADLINE FINDING: `bookings_mirror` is a CHANGE FEED, not the property's booking book** — it holds only what eZee's queue happened to contain on 13 Jul, so a real in-house guest whose booking predates the poller is staged a LEAD and gets sold the villa they are standing in. `pnpm ezee:reconcile` (BKG-05 ArrivalList, print-only unless `--apply`) measures the gap and hydrates it. Run in production it found **21 of 144** bookings held — but the SHAPE was the point: **future arrivals 18/18 present (0 missing), recent arrivals 15/18 MISSING.** The poller is not losing bookings; the mirror captures them by when they were CREATED, not when the guest ARRIVES. `--apply` recovered 123. **🚨 THE SECOND FINDING — OQ-19 (as found on 14 Jul; ✅ ANSWERED 16 Jul and INVERTED — the correction follows this paragraph, read it before acting): a guest cannot book a specific HOUSE. eZee holds 8 houses inside 3 room TYPES, so `InsertBooking` has no field for a house at all; eZee auto-assigns lowest-number-first (bookings 953 AND 957 both landed in Apartment 06), and the website's confirmation page then reads eZee's pick back and prints it. A guest can pay for Apartment 09 and be told on their own receipt they have Apartment 06.** So `physical_room_label` is **eZee's GUESS, not the guest's house**: `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`, the AI speaks the villa TYPE and names no house, and **CH-13's task cards are BLOCKED on the OQ-19 re-model, not on hydration** **🚨 ANSWERED 2026-07-16 — AND THE ANSWER INVERTS ALL OF THIS: the website (branch `v2`, `b9a0fac`) ABOLISHED house-level choice and now sells the same 3 room types eZee has.** There is no longer a "guest's house" for eZee's assignment to contradict — **eZee's assignment IS the physical door**, and eZee is the only system that knows it. **The website launch is NOT blocked and CH-13 is NOT blocked; the PMS re-model is not a precondition.** Route the task card off a FRESH `BKG-03 tran.RoomID` read by reservation number AT TASK TIME — never off `physical_room_label`, a snapshot frozen at CH-11's 14 Jul reconcile (only BKG-03 carries a room; the poller never does). **🚨 CORRECTED 2026-07-17 (CH-13a probed BKG-03 live 14×): BKG-03 NEVER returns 503. "No such reservation" is an EMPTY OK (`{status:'ok', reservations:[]}`); no room yet is `RoomID:""`; and a CANCELLED/VOIDED booking returns its room happily, so a successful read is NOT proof of life. The 503 string is documented for BKG-30, a different endpoint. The 503-for-an-unconfirmed-hold claim is UNTESTED, not disproven — no hold was reachable to probe. The RULE survives: **"unreadable" NEVER means "cancelled"**. See the CH-13a entry.) `TRUST_EZEE_ROOM_ASSIGNMENT` stays false for a NEW reason — what the AI SAYS to a guest is a different predicate from staff routing, still gated on OQ-15. Full record: CLAUDE.md §OQ-19 · `docs/open-questions.md` OQ-19.. (I hydrated the 143 labels and briefly armed the AI with them before OQ-19 was understood — see the retraction and the OQ-19 addendum in the entry.) **Live demo PASSED** (runbook §CH-11): three probes on the test line, plus a real eZee booking created → mirrored → cancelled → mirrored, and the OQ-19 fix proven live (the production DB held "Apartment 06"; the AI still refused to name it). **⚠️ ONE LEG WAS NOT RUN LIVE, and is NOT claimed as passed: the stranger-refusal probe** (a DIFFERENT phone claiming someone else's booking reference → the byte-identical refusal + a strike). Meta test numbers can only message allowlisted recipients, so it needs a second allowlisted number Paul does not currently have. It is covered in CI (all six failure paths return the same constant) and asserted in the DB, but **it has never been exercised over the real WhatsApp path** — the one place a leak would actually land. Carry it into the next live-demo window. **CH-10 (eZee mirror) DONE 2026-07-13 — merged via PR #30, tagged `vCH-10`, CI green on main, LIVE on Railway; a close-out audit then fixed 2 more DEFECTs (PR #32).** `pnpm check` green at **763 tests** (667→752 build, →761 pre-push audit, →763 close-out audit). The poller drained the property's entire un-ACKed backlog in three polls — **62 real items mirrored and ACKed, 0 errors, 0 ops alerts** (22 confirmed stays across Airbnb/Booking.com/makemytrip/go-mmt/Walk-in + 40 cancel tombstones). **Website (Internet Booking Engine) bookings DO reach the queue** — verified end to end on booking `953` (create → mirror → cancel → mirror, dates/amount verbatim); an earlier "they don't" reading was a queue-BATCHING artifact and is retracted. **The pre-push audit's BLOCKER was real and waiting in production:** two genuine multi-room full-cancellations (`877-1/-2/-3`, `894-1/-2/-3`) arrive as suffixed entries with no bare entry. **Env (Railway):** `EZEE_HOTEL_CODE`/`EZEE_AUTH_CODE` + `EZEE_POLLER_ENABLED=1` are SET (byte-exact — a PowerShell BOM corruption was caught by the length check; move secrets with **Node**, never a PS pipe). **The split-brain rule is BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — a dev poller would ACK-consume real bookings the production mirror never sees (runbook §CH-10).
 - **✅ CH-12's backlog precondition — CLOSED 2026-07-16. Do NOT re-run it.** Kept because the LESSON outlived the task: the un-consumed `booking.*` jobs grew 62 → 67 → 83 → **85 by the cutover**, which is exactly why **no figure written down is worth anything — only a fresh `SELECT` counts.** They were purged 85→0 before the workers mounted, and the date gate shipped on BOTH legs (`reconcile.ts` GATE 2 + `gates.ts passesDate`) because a purge alone would have been undone within the hour: the MIRROR, not the event stream, is CH-12's source of truth (§3.4), and its 123 historical rows would have been re-read straight back out. **🚨 `DELETE FROM pgboss.job WHERE name LIKE 'booking.%' AND state='created'` is now DESTRUCTIVE — the queue is consumed live and those jobs are real arriving guests' events.**
 - **LIVE on Railway (2026-07-10):** service `nistula-assistance-` (trailing hyphen is the real service name) at **`https://nistula-assistance-production.up.railway.app`**, `/health` healthcheck gate via committed `railway.json`. Meta webhook wired end-to-end: callback verified, `messages` field subscribed, and the **WABA-level `subscribed_apps` link created via API** (the dashboard never creates it — see CH-02 entry). Live round trip proven: guest message → DB → `sendText` reply → phone; statuses walked the rank lattice; dedupe replay was a no-op. **Auto-deploy from main: ON and PROVEN (2026-07-11, Paul-authorized, done via CLI):** the repo had simply been DISCONNECTED from the service (research vs Railway docs: `railway up` never pauses triggers; old deployments' branch metadata is "from the last build, not proof of active connection"). Reconnected with `railway service source connect --repo chinmoypaul8897/nistula-assistance- --branch main --service nistula-assistance-` — connecting immediately auto-built and shipped main head (`eec8b0f`) to SUCCESS, which IS the live verification; every merge to main now ships itself behind the `/health` gate, no more post-merge `railway up`. Railway CLI service link persisted in-repo 2026-07-11 (`railway service` — without it, service-less CLI calls hang on an interactive picker). Stray project `fantastic-motivation`: DELETED via `railway delete` 2026-07-11 (Paul-authorized); Railway grants a 48h grace window (`deletedAt: 2026-07-13`) so it lingers in project lists until then — nothing left to do.
 - **Env values (2026-07-11):** local `.env` holds `NODE_ENV=development`, `PORT=3100` (3000 is owned by another local project), `DATABASE_URL` → local docker Postgres, all four WA values + `ANTHROPIC_API_KEY`. Railway service variables hold the four WA values + `NODE_ENV=production` + `TZ` + `ANTHROPIC_API_KEY` (set via the CH-02 stdin-script pattern — values never transit chat/shell history; token rotation reuses it; the key travelled clipboard → in-process script → both stores, validated 200 against `GET https://api.anthropic.com/v1/models`, Railway value VERIFIED, clipboard cleared, script deleted). `WA_VERIFY_TOKEN` ROTATED 2026-07-10 after Meta's handshake wrote it into pre-fix request logs (logging fixed same session; Meta still holds the OLD token and only needs the new one at the next webhook-config edit — paste from `.env` then). Test number `+1 555-179-8672`; WABA ID `1377084767847948`. **CH-09 addition (local `.env` ONLY):** `ADMIN_ROUTES_ENABLED=1` + a generated `ADMIN_BEARER_TOKEN` for dev poking — Railway does NOT carry them; production admin stays disabled unless actively debugging (runbook §CH-09).
@@ -49,7 +49,8 @@
 | CH-10 | eZee mirror | ✅ DONE 2026-07-13 (audit + live run: 62 real items mirrored) | [↓](#ch-10--ezee-mirror-poller--normalisation--built-2026-07-13) |
 | CH-11 | Booking awareness | ✅ DONE 2026-07-14 — merged, tagged `vCH-11` (998 tests; live demo PASSED; §5.4 **INVERTED** — the AI names NO house at all, see 🚨 OQ-19) | [↓](#ch-11--booking-awareness-the-guest--booking-bridge--built-2026-07-13) |
 | CH-12 | Lifecycle engine | ✅ DONE 2026-07-16 · `vCH-12` (1243 tests; **9 review rounds, 17 blockers**, 5 of them regressions from the previous fix; live demo PASSED — a real confirmation sent + read) | [↓](#ch-12--lifecycle-engine-scheduler--templates--window-aware-sender--done-2026-07-16) |
-| CH-13 | Staff tasks | ⬜ pending | |
+| CH-13a | Staff tasks — the loop | ✅ BUILT 2026-07-17 (1393 tests; 4-lens review found **6 blockers**, all reproduced + fixed; local demo PASSED against live eZee. **Live DoD NOT run — needs Paul's 2nd number**) | [↓](#ch-13a--staff-tasks--the-loop--built-2026-07-17) |
+| CH-13b | Staff tasks — the fan-out | ⬜ pending (mini-spec in the CH-13a entry's forward pointers) | |
 | CH-14a | Takeover + escalation SLA | ⬜ pending | |
 | CH-14b | Night queue + digest | ⬜ pending | |
 | CH-15 | Lead follow-up + consent | ⬜ pending | |
@@ -1227,7 +1228,7 @@ per-WABA and do not transfer, so submitting anything on the test WABA now would 
 
 **Carried forward from CH-10 (recorded, NOT built in CH-11):** the FetchSingleBooking re-sync for `ezee_partial_cancel_suspect`/`ezee_cancel_conflict` rows — CH-11's reconcile hydrates MISSING and UNLABELLED bookings, it does not re-verify a suspect cancel. Those stay a hand job (runbook §CH-10 corrected accordingly; a re-sync is a CH-17 candidate). The eZee degraded tracker also stays deferred, and the deferral still holds for the same reason: `get_booking` reads the MIRROR, not eZee live, so nothing guest-facing depends on eZee being up.
 
-**Forward pointers (do not lose):** **CH-12** — the 🚨 `booking.*` job precondition still stands, but **MEASURE the count, do not trust a number written here** (62 → 67 → ~70; it grows every day the poller runs). **The reconcile also put 123 HISTORICAL bookings into the mirror**, so purging the jobs is NOT sufficient on its own: CH-12's hourly sweep reads the MIRROR, and would happily schedule a pre-arrival message for a stay that ended in March. **Date-gate the sweep AND the handler (`check_in >= today`) — treat that as mandatory, not an optimisation.** The scheduler creates guests from mirror rows (superseding CH-10's no-auto-creation) and MUST consume through `stayView` — never a raw row. **CH-13** — register `create_staff_task → {C1,C2}` in TOOL_CLAIMS; block [5]'s `Open tasks:` stub is the last one left. **🚨 [SUPERSEDED 2026-07-16 — see the OQ-19 note in CLAUDE.md: the card is UNBLOCKED; route off a FRESH BKG-03 read, not this label.]** The task card CANNOT be built on `physical_room_label` — it is eZee's arbitrary auto-assignment, NOT the house the guest booked (OQ-19).** A card routed on it sends housekeeping to the wrong door. CH-13's villa routing is **BLOCKED on the OQ-19 PMS re-model**, not on hydration **🚨 ANSWERED 2026-07-16 — AND THE ANSWER INVERTS ALL OF THIS: the website (branch `v2`, `b9a0fac`) ABOLISHED house-level choice and now sells the same 3 room types eZee has.** There is no longer a "guest's house" for eZee's assignment to contradict — **eZee's assignment IS the physical door**, and eZee is the only system that knows it. **The website launch is NOT blocked and CH-13 is NOT blocked; the PMS re-model is not a precondition.** Route the task card off a FRESH `BKG-03 tran.RoomID` read by reservation number AT TASK TIME — never off `physical_room_label`, a snapshot frozen at CH-11's 14 Jul reconcile (only BKG-03 carries a room; the poller never does). **BKG-03 returns 503 for an UNCONFIRMED hold, and "unreadable" NEVER means "cancelled".** `TRUST_EZEE_ROOM_ASSIGNMENT` stays false for a NEW reason — what the AI SAYS to a guest is a different predicate from staff routing, still gated on OQ-15. Full record: CLAUDE.md §OQ-19 · `docs/open-questions.md` OQ-19. — an earlier version of this very line told you to run `--apply` so the card "can name a villa", and that instruction was wrong. **CH-14** — `escalate_to_human → {C3}`; `booking_reference` and `booking_unit_unknown` are already EscalationReasons. **CH-16** — the stage→reply_type map (lead→presales, prearrival→arrival, inhouse→instay, postguest→poststay); `needsHuman` is the separate flag that keeps a broken booking out of auto-send. **CH-18** — DELETE_GUEST must erase `guest_stays` AND `reference_attempts` (both guest-keyed; `deleteReferenceAttempts` exists).
+**Forward pointers (do not lose):** **CH-12** — the 🚨 `booking.*` job precondition still stands, but **MEASURE the count, do not trust a number written here** (62 → 67 → ~70; it grows every day the poller runs). **The reconcile also put 123 HISTORICAL bookings into the mirror**, so purging the jobs is NOT sufficient on its own: CH-12's hourly sweep reads the MIRROR, and would happily schedule a pre-arrival message for a stay that ended in March. **Date-gate the sweep AND the handler (`check_in >= today`) — treat that as mandatory, not an optimisation.** The scheduler creates guests from mirror rows (superseding CH-10's no-auto-creation) and MUST consume through `stayView` — never a raw row. **CH-13** — register `create_staff_task → {C1,C2}` in TOOL_CLAIMS; block [5]'s `Open tasks:` stub is the last one left. **🚨 [SUPERSEDED 2026-07-16 — see the OQ-19 note in CLAUDE.md: the card is UNBLOCKED; route off a FRESH BKG-03 read, not this label.]** The task card CANNOT be built on `physical_room_label` — it is eZee's arbitrary auto-assignment, NOT the house the guest booked (OQ-19).** A card routed on it sends housekeeping to the wrong door. CH-13's villa routing is **BLOCKED on the OQ-19 PMS re-model**, not on hydration **🚨 ANSWERED 2026-07-16 — AND THE ANSWER INVERTS ALL OF THIS: the website (branch `v2`, `b9a0fac`) ABOLISHED house-level choice and now sells the same 3 room types eZee has.** There is no longer a "guest's house" for eZee's assignment to contradict — **eZee's assignment IS the physical door**, and eZee is the only system that knows it. **The website launch is NOT blocked and CH-13 is NOT blocked; the PMS re-model is not a precondition.** Route the task card off a FRESH `BKG-03 tran.RoomID` read by reservation number AT TASK TIME — never off `physical_room_label`, a snapshot frozen at CH-11's 14 Jul reconcile (only BKG-03 carries a room; the poller never does). **🚨 CORRECTED 2026-07-17 (CH-13a probed BKG-03 live 14×): BKG-03 NEVER returns 503. "No such reservation" is an EMPTY OK (`{status:'ok', reservations:[]}`); no room yet is `RoomID:""`; and a CANCELLED/VOIDED booking returns its room happily, so a successful read is NOT proof of life. The 503 string is documented for BKG-30, a different endpoint. The 503-for-an-unconfirmed-hold claim is UNTESTED, not disproven — no hold was reachable to probe. The RULE survives: **"unreadable" NEVER means "cancelled"**. See the CH-13a entry.) `TRUST_EZEE_ROOM_ASSIGNMENT` stays false for a NEW reason — what the AI SAYS to a guest is a different predicate from staff routing, still gated on OQ-15. Full record: CLAUDE.md §OQ-19 · `docs/open-questions.md` OQ-19. — an earlier version of this very line told you to run `--apply` so the card "can name a villa", and that instruction was wrong. **CH-14** — `escalate_to_human → {C3}`; `booking_reference` and `booking_unit_unknown` are already EscalationReasons. **CH-16** — the stage→reply_type map (lead→presales, prearrival→arrival, inhouse→instay, postguest→poststay); `needsHuman` is the separate flag that keeps a broken booking out of auto-send. **CH-18** — DELETE_GUEST must erase `guest_stays` AND `reference_attempts` (both guest-keyed; `deleteReferenceAttempts` exists).
 
 **How to verify:** `pnpm check` (998 tests: the status×dates×rooms matrix, the byte-identical-refusal invariant across all six failure paths, the pushname attack, the cross-licensing regression, both stage boundary days, and the never-ACK/no-event reconcile invariants) · local: `docker compose up -d postgres` → `pnpm dev` (migration 0006 applies) → seed a mirror row on a fixture phone → signed POST "when is my check-in?" → correct date, villa TYPE, no invented ₹ · **live (Paul, pre-merge `railway up`, /health uptime reset FIRST):** the runbook §CH-11 probe — starting with `pnpm ezee:reconcile`, whose MISSING count is this chunk's headline finding.
 
@@ -1646,3 +1647,228 @@ unit guard — is the same shape: *someone (usually me) wrote the rule by enumer
 could think of, instead of by stating the contract and letting the code derive the cases.* The tell
 is a list of literals in a guard. When you next see one, that is the bug, and the fix is always to
 ask what the list is STANDING IN FOR.
+
+---
+
+### CH-13a · Staff tasks — the loop — BUILT 2026-07-17
+
+*(`pnpm check` green at **1393 tests** (1243 → 1386 build → 1393 after the pre-push review), gated on
+the **EXIT CODE** on a quiet tree. 12 commits on `chunk/CH-13a-staff-tasks`. **Local end-to-end demo
+PASSED** against LIVE eZee. **Remaining acceptance: the live test-line DoD with Paul on the second
+number — NOT run, NOT claimed.** Paul approved three calls before the build (2026-07-17,
+AskUserQuestion): the second number IS allowlisted; **CH-13 is SPLIT into 13a/13b**; the DONE→guest
+close line is DETERMINISTIC, not a model turn.)*
+
+**Built:**
+- **Migrations `0009_tasks` + `0010_task-request-key`; `src/db/tasks.ts`** — the `tasks` table (§4
+  column-for-column) and its repo. Every state flip is a GUARDED UPDATE returning the row it changed.
+- **`src/staff/`** — `roster.ts` (the §8 assignment ladder), `villaRoute.ts` (**the chunk's heart**),
+  `notifier.ts` (the card), `commands.ts` (`DONE`/`TASKS` + the guest close line), `sla.ts` (the
+  5-min nudger), `index.ts` (the one wiring point).
+- **`create_staff_task`** (`brain/tools/createStaffTask.ts`) + a `tasks` group on `ToolContext` — the
+  third instance of the CH-09/CH-11 per-turn pattern.
+- **Honesty**: `create_staff_task → C1+C2`; `task_done → C1+C5`; `sla_nudge → C1`. Block [5]'s last
+  stub is gone; block [4]'s rule rewritten (it told the model it had no tool — false the moment this
+  registered).
+- **Queues** `staff.command` (standard, retries — a real person is waiting) + `staff.sla` (stately,
+  the cron). The webhook classifies roster numbers (§3.3).
+
+**Decisions made while building:**
+- **The villa is a FACT WE LOOK UP.** No `villa_label` parameter at all (§6.4's signature is struck
+  through). A test pins the schema at `{kind, summary, detail}`.
+- **`villaRoute` is NOT `stayView`, and that is not a bypass.** Two predicates: *"may we PROMISE this
+  house to a GUEST?"* (still gated on OQ-15 → `TRUST_EZEE_ROOM_ASSIGNMENT` stays false) vs *"which
+  door must HOUSEKEEPING walk to?"* (eZee, live).
+- **`ok` answers "did a human GET this?"** — so guardrail 2 needs no framework change (`covered()`
+  already gates on `run.result.ok`). **NO "nobody configured" carve-out**, unlike `escalateToOps`:
+  an ops alert claims a message was recorded; "on their way" claims A PERSON IS MOVING.
+- **Two audiences, two schemas** (`staffParam` vs `param`) and, on the card, **two SOURCES**: `villa`
+  is our verified fact (a house is the point); `summary`/`guestName` are somebody else's claim (a
+  house there is an unverified competing door).
+- **The close line is deterministic** — plan step 3's enqueue is a NO-OP (the worker returns early
+  without an unprocessed guest message and cannot do a turn nobody prompted). True by construction.
+- **§3.3 applied to the field it forgot**: roster villas canonicalise through `resolveVilla` at boot;
+  an unknown or ambiguous entry REFUSES BOOT. Without it a typo'd round matches nothing and every
+  task for that house silently routes to the front desk — a config bug presenting as ops workload.
+- Roster **order** is a contract (the frontdesk LEAD is the first frontdesk member); `villas: []` is
+  "no round", never a wildcard; a null villa can never match a round.
+
+**Observed reality:**
+- 🚨 **BKG-03 NEVER RETURNS 503 — I probed it live 14× before building, and both the vendor doc and
+  this repo's own field note were wrong.** A reservation that does not exist returns
+  `{status:'ok', reservations:[]}` — an **EMPTY OK**. **My own approved plan said to build
+  `not_found` off error code 503; that branch would never have run.** The 503 string is documented
+  for **BKG-30**, a different endpoint (`04_bookings.md:9097`); BKG-03's error table lists no 503.
+  Also: **no room yet → `RoomID: ""`** (an empty string, not absent), and **a CANCELLED or VOIDED
+  booking returns its room happily** — a successful read is NOT proof of life. **UNTESTED, not
+  disproven:** no unconfirmed hold was reachable, so the 503-on-a-hold claim stands unprobed; the
+  code treats 503, `ok`+empty and `RoomID:''` identically. **The rule survives: UNREADABLE NEVER
+  MEANS CANCELLED**, now enforced with a test rather than remembered.
+- 🚨 **A dead booking's room comes back cheerfully, and that collides with OQ-24.** A VOID emits no
+  event, so the mirror holds a voided booking as live indefinitely (**969 does, right now**). The
+  fresh read is the ONLY place anyone would learn — so `resolveDoor` refuses to route a
+  `Cancel`/`Void` booking and pages ops. An unrecognised `CurrentStatus` still ROUTES: every real
+  booking carries the undocumented "Confirmed Reservation" (CH-10), so reading unknown as death
+  would refuse every real guest while passing every test.
+- 🚨 **`REGISTER_EXEMPLARS[0]` was `'Two towels on their way to Villa B3.'`** — the voice guide's own
+  line, in the CACHED HEAD, teaching the model to tell an in-house guest which house they are in, on
+  **the exact turn this chunk enables**. Latent until now because nothing could raise a task. **And
+  `scanUnitAssertions` does NOT catch it** — no binding cue, no `your`, no echo.
+  `product-picture.md:51` asserted that guard would; it would not. Fixed the CAUSE (the exemplar
+  names no house now) and corrected the doc. Widening CH-11's cues is real false-positive risk on
+  the pre-sales quote path and is filed, not hot-fixed.
+- **A cold staff number makes EVERY card `notify_failed`** — Meta treats a card to a staff number as
+  business-initiated, and in `simulate` the "template" is physically free-form. My worker e2e failed
+  on exactly this before I understood it; that failure was the code being right. **"Every staff
+  number messages the line once" buys 24 HOURS, not for ever** (plan.md:727).
+- **The local demo proved the thesis against live eZee**: the mirror said `Villa B3 (STALE)`, the
+  card said **`Apartment 06`** — from the live BKG-03 read of reservation 972.
+
+**Deviations from plan.md:**
+- **CH-13 SPLIT into 13a/13b** (§9; the CH-14a/14b precedent) — Paul-approved.
+- **No `villa_label` param** (§6.4, struck through 2026-07-16) · **the close line is deterministic**
+  (step 3) · `notify_failed` beyond §4's status enum · `request_key` + `0010` beyond §4 ·
+  `nst_task_card` → **`nst_task_card_v1`** (plan §5.3/§8 name the unversioned string; `templates.ts`
+  says a body change is a NEW template, and this chunk is the first to submit them) · "frontdesk
+  lead" defined as the first frontdesk member (§4's role enum has no lead marker) ·
+  **`EzeePollOutcome` is NOT widened** with a `not_found` variant (my plan said to; the probe made it
+  unnecessary — the existing union already expresses "ok + empty") · new leaf files under
+  `src/staff/` (§3.2 lists the module; the rupees/stayView precedent) · `fetchSingleBooking` gains an
+  optional `timeoutMs` (this runs inside the model's 150s turn budget, not the poller's) · a `C5`
+  claim class beyond §6.5's C1–C4.
+- **§6.4's "leads → escalate_to_human"**: that tool is CH-14's. A lead asking for towels is REFUSED
+  by GATE 1 with a message that steers the model to the referral line, which guardrail 2's C3 then
+  makes true via a real ops escalation. Fail-closed, verified by trace.
+
+**Open questions:**
+1. 🚨 **OQ-25 (new) — will a housekeeper actually message the line, and how often?** The entire
+   task-card mechanism depends on it: a staff number quiet for 24h is unreachable by free-form, so
+   every card becomes `notify_failed` and the guest is (correctly) promised nothing. Template
+   approval fixes it permanently at real-number cutover, but until then this is an OPERATIONAL
+   question only the team can answer. Fail-closed default shipped.
+2. **`tasks.summary` is a new, deliberately UNSCREENED store of guest words.** `factScreens` refuses
+   "allergic to shellfish" into `guest_facts`; nothing screens it into a task. Shipped with no screen
+   ON PURPOSE — the predicates differ ("may we REMEMBER this for ever?" vs "does a human need this to
+   do the work NOW?"), and a screen would refuse a wheelchair-ramp request, which is the opposite of
+   safe. **This part-answers CH-09's deferred dietary question** (it asked to decide before CH-13
+   wired food tasks; there is no kitchen kind, so it did not). **Consequence for CH-18: §4's "tasks
+   retained unlinked" is WRONG — the body must be SCRUBBED**, like CH-07's telemetry payloads.
+   Marked in `schema.ts`.
+3. **The staff roster itself** (team-questions Q40, 🔴) — unset everywhere. Fails closed on its own.
+
+**Forward pointers (do not lose):**
+- **CH-13b** (the fan-out, NOT built): step 6's `booking.created` auto-task from `past_issue` facts ·
+  the `MEDIA_FALLBACK` frontdesk task (`policy.ts:302`) · escalation-SLA groundwork beyond the
+  `sla_minutes` constant. 🚨 **Its gate must NOT reuse CH-12's lifecycle gates** — those answer "may
+  we WhatsApp this person?"; the task gate answers "is this a real upcoming booking to prepare
+  for?". They agree on epoch/date/status and **differ on SOURCE**: an Airbnb guest's room still needs
+  cleaning even though OQ-20 forbids messaging them. Reusing the allowlist is the recurring class
+  verbatim. **One pg-boss queue = one consumer**, so it EXTENDS CH-12's handler, never adds a worker.
+  `requestKey: null` is the auto-task path.
+- **CH-14** — `escalate_to_human → C3`. `escalation_card`/`digest`/`draft_card` still use the
+  GUEST-facing `param`, which bans house names; that is probably wrong for `escalation_card.detail`
+  (it carries the guest's own words to a human, so "the AC in Apartment 09 is weak" would make the
+  card unsendable and the escalation undelivered). Decide slot by slot, as `templates.ts` now does.
+- **CH-17** — `task_notify_failed`, `sla_nudge_undelivered`, `task_booking_dead_at_ezee`,
+  `task_unmapped_room_id` join the alert ladder. A rising `notify_failed` count is the signal that
+  the roster's windows are shut. **`notifier.ts` puts a STAFF phone in an alert detail** — the first
+  alert in the repo to carry one; harmless while log-only, but CH-17 transmits these.
+- **CH-18** — DELETE_GUEST must SCRUB `tasks.summary`/`detail` (see open question 2).
+- **CH-19** — scenario 3 is asserted end to end in `test/brain-worker-tasks.test.ts`.
+
+**How to verify:** `pnpm check` (**1393**, gate on the EXIT CODE — a grep for the count reads green
+on a red run) · local: `docker compose up -d postgres` → `pnpm dev` (boots `staff tasks ENABLED`;
+migrations 0009+0010 apply) → seed an in-house guest on a real reservation number + a `phone_windows`
+row for the staff number (**a cold window cannot receive a card**) → signed POST "can we get 2 extra
+towels" → a `tasks` row whose `villa_label` came from the LIVE BKG-03 read, a rendered card, and —
+fixture phone — `notify_failed` plus a reply that promises NOTHING and escalates. Then POST
+`DONE <id>` **from the roster number** → closed + `task_done` row + the close line ·
+**live (the DoD, NOT YET RUN):** the second number messages the line first, then the S3 script.
+
+---
+
+#### CH-13a pre-push adversarial review (2026-07-17) — 4 lenses, 6 BLOCKERs, all reproduced, all fixed
+
+Right-sized to the risk (the CH-11 over-scaling lesson): four lenses — honesty/guardrails ·
+security/the door · concurrency/DB · spec/record-truth — each required to REPRODUCE a finding
+against the real code before reporting it. **The suite was green through every one.** `pnpm check`
+1386 → **1393**. The lessons worth keeping:
+
+1. **THE RECURRING CLASS HIT TWICE INSIDE GUARDS I HAD JUST WRITTEN WHILE QUOTING THE RULE.**
+   `namesPhysicalHouse`'s own docstring said *"guard by the CONTRACT, not a shape enumeration"* — and
+   enumerated a shape, missing "apt 6"/"villa b-3"/"B3"/"a9", all of which **this repo's own
+   resolver** maps to houses. So one chunk gave two answers to "is this a house?" — the roster
+   canonicalises through `resolveVilla`, the screen did not, and a card could read "Apartment 06 ·
+   Rahul · AC weak in villa b-3": two doors in different buildings. Likewise `DEAD_CURRENT_STATUSES`
+   re-enumerated `ezee/normalize.ts` and dropped "Cancelled", routing a housekeeper to a cancelled
+   booking. **When the correct answer already exists elsewhere in the repo, a second enumeration is
+   not a shortcut, it is a fork.**
+2. **But delegating wholesale would have been the OPPOSITE bug.** `resolveVilla` is deliberately
+   lenient for its caller: it maps "6 towels please" → Apartment 06, "9 am wake-up call" →
+   Apartment 09, and bare "Siolim" → the house, while "Siolim" is the LOCALITY every confirmation
+   prints. **The over-fire is as real as the under-fire** (CH-11 learnt this when its unit-guard
+   rewrite blocked the core pre-sales quote). The fix SPLITS the question: SCOPE ("is this referring
+   to a house at all?" — never a bare number, which is a count or a clock) is the predicate's own
+   contract; VOCABULARY ("does that span name a real house?") is delegated.
+3. **A LIVE DEMO FOUND WHAT THE SUITE COULD NOT.** With the card undelivered and C2 correctly
+   refusing "on their way", the real model wrote *"someone will be with you shortly with those
+   towels."* C2's three literals were a denylist narrower than block [4]'s own words ("...or that
+   anyone is coming" — tense-free), and the C3 half of the sentence was licensed by a real escalation
+   and carried the unlicensed half out with it. **13 of 16 realistic dispatch phrasings shipped
+   clean.** Its `'s` branch was also dead code (the `\s+` sat outside the group), so three of its
+   four verbs were unreachable via the contraction models actually write.
+4. **"Cannot recur by construction" was false, and I wrote it.** `promises.ts` claimed CH-12's
+   blocker #5 could not come back because `covered()` gates on `run.result.ok`. It recurs through the
+   OTHER door: `systemEvidence` is checked FIRST and never looks at tool runs, so a stale `task_done`
+   licensed "the team has been informed" past a `NOT_NOTIFIED` task — and **the close line SOLICITS
+   the follow-up** ("Anything else we can help with?"). Fixed with a veto: a demonstrated failure
+   this turn is EVIDENCE OF ABSENCE, fresher than any stored row.
+5. **A CLASS-scoped licence is not an OBJECT-scoped fact.** One towels task licensed *"the airport
+   transfer has been booked"*, *"I've arranged a late checkout"*, *"your refund has been logged"*.
+   That is CH-11's D2 hazard re-opened by the back door — D2 refused to register `get_booking`
+   precisely because "C1 packs `confirmed` in with `informed`", and I then registered a tool for C1
+   without narrowing it. **The test guarding D2 passed throughout, because it only checks the
+   registry's KEYS.** C1 is now split by the claim's OBJECT (C1 team-told / C5 thing-done).
+6. **THE VERB axis, twice more.** The SLA nudger flipped `open→nudged` BEFORE sending and never
+   reverted — terminal, on a mutable retryable fact — so a failed nudge consumed the rung for ever
+   and block [5] then told the model *", already chased once"* about a chase that never happened.
+   And the DONE close had no transaction: a crash between claim and evidence left the task done, the
+   guest never told, and the retry saying "already closed". `closeTaskByShortId`'s doc claimed
+   "exactly one close writes evidence"; the truth was AT MOST one, and zero was reachable.
+7. **`similar()` was asked to carry a weight prose cannot.** It was named "the retry-safety
+   mechanism"; a retry is a fresh sample of a stochastic model ("2 extra towels" → "two towels for
+   the bathroom" scores 0). Reproduced against real Postgres: 2 tasks, 2 cards, one ask. **The
+   remember_fact precedent did not transfer** — it accepted naive similarity for a SILENT side effect
+   (a duplicate row); a duplicate task buzzes a real person, starts a second SLA clock and demands a
+   second DONE. A deterministic `request_key` is the answer; `similar()` is demoted to the UX
+   question it can answer (and gained stopwords — it merged "extra towels for the bathroom" with
+   "extra pillows for the bedroom").
+8. **THREE of my own tests asserted the bug.** *"an undelivered card does NOT burn the per-turn
+   allowance"* was the 6-rows/6-ops-pages hole, written as a feature. The house-screen table used
+   only the two spellings its regex caught — *"the table was written from the same mental model as
+   the regex"*. And the notifier test passed `villaLabel: null`, **a state the real path cannot
+   produce** — so the "villa not confirmed" line it proved was unreachable, and an unresolved door
+   silently printed a confident "Nistula Apartment", a type naming three houses.
+9. **RECORD TRUTH, against me.** My 503-correction commit said *"CLAUDE.md, open-questions and the
+   runbook all stated flatly..."* — I fixed two of three. `docs/open-questions.md` and `progress.md`
+   still carried the claim my own probes falsified, and CLAUDE.md points readers at progress.md as
+   authoritative. Also: the reviewer's `pnpm check` returned **exit 1 on all three runs** — two raced
+   my in-flight edits, one hit the shared-test-DB TRUNCATE trap CH-10 recorded — so **no run had
+   measured the tree in isolation** when I claimed green. Re-measured on a quiet tree: **exit 0,
+   1393**. *"Anyone grepping the count would have read green."*
+
+**Recorded, NOT fixed (deliberate):**
+- **C2 is still a denylist.** The tested widening covers what the model demonstrably writes (14
+  caught, 0 false positives over 27 legit lines incl. every phrasebook entry and the defer path), but
+  *"someone will meet you with the keys"* still dodges. The structural cure is to INVERT the guard —
+  a person/goods subject plus a motion-toward-guest predicate is C2 unless licensed — which carries
+  real false-positive risk on the phrasebook's own defer text. **Five of CH-12's nine rounds
+  introduced the next blocker via exactly that kind of fix under merge pressure.** Logged for the
+  planning chat.
+- **`scanUnitAssertions` still misses "on their way to Villa B3"** (no binding cue). CH-11 surface;
+  the exemplar that taught it is gone, which removes the cause but not the gap.
+- A single-sentence fee/rate conflation and the bare-integer year band (CH-07 residuals) stand.
+- `STAFF_SLA_QUEUE`'s 420s expire is below its own stated worst case (~1270s at 20 tasks). Not a
+  correctness bug — `markNudged`'s guard is the real overlap protection and the next tick re-picks
+  what it missed — but the comment's arithmetic had been carried over from `lifecycle.send`, where
+  it is genuinely derived. Corrected in place rather than by inflating the number.
