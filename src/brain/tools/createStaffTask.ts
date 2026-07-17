@@ -20,13 +20,25 @@
  *    answers "did a human get this?", which is the question the promise
  *    depends on — so guardrail 2 needs no framework change, because
  *    `covered()` already gates on `run.result.ok`.
- *  - appended to an existing task → ok:true (the work IS with someone).
+ *  - appended to an existing task → ok:true, AND a card goes out carrying the
+ *    new text (an un-carded ask is invisible work).
  *  - gated (stage / cap / a house in the summary) → ok:false REFUSED.
  *
- * Like every tool this runs PRE-claim (CH-03 D2), so a losing claim can leave a
- * task behind. Accepted on the remember_fact precedent, and the near-duplicate
- * guard is what absorbs the replay — that guard is not a §6.4 nicety, it is the
- * retry-safety mechanism.
+ * Like every tool this runs PRE-claim (CH-03 D2), so a `converse()` failure
+ * later in the turn makes pg-boss retry the WHOLE loop and re-run this.
+ *
+ * 🚨 WHAT ABSORBS THAT RETRY IS `request_key`, NOT `similar()` — and this header
+ * used to say the opposite. `similar()` compares MODEL-AUTHORED PROSE, and a
+ * retry is a fresh sample of a stochastic model that need not reproduce its own
+ * wording. Reproduced by the pre-push review against real Postgres: 2 tasks, 2
+ * cards, one guest ask. The key is deterministic, so a retry collides with its
+ * own previous attempt instead of being judged on prose. `similar()` survives as
+ * the UX question it CAN answer — see `answerFromExisting`.
+ *
+ * (This header also used to claim "2 extra towels" → "two towels for the
+ * bathroom" *scores 0*. It scores 1.0 — a reviewer measured it. The conclusion
+ * stands and the arithmetic did not, which is its own small lesson: an example
+ * invented to make a point is not evidence.)
  */
 import { z } from 'zod';
 import {
@@ -41,7 +53,7 @@ import {
 } from '../../db/tasks.js';
 import { summarizeError } from '../../lib/logger.js';
 import { namesPhysicalHouse } from '../../lib/villas.js';
-import { deriveStage, type DescribedStay, type Stage } from '../stayView.js';
+import { deriveStage, selectStays, type DescribedStay, type Stage } from '../stayView.js';
 import type { ToolDef, ToolResult, ToolTaskContext } from './registry.js';
 
 /** A burst can legitimately carry two asks ("towels, and the AC is weak").
@@ -132,7 +144,7 @@ export const createStaffTaskTool: ToolDef = {
           : taskRequestKey(tasks.conversationId, tasks.sourceMessageId, input.kind as TaskKind);
       if (requestKey !== null) {
         const already = await findTaskByRequestKey(tasks.db, requestKey);
-        if (already !== null) return replayAnswer(tasks, already);
+        if (already !== null) return await answerFromExisting(tasks, already, input);
       }
 
       const live = await getLiveTasksForConversation(tasks.db, tasks.conversationId);
@@ -203,17 +215,31 @@ function unconfirmed(villaType: string): string {
   return `${villaType} — house not confirmed, check eZee`;
 }
 
-/** The stay a task is ABOUT: the one that makes this guest in-house or
- * arriving. Undefined only if the stage gate passed on a stay we then could not
- * find, which cannot happen — but a task with no stay is still raisable (it
- * routes to the front desk), so this never throws. */
+/**
+ * The stay a task is ABOUT: the one that makes this guest in-house or arriving.
+ *
+ * 🚨 THIS WAS A HAND-ROLLED PREDICATE AND IT DISAGREED WITH THE MODULE THAT
+ * OWNS THE QUESTION — on a routine day, in the direction that sends a
+ * housekeeper to the wrong house.
+ *
+ * It read `today < s.checkOut`, while `deriveStage` (the gate that had already
+ * said yes) uses `today <= v.checkOut`, and stayView.ts:260 states the contract
+ * outright: *"Check-out day still counts as in-house: they are in the villa
+ * until they go."* So on CHECKOUT MORNING — one of the likeliest times to ask
+ * for anything: late checkout, luggage, a last clean — GATE 1 passed and this
+ * found nothing, then fell through to `checkIn > today` and returned the
+ * guest's NEXT booking. The fresh BKG-03 read was made against the AUGUST
+ * reservation, and the card confidently named a house the guest is not in.
+ * Reproduced: `deriveStage → inhouse`, `selectStays → 972`, this → `999`.
+ *
+ * The fix is not a better predicate — it is having no predicate. `selectStays`
+ * IS this question, answered by stayView, ordered active → soonest upcoming →
+ * past, and it is the same call block [5] renders from. GATE 1 has already
+ * excluded `lead`/`postguest`, so [0] is the active stay or the next arrival.
+ * One definition; the tool and the prompt cannot drift apart.
+ */
 function currentStay(stays: ToolTaskContext['stays'], today: string): DescribedStay | null {
-  const described = stays.filter((s): s is DescribedStay => s.describable);
-  return (
-    described.find((s) => s.checkIn <= today && today < s.checkOut) ??
-    described.find((s) => s.checkIn > today) ??
-    null
-  );
+  return selectStays(stays, today)[0] ?? null;
 }
 
 async function resolveDoorFor(
@@ -226,15 +252,43 @@ async function resolveDoorFor(
 }
 
 /**
- * A previous attempt at THIS request already made a task. Answer from it —
- * never a second row, never a second buzz.
+ * The retry key already has a task against it. Two VERY different things reach
+ * here, and telling them apart is the whole job.
  *
- * The row's own status says whether that attempt's card landed, so `ok` stays
- * the same question it always is: "did a human get this?"
+ * 🚨 MY FIRST CUT REPLAYED BOTH SILENTLY, AND THAT WAS A BLOCKER — the pre-merge
+ * decision audit caught it, and it was this file's OWN retry fix that caused it.
+ * The key is `conversation:message:kind`, so a guest writing *"could we get
+ * extra towels, and could someone change the bed linen?"* produces TWO
+ * housekeeping calls in one turn (which `MAX_TASKS_PER_TURN = 2` exists to
+ * allow, and the tool description invites by listing housekeeping as "towels,
+ * linen, cleaning, amenities"). The second collided, replayed `ok:true`, sent no
+ * card and appended nothing — so the model said "both are with housekeeping",
+ * C1 was licensed by the FIRST call's genuine run, and **the linen was invisible
+ * work.** Reproduced: 2 calls, 1 row, 1 card, ok:true twice.
+ *
+ * The discriminator is `similar()` — demoted from "the retry-safety mechanism"
+ * (which it could never be) to the UX question it CAN answer: *did they ask for
+ * the same thing twice?*
+ *  - similar     ⇒ a genuine retry of one ask ⇒ replay silently.
+ *  - NOT similar ⇒ a second, different errand ⇒ append + card, same short id.
+ *
+ * The honest residual, chosen deliberately: a RETRY in which the model rephrased
+ * ("2 extra towels" → "two towels for the bathroom") reads as "different" and
+ * costs ONE extra card. That is the same trade `sla.ts` already makes in as many
+ * words — *buzzing a housekeeper twice is an annoyance; an un-carded ask is
+ * invisible work.* The key still delivers what it was for: never two rows, never
+ * two short ids, never two SLA clocks, never two DONEs.
  */
-function replayAnswer(tasks: ToolTaskContext, already: Task): ToolResult {
-  tasks.created.count += 1;
+async function answerFromExisting(
+  tasks: ToolTaskContext,
+  already: Task,
+  input: CreateStaffTaskInput,
+): Promise<ToolResult> {
+  // A task that is not live cannot be appended to (appendToTask is guarded), and
+  // its status already answers "did a human get this?" — so it replays whatever
+  // the ask was.
   if (already.status === 'notify_failed') {
+    tasks.created.count += 1;
     return {
       ok: false,
       error: 'NOT_NOTIFIED',
@@ -246,8 +300,13 @@ function replayAnswer(tasks: ToolTaskContext, already: Task): ToolResult {
     // Vanishingly rare (a staff member would have to type DONE inside one
     // retried turn), but a resolved task is not evidence that a person is
     // moving NOW, and ok:true would license "on their way". Fail closed.
+    tasks.created.count += 1;
     return { ok: false, error: 'REFUSED', message: RESOLVED_REFUSAL };
   }
+  if (!similar(already.summary, input.summary)) {
+    return await appendAnswer(tasks, already, input, 'same_message');
+  }
+  tasks.created.count += 1;
   return { ok: true, data: { shortId: already.shortId, replayed: true } };
 }
 
@@ -323,7 +382,7 @@ async function appendAnswer(
   tasks: ToolTaskContext,
   target: Task,
   input: CreateStaffTaskInput,
-  reason: 'duplicate' | 'at_cap',
+  reason: 'duplicate' | 'at_cap' | 'same_message',
 ): Promise<ToolResult> {
   const extra = [input.summary, input.detail].filter((s) => s !== undefined && s !== '').join(' — ');
   const updated = await appendToTask(tasks.db, target.id, `(again) ${extra}`);

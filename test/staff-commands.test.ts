@@ -212,6 +212,32 @@ describe('DONE — the close', () => {
     expect(sent[0]?.body).toMatch(/TASKS/);
   });
 
+  it('🚨 stays SILENT when a human holds the thread (§6.7 line 1)', async () => {
+    // The close line speaks OUT OF TURN — a staff DONE triggers it, not a guest
+    // — so it is exactly the send §6.7's "human_active ⇒ AI silent" exists for.
+    // CH-12 set the precedent in as many words; my first cut checked nothing.
+    // The likeliest collision is the ugly one: a human took the thread over
+    // BECAUSE of this task and is mid-reply when the AI cuts in with a receipt.
+    const task = await seedTask();
+    await db.execute(
+      sql`UPDATE conversations SET human_active_until = now() + interval '2 hours' WHERE id = ${conversationId}`,
+    );
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });
+
+    // The task still closes and the staff member is still thanked...
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('done');
+    expect(sent.find((s) => s.to === ANITA)).toBeDefined();
+    // ...but the guest hears nothing from the AI.
+    expect(sent.filter((s) => s.to === GUEST)).toHaveLength(0);
+
+    // And the evidence row IS still written, so whenever the AI next speaks it
+    // is licensed to say the work is done — the fact happened either way.
+    const rows = await db.execute(
+      sql`SELECT raw->>'contextKind' AS kind FROM messages WHERE conversation_id = ${conversationId} AND sender = 'system'`,
+    );
+    expect([...rows]).toEqual([{ kind: 'task_done' }]);
+  });
+
   it('a task with no conversation closes without trying to message anyone', async () => {
     const task = await seedTask({ conversationId: null, guestId: null });
     await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });

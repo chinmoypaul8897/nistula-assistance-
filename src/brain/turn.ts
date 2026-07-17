@@ -20,6 +20,7 @@ import type { ConverseFn } from './claude.js';
 import { buildTurnContext, type TranscriptOverflow } from './contextBuilder.js';
 import { recordUsage } from './cost.js';
 import { runGuardrails } from './guardrails.js';
+import { vetoedByFailures } from './promises.js';
 import type { LoadedKnowledge } from './knowledge.js';
 import type { EscalationReason } from './policy.js';
 import { PHRASEBOOK, type SystemBlock } from './prompt.js';
@@ -261,6 +262,11 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
   const outcome = await runGuardrails(
     { draft: first.draft, toolRuns: first.toolRuns },
     {
+      // CH-13a: what THIS TURN's first loop demonstrably failed to do. Carried
+      // into the regenerate, whose own `toolRuns` is a fresh array — otherwise
+      // the second pass loses the first pass's evidence of absence and ships
+      // what it caught.
+      vetoedClasses: vetoedByFailures(first.toolRuns),
       // Regenerate once with a corrective system block appended (§6.5) — a fresh
       // loop over the SAME transcript so the model can call tools again, but on
       // the SAME turn deadline (near-exhausted → it force-proses immediately).

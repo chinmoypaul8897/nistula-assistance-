@@ -57,6 +57,11 @@ export interface GuardrailDeps {
   /** Guardrail-2 evidence: classes licensed by claimable system rows since the
    * guest's previous message (turn.ts computes; default none). */
   systemEvidence?: ReadonlySet<ClaimClass>;
+  /** CH-13a: classes a FAILED action earlier in this turn proved false.
+   * Turn-level on purpose — `turn.toolRuns` is per-LOOP, and a regenerate gets
+   * a fresh array, so without this the second pass would be weaker than the
+   * first (pre-merge review). */
+  vetoedClasses?: ReadonlySet<ClaimClass>;
   /** §6.7 complaint flow: the worker WILL escalate this turn — licenses C3 and
    * is asserted at pipeline end (a must_escalate turn never leaves without
    * `escalate` set). */
@@ -264,6 +269,7 @@ async function evaluate(turn: GuardrailTurn, deps: GuardrailDeps): Promise<Evalu
   const promises = scanPromises(nego.text, {
     toolRuns: turn.toolRuns,
     systemEvidence: deps.systemEvidence ?? new Set(),
+    vetoed: deps.vetoedClasses,
     escalationPlanned: deps.mustEscalate === true,
   });
   // CH-11: an assertion gate, not an evidence licence — see stayGuards.ts.

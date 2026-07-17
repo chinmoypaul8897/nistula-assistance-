@@ -206,6 +206,31 @@ async function tellGuest(deps: StaffCommandDeps, task: Task): Promise<void> {
   if (task.conversationId === null) return;
   const ctx = await getConversationTurnContext(deps.db, task.conversationId).catch(() => null);
   if (ctx === null) return;
+
+  // 🚨 §6.7 line 1 is absolute: human_active ⇒ the AI is SILENT. The close line
+  // speaks OUT OF TURN — a staff DONE triggers it, not a guest — and goes as
+  // `sender:'ai'`, so it is exactly the kind of send that rule exists for. CH-12
+  // set the precedent in as many words (`sender.ts`: "CH-12 is the one chunk
+  // that speaks first, so it is the one that most needs to honour it"), and my
+  // first cut checked nothing. The likeliest collision is the ugly one: a human
+  // took the thread over BECAUSE of this task, is mid-reply, and the AI cuts in
+  // with a receipt.
+  //
+  // SKIP, not defer: there is no scheduled row to defer, and the human is right
+  // there — they will tell the guest themselves. The `task_done` evidence row is
+  // already committed (in the claim's transaction, independent of this send), so
+  // whenever the AI next speaks it is still licensed to say the work is done.
+  const humanActive =
+    (ctx.conversation.humanActiveUntil !== null &&
+      ctx.conversation.humanActiveUntil.getTime() > deps.now().getTime()) ||
+    ctx.conversation.status === 'human_active';
+  if (humanActive) {
+    deps.log.info?.(
+      { taskId: task.id, shortId: task.shortId },
+      'close line skipped — a human holds the thread',
+    );
+    return;
+  }
   // Voice guide: British English, no exclamation marks, 1–3 sentences. The
   // summary is the guest's own words coming back to them, which is what makes
   // this readable as a reply rather than a receipt.

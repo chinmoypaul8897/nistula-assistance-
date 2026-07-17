@@ -41,8 +41,14 @@
  *     labels are frozen at CH-11's 14 Jul reconcile and may be months stale by
  *     arrival. The stale-label problem is now PRIMARY, not secondary.
  *     Route off a FRESH BKG-03 tran.RoomID read by reservation number AT TASK
- *     TIME. BKG-03 returns 503 for an unconfirmed hold, and "unreadable" NEVER
- *     means "cancelled". (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` survives,
+ *     TIME. 🚨 CORRECTED 2026-07-17 (CH-13a BUILT it — staff/villaRoute.ts):
+ *     this used to say "BKG-03 returns 503 for an unconfirmed hold". IT DOES
+ *     NOT — 14 live probes, never once. "No such reservation" is an EMPTY OK
+ *     (`{status:'ok', reservations:[]}`); no room yet is `RoomID:""`; and a
+ *     CANCELLED/VOIDED booking returns its room happily, so a successful read is
+ *     NOT proof of life. (503 is documented for BKG-30, a different endpoint.)
+ *     The unconfirmed-hold case is untested, not disproven. The rule survives:
+ *     "unreadable" NEVER means "cancelled". (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false` survives,
  *     but for a DIFFERENT reason: it gates what the AI SAYS TO A GUEST, which is
  *     not the same predicate as where housekeeping is sent — still gated on
  *     OQ-15.) Full analysis: CLAUDE.md §OQ-19 · docs/open-questions.md OQ-19.

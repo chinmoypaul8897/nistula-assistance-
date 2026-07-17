@@ -56,18 +56,26 @@ export type ClaimClass = 'C1' | 'C2' | 'C3' | 'C4' | 'C5';
 const EXEMPT = /\bfully\s+booked\b|\bbooked\s+out\b|\bsold\s+out\b/gi;
 
 const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
-  // C1 — TEAM-TOLD. The object is the team; a delivered task makes these true.
-  { cls: 'C1', re: /\b(?:has|have|had)\s+been\s+(?:informed|notified|told|alerted|escalated|raised|logged)\b/i },
+  // C1 — TEAM-TOLD. The object is A PERSON, so a delivered task makes these
+  // true whatever the request was.
+  //
+  // 🚨 `escalated|raised|logged` USED TO LIVE HERE, and that was the split
+  // failing on its own stated axis: "Your refund has been logged." shipped off a
+  // TOWELS task, which is blocker #2's third reproduction, still alive after the
+  // split that was supposed to kill it. The docstring said the OBJECT is what
+  // matters; the code sorted by VERB and stopped there. Those three verbs take a
+  // THING ("the refund has been logged", "the issue has been raised"), so they
+  // are C5. Only verbs whose object can ONLY be a person stay.
+  { cls: 'C1', re: /\b(?:has|have|had)\s+been\s+(?:informed|notified|told|alerted)\b/i },
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)?(?:\s+just|\s+already)?\s+(?:informed|notified|told|alerted|nudged|messaged|pinged|updated)\s+(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\b/i },
-  { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have)\s+(?:raised|logged|escalated)\b/i },
   { cls: 'C1', re: /\b(?:i|we)(?:'ve|\s+have|\s+had)?\s+passed\s+(?:it|this|that)\s+on\b/i },
   // Subject-anchored: "daily housekeeping is taken care of" must NOT match.
   { cls: 'C1', re: /\b(?:the\s+)?(?:team|housekeeping|front\s?desk|staff|maintenance|villa\s+team)\s+(?:knows|(?:is|are)\s+aware|(?:is|are)\s+looking\s+into|(?:is|are)\s+on\s+(?:it|this|that))\b/i },
   // C5 — THING-DONE. The object is a specific OUTCOME. Telling the team about a
   // request does NOT make one true; only a human finishing the work does, which
   // is why ONLY `task_done` licenses this class.
-  { cls: 'C5', re: /\b(?:has|have|had)\s+been\s+(?:arranged|booked|sent|dispatched|resolved|confirmed|delivered|fixed|sorted)\b/i },
-  { cls: 'C5', re: /\b(?:i|we)(?:'ve|\s+have)\s+(?:arranged|organised|organized|booked|sent|delivered|fixed|sorted)\b/i },
+  { cls: 'C5', re: /\b(?:has|have|had)\s+been\s+(?:arranged|booked|sent|dispatched|resolved|confirmed|delivered|fixed|sorted|escalated|raised|logged)\b/i },
+  { cls: 'C5', re: /\b(?:i|we)(?:'ve|\s+have)\s+(?:arranged|organised|organized|booked|sent|delivered|fixed|sorted|raised|logged|escalated)\b/i },
   { cls: 'C5', re: /\bconsider\s+it\s+(?:done|sorted|arranged)\b/i },
   { cls: 'C5', re: /\b(?:that|this|it)(?:'s|\s+is|\s+has\s+been)\s+(?:sorted|done|arranged|taken\s+care\s+of)\b/i },
   // C2 — dispatch in motion.
@@ -142,11 +150,22 @@ const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
  *
  * create_staff_task → C1+C2 (CH-13a). Scenario 3 blesses "two fresh towels are
  * on their way" after a real task, which is C2, and "the team has been
- * informed", which is C1. The licence is safe ONLY because the tool's `ok`
- * answers "did a human GET this?" and not "did a row get inserted?" — an
- * undelivered card returns ok:false NOT_NOTIFIED, and `covered()` below counts
- * successful runs only. That is the whole mechanism: no framework change, and
- * CH-12's blocker #5 cannot recur here by construction.
+ * informed", which is C1. The licence is safe because the tool's `ok` answers
+ * "did a human GET this?" and not "did a row get inserted?" — an undelivered
+ * card returns ok:false NOT_NOTIFIED, and `covered()` below counts successful
+ * runs only.
+ *
+ * 🚨 THIS USED TO SAY "that is the whole mechanism: no framework change, and
+ * CH-12's blocker #5 cannot recur here by construction." BOTH HALVES WERE
+ * FALSE, and the sentence outlived its own refutation — a record audit found it
+ * still standing after the fix landed twenty lines below.
+ *  - It DID need a framework change: `VETO_ON_FAILURE` is right there.
+ *  - #5 DID recur, through the door this sentence was not looking at:
+ *    `covered()` reads `systemEvidence` FIRST and never looks at tool runs, so
+ *    a stale `task_done` row licensed "the team has been informed" past a
+ *    NOT_NOTIFIED task — and the close line SOLICITS that follow-up.
+ * The lesson is the sentence itself: "cannot happen by construction" is a claim
+ * about every door, and it is only ever as good as the doors you enumerated.
  *
  * TODO(CH-14): escalate_to_human → C3.
  */
@@ -176,9 +195,32 @@ export const TOOL_CLAIMS: ReadonlyMap<string, ReadonlySet<ClaimClass>> = new Map
 export const CONTEXT_KIND_CLAIMS: Readonly<Record<string, readonly ClaimClass[]>> = {
   ops_escalation: ['C3'],
   fact_saved: ['C4'],
-  // A human FINISHED the work and said so: the team plainly knows (C1), and the
-  // specific thing is genuinely done (C5). This is the only C5 licence there is.
-  task_done: ['C1', 'C5'],
+  // 🚨 C1 ONLY, AND THIS USED TO SAY `['C1','C5']` — WHICH RE-OPENED THE EXACT
+  // BUG THE C1/C5 SPLIT WAS FOR. Reproduced by the pre-merge review: after ANY
+  // DONE, "Of course — the airport transfer has been booked for Friday.",
+  // "I've arranged a late checkout for you." and "Your refund has been logged."
+  // all SHIPPED. I closed that door on the tool and opened a wider one on the
+  // context row, in the same commit.
+  //
+  // The reason is structural and worth stating, because it constrains every
+  // future context kind: **a context row has NO REFERENT.** `task_done` says
+  // "task X was finished"; `covered()` is class-scoped and cannot see WHICH
+  // outcome a draft is claiming. So a towels DONE licensed a claim about an
+  // airport transfer. C5's whole content is "a SPECIFIC outcome is true" —
+  // therefore NO context row can ever license C5. Only a tool run, whose
+  // subject is the thing it just did, could; and no tool makes an outcome true.
+  // C5 is licensed by nothing today, which is correct: it is a class of claims
+  // this system cannot yet make honestly.
+  //
+  // The residual, accepted and recorded: right after a DONE the model saying
+  // "that's sorted" (C5, and TRUE) regenerates and then defers. Rare — the
+  // deterministic close line has already told the guest "That is done — 2 extra
+  // towels", so the model has little reason to repeat it — and it fails toward
+  // an escalation, not a lie. A finer split (anaphoric "that's sorted", whose
+  // object is the discourse topic, vs named-object "the transfer has been
+  // booked") is the real answer and is logged for the planning chat rather than
+  // invented under merge pressure.
+  task_done: ['C1'],
   sla_nudge: ['C1'],
 };
 
@@ -208,15 +250,38 @@ const VETO_ON_FAILURE: ReadonlyMap<string, ReadonlySet<ClaimClass>> = new Map([
   ['create_staff_task', new Set<ClaimClass>(['C1', 'C2', 'C5'])],
 ]);
 
+/**
+ * Errors that mean **WE NEVER TRIED** — the only ones that do NOT veto.
+ *
+ * 🚨 THIS LIST IS INVERTED ON PURPOSE, and my first cut had it the wrong way
+ * round: it vetoed only on `NOT_NOTIFIED`, which is a PROXY for the contract
+ * ("we tried to reach a human and did not demonstrably succeed"), not the
+ * contract itself. The pre-merge decision audit found the second code in the
+ * same bucket: the handler's own catch returns `UPSTREAM_DOWN` (a DB failure in
+ * `insertTask` — this chunk cites Railway deploys and OOMs as live causes), so
+ * a stale `task_done` row would license "the team has been informed" past a
+ * turn whose task never even inserted. **F4's exact shape, through a third
+ * door** — and F4's own fix note says the construction it named was not the only
+ * door in.
+ *
+ * Enumerate what is ALLOWED, never what is forbidden (the lesson this repo has
+ * now paid for five times): a NEW error code added later defaults to VETO —
+ * safe — instead of silently defaulting to "licence granted".
+ */
+const NEVER_TRIED: ReadonlySet<string> = new Set([
+  // A gate refused before we touched the world: bad stage, a house in the
+  // summary, the per-turn cap. Nothing was attempted, so nothing is disproved.
+  'REFUSED',
+  // The model fumbled the call itself (bad args, no task context). Same.
+  'INVALID',
+]);
+
 /** The classes THIS TURN's own failed actions prove false. */
 export function vetoedByFailures(toolRuns: readonly ToolRun[]): Set<ClaimClass> {
   const vetoed = new Set<ClaimClass>();
   for (const run of toolRuns) {
     if (run.result.ok) continue;
-    // Only a DEMONSTRATED failure to reach a human vetoes. A REFUSED gate (bad
-    // stage, a house in the summary) means we never tried, and an INVALID input
-    // means the model fumbled the call — neither is evidence about the world.
-    if (run.result.error !== 'NOT_NOTIFIED') continue;
+    if (NEVER_TRIED.has(run.result.error)) continue;
     for (const cls of VETO_ON_FAILURE.get(run.name) ?? []) vetoed.add(cls);
   }
   return vetoed;
@@ -236,6 +301,23 @@ export interface PromiseEvidence {
   systemEvidence: ReadonlySet<ClaimClass>;
   /** An escalation WILL fire this turn before dispatch — licenses C3 only. */
   escalationPlanned: boolean;
+  /**
+   * Classes vetoed by failures EARLIER IN THIS TURN — i.e. in a previous tool
+   * loop (CH-13a, pre-merge review).
+   *
+   * 🚨 WITHOUT THIS THE VETO EVAPORATED ON REGENERATE, and a guardrail's second
+   * pass must NEVER be weaker than its first. `toolRuns` is per-LOOP: turn.ts's
+   * regenerate returns a FRESH array. So pass 1 could fail to reach a human,
+   * veto C1, block "the team has been informed" — and pass 2, in which the model
+   * (correctly, having been told not to claim) does not call the tool again,
+   * arrived with an EMPTY toolRuns, no veto, and a stale `task_done` row still
+   * sitting in the per-turn `systemEvidence`. The second pass shipped exactly
+   * what the first one caught.
+   *
+   * This is turn-level like `systemEvidence`, because the fact is: within one
+   * turn, "we tried to reach a human and did not" does not stop being true.
+   */
+  vetoed?: ReadonlySet<ClaimClass>;
   /** Test seam / CH-13 registration point; defaults to TOOL_CLAIMS. */
   toolClaims?: ReadonlyMap<string, ReadonlySet<ClaimClass>>;
 }
@@ -268,7 +350,12 @@ function covered(cls: ClaimClass, evidence: PromiseEvidence): boolean {
   // demonstrably failed to do is not licensed by anything — not a stale
   // context row, not an escalation, not another tool. Evidence of absence
   // outranks absence of evidence (CH-13a review, F4).
+  //
+  // The union of THIS loop's failures and any carried from an earlier loop of
+  // the same turn: a regenerate gets a fresh `toolRuns`, so without the carried
+  // half the second pass would be weaker than the first.
   if (vetoedByFailures(evidence.toolRuns).has(cls)) return false;
+  if (evidence.vetoed?.has(cls) === true) return false;
   if (evidence.systemEvidence.has(cls)) return true;
   if (cls === 'C3' && evidence.escalationPlanned) return true;
   const toolClaims = evidence.toolClaims ?? TOOL_CLAIMS;
