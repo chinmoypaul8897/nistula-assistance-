@@ -80,6 +80,7 @@
 | OQ-16 | RateplanCode → ep/cp map | Paul (website) | block [5] · breakfast | ✅ DO NOT BUILD IT |
 | OQ-17 | Should a guest ASSERTING a booking we cannot see fetch a human? | Paul + planning | CH-14 | ⬜ |
 | OQ-18 | Website has an UNGATED route that creates real bookings | Paul (website) | pre-launch safety | ⬜ |
+| **OQ-24** | **🚨 Does VOIDING a booking in eZee reach the queue? CANCEL does; a void has produced NOTHING in 2h.** If the front desk voids, we message guests about dead stays. | front desk + Paul | CH-10 mirror truth · CH-12 sends | 🔴 |
 | **OQ-19** | **A guest cannot book a specific house — eZee picks it. PROVEN.** ✅ SYMPTOM CLOSED 2026-07-16: the website ABOLISHED house-choice (sells the 3 types). Launch unblocked; CH-13 unblocked (route off eZee BKG-03 RoomID). **Open business Q: are Apt 06/09/11 really interchangeable?** | **Paul + eZee acct mgr** | website launch · CH-13 | 🟡 |
 
 ---
@@ -500,6 +501,43 @@ deliberately outside `PRE_STAY_KINDS`, so it has **no `stay_over` backstop**, an
 would own every batch for ever and **starve every new guest's confirmation** — harming every guest
 to save one thank-you. The bound must be **re-anchored on `row.createdAt`** (genuinely immutable),
 not removed. `TODO(CH-17)` in `sendGuards.ts` carries this.
+
+### OQ-24 — 🚨 Does VOIDING a booking in eZee reach us? (CANCEL does. Void may not.)
+**Status:** 🔴 **Observed 2026-07-16, and it is NOT a test-only concern.**
+
+**What we need to know:** when the front desk kills a booking, do they **cancel** it or **void** it —
+and does a VOID ever reach eZee's connectivity queue?
+
+**What we observed, on two real bookings, hours apart:**
+- **970 — CANCELLED.** A `booking.cancelled` event arrived, the poller consumed it, and the
+  revocation fired correctly. **Cancel emits. Proven.**
+- **969 — VOIDED.** Paul confirms eZee shows it dead and blocking no inventory. **Not one event has
+  arrived** — the mirror still shows it live, and the poller has not touched the row since. Our
+  normaliser already maps `CurrentStatus: 'void'` → `cancelled` (`ezee/normalize.ts`), so if a void
+  payload ever arrived we would handle it. **None has.**
+
+**Why it matters, and it has nothing to do with the test booking:** CH-12 SPEAKS FIRST. If a real
+guest's booking is VOIDED and that never reaches the queue, **the mirror keeps them alive and we send
+them a pre-arrival, a welcome and a thank-you for a stay that does not exist.** The sender re-reads
+the mirror before every send — but the mirror is only as good as the feed, and a void it never hears
+about is invisible. This is OQ-22's twin: there we have never seen a `Modify`; here we have never
+seen a void.
+
+**⚠️ Do not conclude "void is silent" yet.** eZee's queue is BATCHED — 970's cancel arrived LATE,
+after we had written it off. **A poll against a batched queue proves nothing** (the CH-10 lesson).
+What we can say: **two hours after the void, nothing.** Cancel arrived in minutes.
+
+**What we shipped meanwhile:** nothing new — the epoch, source and date gates already bound the blast
+radius, and the sender re-reads the mirror. But none of them can see a death we are never told about.
+
+**What changes once they answer:** if the front desk voids rather than cancels, that is either a
+**process fix** (always cancel, never void) or we need a periodic BKG-03 re-sync for live bookings —
+which is the same re-sync already deferred for `ezee_cancel_conflict` rows. **Ask together.**
+
+**The live artefact:** booking 969's four lifecycle rows are still armed (pre-arrival 27 Aug) against
+a booking that no longer exists. Harmless — it is Paul's own number and he will recognise it — and
+recorded rather than hand-fixed, because hand-editing that row is what corrupted it in the first
+place. **If the void ever arrives, it self-heals through the real path and answers this question.**
 
 ### OQ-23 — The pre-arrival now asks every guest for their arrival time. Who sends the pin?
 **Status:** 🟡 (extends OQ-12 / team-question Q37.)

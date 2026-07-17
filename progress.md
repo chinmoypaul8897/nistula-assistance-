@@ -1147,8 +1147,13 @@ for 969 says `Status: New`, `CurrentStatus: Confirmed Reservation`, nights of **
 poller writes `check_in` and `raw` together from one object, so they CANNOT diverge on their own —
 the divergence IS the fingerprint of the edit. The row will never self-heal, because the poller only
 sees un-ACKed queue entries and 969's were ACKed long ago. **Its four pending lifecycle rows are
-aimed at dates that never existed.** Cancelling 969 in eZee (look for it on **23–25 Aug**, not 30
-Aug) emits a real cancel, and the revocation kills them — which is the clean exit.
+aimed at dates that never existed.** **UPDATE, same day: Paul VOIDED 969 in eZee (confirmed dead, blocking no inventory) and NOT ONE
+EVENT HAS ARRIVED.** So the rows stay armed and the pre-arrival will fire to his own number on 27 Aug
+— known, harmless, and deliberately NOT hand-fixed (hand-editing this row is what corrupted it). It
+raised **OQ-24**, which is not a test-only question: **CANCEL demonstrably emits (970); a VOID has
+produced nothing in two hours.** If the front desk voids real bookings, the mirror keeps dead guests
+alive and CH-12 messages them. *(eZee's queue is batched, so this is not yet proof — 970's cancel
+arrived late too. If the void turns up, it self-heals through the real path and answers OQ-24.)*
 
 **What this cost, beyond the row:** I then read my own edit back as evidence and briefly "proved"
 that eZee's feed delivers `Modify` (see the OQ-22 withdrawal). **Never hand-edit production data you
