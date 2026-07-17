@@ -245,7 +245,23 @@ export function namesPhysicalHouse(text: string): boolean {
   if (spans === null) return false;
   // A span is a house only if the resolver says so — an unknown "a1" or
   // "villa 99" names nothing, and a TYPE ("the apartment") resolves ambiguous.
-  return spans.some((span) => resolveVilla(span).kind === 'match');
+  return spans.some((span) => {
+    if (resolveVilla(span).kind === 'match') return true;
+    // 🚨 THE ROUND-3 GAP. "villa 11" / "villa 9" / "villa 6" resolve AMBIGUOUS,
+    // not match — resolveVilla protects FREE TEXT from "a villa for 6 guests"
+    // and "villa 9 dec" (a date) by refusing a bare digit that sits beside the
+    // word "villa". But HOUSE_SPAN already required the digit BOUND to the word
+    // ("villa" + optional letter + digit, no "for" between), so this span IS a
+    // unit reference and that free-text guard is the wrong one to apply to it.
+    // The round-1 rewrite from a shape-regex to the resolver LOST these — the
+    // old `/\b(?:Apartment|Villa)\s*[A-Za-z]?\d/i` caught them — and they gate
+    // BOTH the staff-card summary (GATE 2) and the guest-facing template param.
+    // Re-resolve the BARE unit number: "villa 11" → "11" → Apartment 11, a real
+    // house; "villa 99" → "99" → no unit → still not a house. Failing toward
+    // "this is a house" is the safe direction for a house-NAMING screen.
+    const digit = /\d{1,2}/.exec(span)?.[0];
+    return digit !== undefined && resolveVilla(digit).kind === 'match';
+  });
 }
 
 /** The canonical booking link to share (§5.1) — never build a booking ourselves. */

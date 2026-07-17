@@ -4,7 +4,7 @@
  * type set, "solim"→Siolim typo tolerance, unit-beats-type precedence.
  */
 import { describe, expect, it } from 'vitest';
-import { VILLAS, bookingUrl, getVillaById, resolveVilla } from '../src/lib/villas.js';
+import { VILLAS, bookingUrl, getVillaById, namesPhysicalHouse, resolveVilla } from '../src/lib/villas.js';
 
 describe('villa map integrity', () => {
   it('has the eight §5.4 units with unique ids', () => {
@@ -120,5 +120,42 @@ describe('helpers', () => {
       'https://nistula-website.vercel.app/villas/5220300000000000011',
     );
     expect(bookingUrl('https://x.dev/', '5220300000000000015')).toBe('https://x.dev/villas/5220300000000000015');
+  });
+});
+
+describe('namesPhysicalHouse — the house-NAMING screen (GATE 2 + guest template param)', () => {
+  it.each([
+    'towels for Apartment 09',
+    'the AC in Villa B3 is weak',
+    'apt 6',
+    'B3',
+    'a9',
+    // 🚨 THE ROUND-3 GAP: a bare digit beside the word "villa" is a unit
+    // reference in a task summary, and the round-1 rewrite lost it.
+    'villa 11',
+    'villa 9',
+    'villa 6',
+    'the AC in villa 11 is not working',
+  ])('names a house: %j', (t) => {
+    expect(namesPhysicalHouse(t)).toBe(true);
+  });
+
+  it.each([
+    'a villa for 6 guests', // headcount — "villa" not bound to the digit
+    'a quiet villa', // a type word, no unit
+    'extra towels for the apartment', // a TYPE, not a house
+    '2 extra towels', // a bare quantity
+    'villa 99', // no such unit
+    'the front desk', // ordinary prose
+  ])('does NOT name a house: %j', (t) => {
+    expect(namesPhysicalHouse(t)).toBe(false);
+  });
+
+  it('did NOT change resolveVilla — the free-text routing guard is intact', () => {
+    // The fix lives in namesPhysicalHouse ONLY. resolveVilla must still call
+    // "villa 9 dec" ambiguous, or booking-flow routing regresses.
+    for (const t of ['a villa for 6 guests', 'villa 9 dec', '3bhk for 11 nights']) {
+      expect(resolveVilla(t).kind).toBe('ambiguous');
+    }
   });
 });
