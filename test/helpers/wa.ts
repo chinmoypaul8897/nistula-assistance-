@@ -39,7 +39,15 @@ export function captureLog(): LogCapture {
 export async function buildWaApp(
   db: Db,
   capture?: LogCapture,
-  opts?: { enqueue?: (conversationId: string) => Promise<void> },
+  opts?: {
+    enqueue?: (conversationId: string) => Promise<void>;
+    /** CH-13a. Absent ⇒ nobody is staff and every inbound is a guest, which
+     * is exactly the pre-CH-13a world every earlier suite was written for. */
+    staff?: {
+      isStaffPhone: (phone: string) => boolean;
+      enqueueCommand: (input: { phone: string; waMessageId: string }) => Promise<void>;
+    };
+  },
 ) {
   const app = Fastify(
     capture === undefined ? {} : { loggerInstance: pino({ level: 'debug' }, capture.stream) },
@@ -50,6 +58,7 @@ export async function buildWaApp(
     verifyToken: TEST_VERIFY_TOKEN,
     // CH-02-era tests exercise storage, not the queue — no-op by default.
     enqueue: opts?.enqueue ?? (async () => {}),
+    ...(opts?.staff === undefined ? {} : { staff: opts.staff }),
   });
   return app;
 }
