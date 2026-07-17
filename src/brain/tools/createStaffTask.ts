@@ -392,9 +392,15 @@ async function appendAnswer(
     return { ok: false, error: 'REFUSED', message: 'not raised: please try once more.' };
   }
   tasks.created.count += 1;
+  // 'renotify' — this card is a follow-up to a task that already reached a
+  // human. A failure here must report delivered:false (so the model does not
+  // claim the ADDED item is in motion) WITHOUT flipping the original live task
+  // to notify_failed. Passing the default 'raise' here was the round-3 BLOCKER:
+  // a failed append killed the very task the housekeeper was holding.
   const notified = await tasks.notify(
     { ...updated, summary: `(also) ${input.summary}` },
     tasks.guestFirstName,
+    'renotify',
   );
   if (!notified.delivered) {
     return {

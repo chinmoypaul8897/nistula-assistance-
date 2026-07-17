@@ -60,6 +60,25 @@ export interface NotifyResult {
 }
 
 /**
+ * What a delivery failure DOES to the task's status.
+ *  - `raise`  — this is the FIRST card for a just-inserted `open` task, so a
+ *    failure means the task never reached anyone: flip it to `notify_failed`.
+ *  - `renotify` — this card is a follow-up to an ALREADY-DELIVERED task (an
+ *    append), so a failure means only the FOLLOW-UP did not land. The task
+ *    itself is live and a human is holding it — its status must NOT be touched.
+ *
+ * 🚨 This distinction is a BLOCKER fix (review round 3, found by three lenses).
+ * Without it, an append whose card failed to deliver ran `markNotifyFailed` on
+ * the ORIGINAL open task — flipping live work a housekeeper was holding to the
+ * terminal `notify_failed`: its `DONE` then answered "already closed", its SLA
+ * nudge died, and the guest was never told the towels arrived. `markNotifyFailed`
+ * is TERMINAL and was being applied to a mutable, retryable fact (this card's
+ * delivery) about a DIFFERENT card that had already succeeded — axis 2 of the
+ * recurring class, verbatim.
+ */
+export type NotifyMode = 'raise' | 'renotify';
+
+/**
  * Sends one task card. Never throws: a card is a side effect of a guest's
  * request, and a throw here would turn "we could not reach housekeeping" into
  * "the guest's turn crashed".
@@ -68,12 +87,13 @@ export async function notifyTask(
   deps: NotifierDeps,
   task: Task,
   guestFirstName: string | null,
+  mode: NotifyMode = 'raise',
 ): Promise<NotifyResult> {
   if (task.assignedPhone === null) {
     // No rung of the ladder had anybody (an empty roster and no ops number —
     // which is dev's standing state today, and go-live's job to fix). The task
     // is real and recorded; nobody was told, and nothing may be claimed.
-    await recordHole(deps, task, 'no_assignee');
+    await recordHole(deps, task, 'no_assignee', mode);
     return { delivered: false, usedTemplate: false };
   }
 
@@ -91,7 +111,7 @@ export async function notifyTask(
   );
 
   if (!result.ok) {
-    await recordHole(deps, task, result.error);
+    await recordHole(deps, task, result.error, mode);
     return { delivered: false, usedTemplate: false };
   }
   deps.log.info?.(
@@ -103,28 +123,43 @@ export async function notifyTask(
 
 /**
  * A card that never landed. The task stays in the DB — it is a real request
- * from a real guest — but its status says nobody has it, which keeps the SLA
- * nudger from "re-pinging" a person who was never pinged and keeps block [5]
- * from telling the model a task is in hand.
+ * from a real guest — but on a `raise` its status flips to `notify_failed` so
+ * nobody has it, which keeps the SLA nudger from "re-pinging" a person who was
+ * never pinged and keeps block [5] from telling the model a task is in hand.
+ *
+ * On a `renotify` the status is left ALONE: the task was already delivered and
+ * a human is holding it, so a failed follow-up card must not flip live work to
+ * a terminal state (the round-3 BLOCKER). Ops is still paged either way, so the
+ * follow-up item is not silently lost.
  */
-async function recordHole(deps: NotifierDeps, task: Task, reason: string): Promise<void> {
-  // 🚨 If THIS update fails, the task stays `open` — a card nobody received,
-  // looking exactly like work in hand. The nudger would then chase it and,
-  // on a landed nudge, write an `sla_nudge` row licensing "I've just nudged
-  // housekeeping" about a task no human has ever seen: the honesty hole
-  // `notify_failed` exists to prevent, defeated by a swallowed catch
-  // (pre-push review). It is still swallowed — the notifier must never throw
-  // into a guest's turn — but it is no longer SILENT: ops is paged either way
-  // below, and the failure is named so an operator can find it.
-  await markNotifyFailed(deps.db, task.id).catch((error: unknown) => {
-    deps.log.error(
-      { taskId: task.id, shortId: task.shortId, err: String(error) },
-      'markNotifyFailed FAILED — task is still open with a card nobody received',
-    );
-  });
+async function recordHole(
+  deps: NotifierDeps,
+  task: Task,
+  reason: string,
+  mode: NotifyMode,
+): Promise<void> {
+  if (mode === 'raise') {
+    // 🚨 If THIS update fails, the task stays `open` — a card nobody received,
+    // looking exactly like work in hand. The nudger would then chase it and,
+    // on a landed nudge, write an `sla_nudge` row licensing "I've just nudged
+    // housekeeping" about a task no human has ever seen: the honesty hole
+    // `notify_failed` exists to prevent, defeated by a swallowed catch
+    // (pre-push review). It is still swallowed — the notifier must never throw
+    // into a guest's turn — but it is no longer SILENT: ops is paged either way
+    // below, and the failure is named so an operator can find it.
+    await markNotifyFailed(deps.db, task.id).catch((error: unknown) => {
+      deps.log.error(
+        { taskId: task.id, shortId: task.shortId, err: String(error) },
+        'markNotifyFailed FAILED — task is still open with a card nobody received',
+      );
+    });
+  }
   await alertOps(deps.log, {
-    kind: 'task_notify_failed',
-    summary: 'A staff task card did not reach anyone — the guest has NOT been promised anything',
+    kind: mode === 'raise' ? 'task_notify_failed' : 'task_append_notify_failed',
+    summary:
+      mode === 'raise'
+        ? 'A staff task card did not reach anyone — the guest has NOT been promised anything'
+        : 'A follow-up to a LIVE task did not reach its assignee — the original stands; the added request needs a manual push',
     detail: {
       taskId: task.id,
       shortId: task.shortId,

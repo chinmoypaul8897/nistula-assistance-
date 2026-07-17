@@ -160,8 +160,15 @@ export interface ToolTaskContext {
    * depend on config or the roster module. */
   assign: (kind: TaskKind, villa: string | null) => TaskAssignment | null;
   /** Sends the card and reports whether a human actually got it. The tool's
-   * `ok` is this verdict — see ToolTaskContext's header. */
-  notify: (task: Task, guestFirstName: string | null) => Promise<{ delivered: boolean }>;
+   * `ok` is this verdict — see ToolTaskContext's header. `mode` says whether a
+   * delivery failure may transition the task's status: 'raise' (a fresh task,
+   * failure ⇒ notify_failed) vs 'renotify' (a follow-up to a LIVE task, failure
+   * ⇒ leave the original alone — see NotifyMode). */
+  notify: (
+    task: Task,
+    guestFirstName: string | null,
+    mode?: 'raise' | 'renotify',
+  ) => Promise<{ delivered: boolean }>;
   /**
    * Mutable per-turn latch, exactly like `memory.saves`. The tool loop RE-RUNS
    * on a guardrail regenerate, so without this the model raises a SECOND task

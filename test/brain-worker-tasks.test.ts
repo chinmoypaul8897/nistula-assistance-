@@ -18,6 +18,7 @@ import { DEBOUNCE_WINDOWS } from '../src/brain/debounce.js';
 import { processConversation, type WorkerDeps } from '../src/brain/worker.js';
 import type { Db } from '../src/db/client.js';
 import { upsertMirrorRow, type MirrorRowInput } from '../src/db/bookings.js';
+import { closeTaskByShortId } from '../src/db/tasks.js';
 import * as schema from '../src/db/schema.js';
 import { touchPhoneWindow } from '../src/db/windows.js';
 import { createWaClient } from '../src/wa/client.js';
@@ -437,5 +438,44 @@ describe('🚨 CH-13a · the retry key survives the batch growing (real worker)'
 
     expect([...(await db.execute(sql`SELECT id FROM tasks`))]).toHaveLength(1);
     expect(a2.carded).toHaveLength(0); // the replay re-cards nobody
+  });
+});
+
+describe('🚨 CH-13a · a failed APPEND must not kill the live task (real worker, round-3 BLOCKER)', () => {
+  it('the original task the housekeeper is holding stays OPEN and closable', async () => {
+    // THE BLOCKER, three lenses found it. Turn 1 delivers a card; turn 2's
+    // follow-up ("more towels") appends to the same task but its card fails
+    // (a shut staff window, the DEFAULT state in simulate mode, or any Graph
+    // 5xx). The append used to run markNotifyFailed on the ORIGINAL task —
+    // flipping live work to the terminal notify_failed, so the DONE answered
+    // "already closed" and the guest was never told the towels arrived.
+    //
+    // Asserts the OUTCOME a housekeeper reaches for: the task is still open and
+    // DONE still closes it. With the bug the status is notify_failed and the
+    // close returns null.
+    const { conversation } = await seedInHouseGuest();
+    await openStaffWindows();
+
+    // Turn 1 — the card lands, the task is live and delivered.
+    await seedGuestMessage(db, conversation.id, 'can we get 2 extra towels', 40);
+    await processConversation(rig({}).deps, conversation.id);
+    const afterOne = [...(await db.execute(sql`SELECT short_id, status FROM tasks`))];
+    expect(afterOne).toHaveLength(1);
+    expect(afterOne[0]?.status).toBe('open');
+    const shortId = afterOne[0]?.short_id as string;
+
+    // Turn 2 — a follow-up that GATE 3 appends (same kind + same door +
+    // similar summary), and this time the card does NOT reach anyone.
+    await seedGuestMessage(db, conversation.id, 'sorry, could we get more extra towels', 20);
+    await processConversation(rig({ cardOk: false, summary: 'more extra towels' }).deps, conversation.id);
+
+    // ONE row still — an append never inserts — and it is STILL LIVE.
+    const afterTwo = [...(await db.execute(sql`SELECT status FROM tasks`))];
+    expect(afterTwo).toHaveLength(1);
+    expect(afterTwo[0]?.status).toBe('open'); // 🚨 NOT notify_failed
+
+    // And the housekeeper can still close it — the DONE will not lie.
+    const closed = await closeTaskByShortId(db, shortId, ANITA, new Date());
+    expect(closed?.status).toBe('done');
   });
 });

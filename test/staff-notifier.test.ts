@@ -133,3 +133,27 @@ describe('🚨 notifyTask — a card that reached nobody', () => {
     expect(alert).toMatchObject({ shortId: 'A3F2K9', kind: 'housekeeping' });
   });
 });
+
+describe('🚨 notifyTask — a failed RENOTIFY must not touch the live task (round-3 BLOCKER)', () => {
+  // The append path re-cards an ALREADY-DELIVERED task. On this codebase
+  // `failed` records whether markNotifyFailed was even ATTEMPTED — the terminal
+  // status flip — so it is exactly the mechanism to pin.
+  it("mode 'raise' flips the task on a failed card — the fresh-task contract", async () => {
+    const { deps } = harness({ ok: false, error: 'WINDOW_CLOSED_SIMULATED' });
+    const result = await notifyTask(deps, task(), 'Rahul', 'raise');
+    expect(result.delivered).toBe(false);
+    expect(failed).toContain('marked'); // markNotifyFailed WAS attempted
+    expect(alerts.some((a) => a.opsAlert === 'task_notify_failed')).toBe(true);
+  });
+
+  it("mode 'renotify' leaves the task ALONE on a failed card — but still pages ops", async () => {
+    const { deps } = harness({ ok: false, error: 'WINDOW_CLOSED_SIMULATED' });
+    const result = await notifyTask(deps, task(), 'Rahul', 'renotify');
+    expect(result.delivered).toBe(false); // the ADDED item did not land
+    expect(failed).not.toContain('marked'); // 🚨 the original is NOT flipped
+    // The follow-up is not silently lost — ops learns, under its own kind so it
+    // is not misread as "the whole task reached nobody".
+    expect(alerts.some((a) => a.opsAlert === 'task_append_notify_failed')).toBe(true);
+    expect(alerts.some((a) => a.opsAlert === 'task_notify_failed')).toBe(false);
+  });
+});

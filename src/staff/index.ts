@@ -8,7 +8,7 @@ import type { Task } from '../db/tasks.js';
 import type { EzeeClient } from '../ezee/client.js';
 import type { AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
-import { notifyTask } from './notifier.js';
+import { notifyTask, type NotifyMode } from './notifier.js';
 import { assignFor, type Roster } from './roster.js';
 import { resolveDoor, type DoorResolution } from './villaRoute.js';
 import type { TaskKind } from '../db/tasks.js';
@@ -27,7 +27,11 @@ export interface StaffWiringDeps {
 export interface StaffTaskDeps {
   resolveDoor: (reservationNo: string) => Promise<DoorResolution>;
   assign: (kind: TaskKind, villa: string | null) => TaskAssignment | null;
-  notify: (task: Task, guestFirstName: string | null) => Promise<{ delivered: boolean }>;
+  notify: (
+    task: Task,
+    guestFirstName: string | null,
+    mode?: NotifyMode,
+  ) => Promise<{ delivered: boolean }>;
 }
 
 /** The three collaborators `create_staff_task` needs, bound to live deps. */
@@ -41,7 +45,7 @@ export function buildStaffTaskDeps(deps: StaffWiringDeps): StaffTaskDeps {
         ? { resolved: false, reason: 'unreadable' }
         : resolveDoor({ ezee: deps.ezee, log: deps.log }, reservationNo),
     assign: (kind, villa) => assignFor(deps.roster, kind, villa),
-    notify: async (task, guestFirstName) =>
-      notifyTask({ db: deps.db, log: deps.log, wa: deps.wa }, task, guestFirstName),
+    notify: async (task, guestFirstName, mode) =>
+      notifyTask({ db: deps.db, log: deps.log, wa: deps.wa }, task, guestFirstName, mode),
   };
 }
