@@ -16,9 +16,11 @@
  * WHAT A BODY MAY SAY. Narrower than it looks, and every exclusion is a rule
  * someone already bled for:
  *   - The villa TYPE and its locality. NEVER a house ("Apartment 06", "Villa
- *     B3") — eZee only GUESSED that (OQ-19), and the guest may have paid for a
- *     different one. Params come from stayView, the one door from a booking row
- *     to words.
+ *     B3"). The REASON changed on 2026-07-16 but the RULE did not: it is no
+ *     longer "eZee guessed it" (the website abolished house-choice, so eZee's
+ *     assignment IS the door) — it is that naming a house TO A GUEST is still
+ *     gated on OQ-15, and an assignment can move before arrival. Params come from
+ *     stayView, the one door from a booking row to words.
  *   - Check-in from 3 pm, check-out by 12 pm (kb/policies.md).
  *   - Dates and the reservation reference.
  *   - NEVER a ₹ figure — not the booking amount (it may be the OTA net, not what
@@ -64,11 +66,19 @@ const param = z
   // no §6.5 guardrail behind it. A guest name of "₹5,000" would otherwise render
   // a rupee figure straight onto a guest's screen.
   .refine((v) => !/₹|\b(?:INR|Rs\.?)\s*\d/i.test(v), 'template params may not contain a ₹ figure')
-  // OQ-19, enforced in the SLOT and not just the sentence. The bodies are
-  // checked for house names by a test, but a house can only ever reach a guest
-  // through a PARAM — and `villaType` is free text from eZee's back office. The
-  // OQ-19 fix is a PMS re-model, which means somebody will edit those room-type
-  // names; "Nistula Villa B1" must not sail through onto a guest's screen.
+  // Enforced in the SLOT and not just the sentence. The bodies are checked for
+  // house names by a test, but a house can only ever reach a guest through a
+  // PARAM — and `villaType` is free text from eZee's back office, so "Nistula
+  // Villa B1" must not sail through onto a guest's screen.
+  //
+  // 🚨 TODO(CH-13) — THIS GUARD WILL BLOCK YOUR TASK CARD, AND THAT IS THE POINT.
+  // `STAFF_TEMPLATES.task_card` uses `villa: param`, so this refine REJECTS
+  // "Apartment 06" there too — and since OQ-19's 2026-07-16 answer the staff card
+  // MAY legitimately name the house (from a fresh BKG-03 read; it is the physical
+  // door housekeeping must walk to). Do NOT weaken `param` to let it through:
+  // that would re-open the guest-facing hole this exists to close. Give the STAFF
+  // slot its own schema — the two audiences are different contracts, which is the
+  // whole lesson of this codebase.
   //
   // Guard by the CONTRACT, not a shape enumeration: a villa TYPE is a bare word
   // ("Nistula Apartment", "Nistula Villa") — a HOUSE is that word followed by a
@@ -191,8 +201,12 @@ export const LIFECYCLE_TEMPLATES: Record<ScheduledKind, TemplateDef> = {
  * or it fails with 131047.
  *
  * TODO(CH-13): the `villa` param may NOT be filled from
- * bookings_mirror.physical_room_label — that is eZee's guess (OQ-19) and would
- * send housekeeping to the wrong door.
+ * bookings_mirror.physical_room_label — but the REASON inverted on 2026-07-16 and
+ * the old one is dead. It is NOT "eZee's guess": the website abolished
+ * house-choice, so eZee's assignment IS the physical door and CH-13's routing is
+ * UNBLOCKED. This label is wrong because it is a SNAPSHOT, frozen at CH-11's
+ * 14 Jul reconcile (only BKG-03 carries a room; the poller never does). Fill it
+ * from a FRESH BKG-03 tran.RoomID read at task time. See CLAUDE.md §OQ-19.
  */
 export const STAFF_TEMPLATES: Record<StaffTemplateKey, TemplateDef> = {
   task_card: def({

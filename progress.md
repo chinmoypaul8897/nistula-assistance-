@@ -1562,7 +1562,10 @@ honest answer to "is breakfast available, and how much?" **exists** and the AI c
 in an OTA comment field is not a published policy, so **nothing was actioned** — filed for the team.
 
 **Forward pointers (do not lose):** **CH-13** — the task card CANNOT be built on `physical_room_label`
-while OQ-19 is open; it is eZee's guess and would send housekeeping to the wrong door. **CH-12** — the
+— **but NOT for the reason written here, which is dead.** *(SUPERSEDED 2026-07-16: the website
+abolished house-choice, so eZee's assignment IS the physical door and CH-13 is UNBLOCKED; the label
+is wrong only because it is a SNAPSHOT frozen at CH-11's 14 Jul reconcile. Read a FRESH
+`BKG-03 tran.RoomID` at task time. See CLAUDE.md §OQ-19.)* **CH-12** — the
 reconcile added **123 HISTORICAL bookings** to the mirror; the hourly sweep re-derives from the mirror
 and **MUST date-filter**, or it will schedule confirmations for stays that ended months ago. **The
 `booking.*` backlog is ~70 and GROWS DAILY — measure it, never trust a number written here.**

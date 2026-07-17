@@ -371,7 +371,10 @@ Loads guest + facts + stays (join `guest_stays`→`bookings_mirror`, most releva
 1. **get_quote**(villa_label, check_in, check_out, adults, children, plan=ep) → resolves label→villaId via §5.4 → website `/api/quote` → returns QuoteView verbatim. Errors map to friendly enums (`UNAVAILABLE`, `MIN_NIGHTS`, `UPSTREAM_DOWN`).
 2. **get_availability**(villa_label, from, to) → website `/api/availability`.
 3. **get_booking**(reference?) → the guest's own bookings from the mirror (active/upcoming/past). Reference-claim flow is CODE-side verification only: the guest must STATE the full booking name AND check-in date (or the booking email) — matched against the mirror in code; the WhatsApp profile name is NEVER used for matching; 3 failed reference attempts/day → hard escalate + polite refusal; any partial mismatch → escalate for human approval, reveal nothing. Never returns another guest's data.
-4. **create_staff_task**(kind, villa_label, summary, detail?) → tasks insert + staff notify → returns short task id + assignee first name. THE precondition for saying "the team has been informed." Gates: available only in `instay`/`arrival` stages (leads → escalate_to_human); max 3 OPEN tasks per conversation (further requests append to the newest matching task); a near-duplicate open task (same kind+villa, similar summary) → append, don't create.
+4. **create_staff_task**(kind, ~~villa_label~~, summary, detail?) → tasks insert + staff notify
+
+   > **🚨 `villa_label` MUST NOT BE A MODEL-SUPPLIED PARAMETER — decided 2026-07-16, and this signature is stale.** A model-supplied villa is *the model guessing a house*, and its likeliest source is the guest's own guess ("I'm in Apartment 09") — which CH-11's `scanUnitAssertions` treats as a violation to so much as say aloud. **The door is a FACT WE LOOK UP, never a string handed to us**, exactly as CH-11's `get_booking` takes ONE argument and verifies a reference claim against the guest's OWN typed words rather than the model's args. **CH-13 derives the villa server-side from the linked booking via a FRESH `BKG-03 tran.RoomID` read** (never `physical_room_label`, a 14 Jul snapshot; BKG-03 returns 503 for an unconfirmed hold and "unreadable" NEVER means "cancelled"), and falls back to the frontdesk lead when it cannot resolve one. The tool's gates below (near-duplicate = same kind+villa) then key off the DERIVED villa, not an argument. *Recorded because a close-out simulation of the CH-13 session found this was the one thing it would have had to guess at, and §0 says an unstated engineering decision stops a session.*
+ → returns short task id + assignee first name. THE precondition for saying "the team has been informed." Gates: available only in `instay`/`arrival` stages (leads → escalate_to_human); max 3 OPEN tasks per conversation (further requests append to the newest matching task); a near-duplicate open task (same kind+villa, similar summary) → append, don't create.
 5. **escalate_to_human**(reason, urgency) → §7-style handover: conversation flag + front-desk card (or night queue) → returns queued_for ("now"|"morning").
 6. **remember_fact**(kind, content) → guest_facts insert (used sparingly: preferences, celebrations, issues).
 7. **get_booking_link**(villa_label) → canonical URL string.
@@ -721,6 +724,8 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 
 **Context.** "Villa B3 · Rahul · 2 towels" — the AI's hands (§6.4 create_staff_task). Staff get task cards on their own WhatsApp numbers (normal user numbers — we message them from the business line; their replies come back as inbound webhooks on the same line).
 
+> **🚨 THE 24h WINDOW BINDS STAFF TOO — and this will bite CH-13 first.** CH-07's ops escalation already fails when an ops number has been quiet for 24h. **A housekeeper who has not messaged the line in a day is UNREACHABLE by free-form**, so a task card must go through the window-aware chokepoint and fall back to the `nst_task_card` template (defined in `lifecycle/templates.ts`, unwired). The runbook's old mitigation — "every staff number messages the line once" — **buys 24 hours, not for ever.** Recorded in CH-12's progress entry as `TODO(CH-13/14)`; surfaced here because that is where nobody would have found it.
+>
 > **🚨 READ OQ-19 BEFORE WRITING STEP 2 — and note this Context line is itself stale: the card may NOT say "Villa B3".**
 > `bookings_mirror.physical_room_label` is **eZee's auto-assignment, not the house the guest booked**
 > (8 houses inside only 3 room types; eZee picks lowest-number-first — reservations 953 AND 957 both
@@ -752,7 +757,7 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 
 **Tests.** Assignment matrix; DONE happy/wrong-number/unknown-id; SLA transition + honest-context event; roster-number bypass of guest pipeline.
 
-**Done when.** Test line towel scenario end-to-end with Paul playing staff on a second number: request → card → DONE → guest informed; 31-min silence produces the nudge + honest wording (scenario 3 script passes) · progress.md updated.
+**Done when.** **🚨 PRECONDITION, and it is NOT optional despite being filed that way elsewhere (§10 and progress.md list the test SIM under "optional in dev"): this DoD REQUIRES a SECOND WhatsApp number allowlisted on the Meta test app, and CH-11 already failed to run its stranger-refusal probe live for exactly this reason — Paul does not have one. Get the number allowlisted BEFORE starting CH-13, or the DoD is unreachable and the chunk cannot close.** Test line towel scenario end-to-end with Paul playing staff on a second number: request → card → DONE → guest informed; 31-min silence produces the nudge + honest wording (scenario 3 script passes) · progress.md updated.
 
 ---
 
