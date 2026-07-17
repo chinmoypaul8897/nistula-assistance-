@@ -27,6 +27,7 @@ import {
   type WorkerLogger,
 } from '../brain/worker.js';
 import type { Db } from '../db/client.js';
+import { getMessageBody } from '../db/repos.js';
 import type { EzeeClient } from '../ezee/client.js';
 import { createEzeePoller } from '../ezee/poller.js';
 import type { GateContext } from '../lifecycle/gates.js';
@@ -40,6 +41,10 @@ import {
 import { runSender } from '../lifecycle/sender.js';
 import { istCalendarDay, nowIST } from '../lib/time.js';
 import { summarizeError } from '../lib/logger.js';
+import { buildStaffTaskDeps } from '../staff/index.js';
+import { handleStaffCommand } from '../staff/commands.js';
+import type { Roster } from '../staff/roster.js';
+import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
 import type { WaClient } from '../wa/client.js';
 
 export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
@@ -54,6 +59,8 @@ export const BOOKING_MODIFIED_QUEUE = 'booking.modified';
 export const BOOKING_CANCELLED_QUEUE = 'booking.cancelled';
 export const LIFECYCLE_SEND_QUEUE = 'lifecycle.send';
 export const LIFECYCLE_RECONCILE_QUEUE = 'lifecycle.reconcile';
+export const STAFF_COMMAND_QUEUE = 'staff.command';
+export const STAFF_SLA_QUEUE = 'staff.sla';
 export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
   created: BOOKING_CREATED_QUEUE,
   modified: BOOKING_MODIFIED_QUEUE,
@@ -179,6 +186,27 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryLimit: 0, // the next hour's tick IS the retry
     expireInSeconds: 600,
   });
+  // CH-13a. A staff command is a real person waiting for their DONE to land,
+  // so unlike the crons it RETRIES: policy 'standard' (they are independent —
+  // two staff typing DONE at once must both run), and the guarded UPDATE in
+  // db/tasks.ts is what makes a retry safe rather than a double close.
+  await boss.createQueue(STAFF_COMMAND_QUEUE, {
+    policy: 'standard',
+    retryLimit: 3,
+    retryDelay: 5,
+    retryBackoff: true,
+    // One BKG-03-free path: a close is a few queries and two sends.
+    expireInSeconds: 120,
+  });
+  // The nudger follows the lifecycle.send shape: stately + a constant
+  // singletonKey on the schedule, so a tick that overran into the next
+  // 5 minutes cannot double-buzz a housekeeper.
+  await boss.createQueue(STAFF_SLA_QUEUE, {
+    policy: 'stately',
+    retryLimit: 0, // the next 5-minute tick IS the retry
+    // 20 overdue tasks × up to 2 window-aware sends × the lib/http 3-try ladder.
+    expireInSeconds: 420,
+  });
 }
 
 /**
@@ -218,7 +246,14 @@ export interface JobsDeps {
   db: Db;
   wa: Pick<
     WaClient,
-    'createSendIntent' | 'dispatchText' | 'sendText' | 'planTemplatedSend' | 'dispatchTemplated'
+    | 'createSendIntent'
+    | 'dispatchText'
+    | 'sendText'
+    | 'planTemplatedSend'
+    | 'dispatchTemplated'
+    // CH-13a: the task card and the SLA nudge. A staff number quiet for a day
+    // is unreachable by free-form, so both need the template fallback.
+    | 'sendTemplated'
   >;
   log: WorkerLogger;
   /** The Claude client (§5.5) — server builds the real one; tests inject a fake. */
@@ -256,10 +291,18 @@ export interface JobsDeps {
    * are still SCHEDULED but nothing is ever sent. Absent ⇒ the whole lifecycle
    * engine stays unmounted (tests that do not care). */
   lifecycle?: { gates: Omit<GateContext, 'today'>; sendEnabled: boolean };
+  /** CH-13a staff tasks. Absent ⇒ the assistant has no hands: no
+   * create_staff_task context, no staff-command worker, no SLA cron. The
+   * roster may legitimately be EMPTY (it is, in dev and today in production) —
+   * that is a different thing from unmounted, and it fails closed on its own:
+   * assignFor returns null, the card reaches nobody, and nothing is promised. */
+  staff?: { roster: Roster };
 }
 
 export interface Jobs {
   enqueueConversationProcess: (conversationId: string, startAfter?: Date) => Promise<void>;
+  /** CH-13a: the webhook's staff-command wake (§8 step 3). */
+  enqueueStaffCommand: (input: { phone: string; waMessageId: string }) => Promise<void>;
 }
 
 /** Registers queues, workers and the sweeper schedule; returns the bound enqueue for the webhook. */
@@ -274,6 +317,22 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   const enqueue = makeEnqueue(deps.boss, windows);
   const enqueueSummarise = makeEnqueueSummarise(deps.boss);
   const thresholds = deps.summariser ?? SUMMARISER;
+  // CH-13a. Built here rather than inside the poller branch on purpose: the
+  // door read is BKG-03, a READ that never ACKs and so cannot consume the
+  // shared eZee queue. Gating it on EZEE_POLLER_ENABLED would have made the
+  // villa route dead in local dev, where that flag is BINDINGLY 0 — the
+  // routing would silently fall back to the front desk on every task and look
+  // like a design decision rather than a wiring bug.
+  const staffTasks =
+    deps.staff === undefined
+      ? undefined
+      : buildStaffTaskDeps({
+          db: deps.db,
+          log: deps.log,
+          wa: deps.wa,
+          roster: deps.staff.roster,
+          ezee: deps.ezee?.client,
+        });
   const workerDeps: WorkerDeps = {
     db: deps.db,
     wa: deps.wa,
@@ -285,6 +344,9 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     websiteBaseUrl: deps.websiteBaseUrl,
     degraded: deps.degraded,
     knowledge: deps.knowledge,
+    // CH-13a: undefined ⇒ create_staff_task has no context and refuses, so the
+    // assistant simply has no hands (its state before this chunk).
+    tasks: staffTasks,
     opsNumbers: deps.opsNumbers ?? [],
     rateWindow: deps.rateWindow ?? createRateWindow(),
     nightStart: deps.nightStart ?? '20:00',
@@ -441,7 +503,53 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     await deps.boss.unschedule(LIFECYCLE_SEND_QUEUE).catch(() => {});
     await deps.boss.unschedule(LIFECYCLE_RECONCILE_QUEUE).catch(() => {});
   }
-  return { enqueueConversationProcess: enqueue };
+
+  // ── CH-13a staff tasks ──────────────────────────────────────────────────
+  const enqueueStaffCommand = async (input: { phone: string; waMessageId: string }) => {
+    await deps.boss.send(STAFF_COMMAND_QUEUE, input);
+  };
+  if (deps.staff !== undefined) {
+    const roster = deps.staff.roster;
+    await deps.boss.work<{ phone: string; waMessageId: string }>(
+      STAFF_COMMAND_QUEUE,
+      workOptions,
+      async (jobs) => {
+        for (const job of jobs) {
+          // The body is read from the row the webhook stored, not carried on
+          // the job: the message is already durable, and a payload copy would
+          // be a second source of truth for the same text (and would put a
+          // guest-adjacent body into pgboss.job, which §3.3 has no reason to
+          // allow).
+          const body = await getMessageBody(deps.db, job.data.waMessageId);
+          await handleStaffCommand(
+            { db: deps.db, log: deps.log, wa: deps.wa, roster },
+            { phone: job.data.phone, body },
+          );
+        }
+      },
+    );
+    await deps.boss.work(STAFF_SLA_QUEUE, workOptions, async () => {
+      await runSlaNudger({
+        db: deps.db,
+        log: deps.log,
+        wa: deps.wa,
+        roster,
+        // ONE clock per tick, injected — never read inside the loop.
+        now: () => new Date(),
+      });
+    });
+    await scheduleCron(deps.boss, STAFF_SLA_QUEUE, SLA_NUDGER_CRON, 'Asia/Kolkata', {
+      singletonKey: 'sla',
+    });
+    deps.log.info(
+      { roster: roster.members.length, ops: roster.opsNumbers.length },
+      'staff tasks ENABLED (SLA nudger every 5 min)',
+    );
+  } else {
+    // A cron left by an earlier boot must not fire into a workerless queue.
+    await deps.boss.unschedule(STAFF_SLA_QUEUE).catch(() => {});
+  }
+  return { enqueueConversationProcess: enqueue, enqueueStaffCommand };
 }
 
 /** Cron registration helper (CH-03 step 1) — every business cron states its

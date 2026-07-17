@@ -33,6 +33,15 @@ export interface WaWebhookOptions {
    * sees queue mechanics and tests pass a recorder.
    */
   enqueue: (conversationId: string) => Promise<void>;
+  /**
+   * CH-13a — §3.3's "roster wins over guest". Absent ⇒ nobody is staff and
+   * every inbound is a guest, which is exactly the pre-CH-13a world.
+   */
+  staff?: {
+    isStaffPhone: (phone: string) => boolean;
+    /** Wakes the staff-command worker. Same injection discipline as `enqueue`. */
+    enqueueCommand: (input: { phone: string; waMessageId: string }) => Promise<void>;
+  };
 }
 
 /** Fastify plugin carrying both /webhooks/whatsapp routes; register at boot with live deps. */
@@ -91,7 +100,7 @@ export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app,
     // on timeout and wa_message_id dedupe makes redelivery a no-op.
     await reply.code(200).send();
     try {
-      await ingest(raw, opts.db, request.log, opts.enqueue);
+      await ingest(raw, opts.db, request.log, opts.enqueue, opts.staff);
     } catch (error) {
       // Post-ack there is nothing to return to Meta; the raw row (when it
       // was written) carries the error per the D6 write contract.
@@ -104,7 +113,13 @@ export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app,
 type Enqueue = WaWebhookOptions['enqueue'];
 
 /** One raw_events row per verified POST body, then per-entry tolerant parsing (D6). */
-async function ingest(raw: Buffer, db: Db, log: FastifyBaseLogger, enqueue: Enqueue): Promise<void> {
+async function ingest(
+  raw: Buffer,
+  db: Db,
+  log: FastifyBaseLogger,
+  enqueue: Enqueue,
+  staff: WaWebhookOptions['staff'],
+): Promise<void> {
   let body: WaWebhookBody;
   try {
     body = JSON.parse(raw.toString('utf8')) as WaWebhookBody;
@@ -142,7 +157,7 @@ async function ingest(raw: Buffer, db: Db, log: FastifyBaseLogger, enqueue: Enqu
   for (const [index, entry] of entries.entries()) {
     try {
       for (const change of entry.changes ?? []) {
-        await handleChange(change, db, log, enqueue);
+        await handleChange(change, db, log, enqueue, staff);
       }
     } catch (error) {
       // summarizeError, never error.message: drizzle's message embeds bound
@@ -161,6 +176,7 @@ async function handleChange(
   db: Db,
   log: FastifyBaseLogger,
   enqueue: Enqueue,
+  staff: WaWebhookOptions['staff'],
 ): Promise<void> {
   if (change.field !== 'messages') {
     // smb_message_echoes / history land in CH-14/CH-18 — until then unknown
@@ -170,10 +186,67 @@ async function handleChange(
   }
   const value = change.value ?? {};
   for (const message of value.messages ?? []) {
-    await handleInbound(message, value, db, log, enqueue);
+    await handleInbound(message, value, db, log, enqueue, staff);
   }
   for (const status of value.statuses ?? []) {
     await handleStatus(status, db, log);
+  }
+}
+
+/**
+ * A message FROM a roster or ops number (CH-13a, plan §8 CH-13 step 3).
+ *
+ * It is STORED — plan step 3's "unknown text from staff numbers → stored,
+ * never AI-processed" — and storing it through the same `insertMessage` buys
+ * the `wa_message_id` dedupe for free. That matters more than it looks: Meta
+ * redelivers, and `DONE A3F2K9` arriving twice must close one task once and
+ * message the guest once. This is the FIRST of the two guards; the second is
+ * the guarded UPDATE in db/tasks.ts, which covers a genuine race rather than a
+ * replay.
+ *
+ * The row carries `conversation_id: null` (§4 — a staff number is not a guest
+ * conversation) and `sender: 'human'` (a real person typed it).
+ *
+ * The command is only ENQUEUED here. Parsing, closing a task and messaging a
+ * guest are fallible work, and this path runs AFTER the 200 ack on a delivery
+ * Meta never repeats — so a throw here would lose the DONE for ever. The
+ * worker is the retry-safe place (CH-03 D2; the same reasoning that moved
+ * CH-11's linking out of the webhook).
+ */
+async function handleStaffInbound(
+  message: WaInboundMessage,
+  phone: string,
+  db: Db,
+  log: FastifyBaseLogger,
+  staff: NonNullable<WaWebhookOptions['staff']>,
+): Promise<void> {
+  const waMessageId = message.id;
+  if (waMessageId === undefined) return;
+  const { isNew } = await insertMessage(db, {
+    conversationId: null,
+    waMessageId,
+    direction: 'in',
+    sender: 'human',
+    type: mapInboundType(message.type),
+    body: message.text?.body ?? null,
+    mediaId: mediaIdOf(message),
+    status: 'received',
+    raw: message,
+  });
+  if (!isNew) {
+    log.info({ waMessageId }, 'duplicate staff delivery deduped (§3.4)');
+    return;
+  }
+  // Ids only — never the body (§3.3). The roster-wins fact is logged because
+  // §3.3 asks for it: a staff member who is also a guest silently losing their
+  // AI thread is exactly the kind of thing an operator must be able to find.
+  log.info({ waMessageId }, 'inbound from a staff/ops number — roster wins (§3.3), AI not engaged');
+  try {
+    await staff.enqueueCommand({ phone, waMessageId });
+  } catch (error) {
+    // Same posture as the guest enqueue: the message IS stored, and a failed
+    // wake must not mark the raw event failed.
+    log.warn({ waMessageId, err: summarizeError(error) }, 'staff command enqueue failed');
   }
 }
 
@@ -183,6 +256,7 @@ async function handleInbound(
   db: Db,
   log: FastifyBaseLogger,
   enqueue: Enqueue,
+  staff: WaWebhookOptions['staff'],
 ): Promise<void> {
   if (message.from === undefined || message.id === undefined) {
     log.warn({ waMessageId: message.id }, 'inbound message missing from/id — skipped, raw stored');
@@ -203,6 +277,17 @@ async function handleInbound(
   // — and the next free-form send would take a 131047 we inflicted on ourselves.
   // It is also what makes touchPhoneWindow's greatest() guard mean anything.
   await touchPhoneWindow(db, phone, inboundTimestamp(message.timestamp));
+
+  // CH-13a — §3.3: "If a roster member is also a guest, roster wins (their
+  // number never gets an AI conversation) and it's logged." Placed HERE
+  // deliberately: after the window write (a staff member who writes to us has
+  // opened their own 24h window, and their next task card depends on it) and
+  // BEFORE the guest upsert, so no roster number ever grows a conversation or
+  // wakes the brain.
+  if (staff !== undefined && staff.isStaffPhone(phone)) {
+    await handleStaffInbound(message, phone, db, log, staff);
+    return;
+  }
 
   const profileName = value.contacts?.find((c) => c.wa_id === message.from)?.profile?.name;
   const guest = await upsertGuestByPhone(db, phone, profileName);

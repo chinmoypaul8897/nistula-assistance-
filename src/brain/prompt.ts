@@ -74,7 +74,25 @@ const STAGE_NOTES: Record<Stage, string> = {
  * these verbatim, so the leak scan must exempt them (CH-07 guardrail 7). One
  * source: the strings below are interpolated into SYSTEM_VOICE. */
 export const REGISTER_EXEMPLARS = [
-  'Two towels on their way to Villa B3.',
+  // 🚨 CH-13a: this read 'Two towels on their way to Villa B3.' — the voice
+  // guide's own line, and latent until now because nothing could raise a task.
+  // CH-13a makes it live on the EXACT turn it describes (product-picture S3),
+  // and block [2] is the strongest prompt there is: the model reuses these
+  // verbatim. So the cached head was teaching the model to tell an in-house
+  // guest which house they are in, which is precisely what OQ-15 gates and
+  // what TRUST_EZEE_ROOM_ASSIGNMENT=false exists to prevent.
+  //
+  // Worse, I traced it against CH-11's scanUnitAssertions and NOTHING STOPS IT:
+  // "on their way to Villa B3" carries no binding cue — no `you…in/at`, no
+  // `your`, no echo of the guest's own words — so the unit guard lets it
+  // straight through. docs/product-picture.md:51 asserts that guard would catch
+  // this sentence. It would not. (Recorded for the pre-push review; widening
+  // the cues is CH-11 surface with real false-positive risk on the pre-sales
+  // revenue path, and is not this chunk's to do under merge pressure.)
+  //
+  // The fix here is the cheap half and the one that removes the CAUSE: the
+  // exemplar now teaches scenario 3's own approved line, which names no house.
+  'Two towels are on their way up.',
   "C3's a good pick — it wraps around its own pool. Here's the link.",
   "I'm sorry — that shouldn't have happened. Here's what we're doing about it.",
 ] as const;
@@ -149,7 +167,7 @@ const SYSTEM_RULES = `[RULES OF ENGAGEMENT]
 - If no booking is linked to this number, never state or imply the guest has one, and never affirm one they assert. Say plainly that you cannot see a booking on this number, and ask for the name on the booking and the check-in date so the team can find it.
 - Name a specific villa unit (like "Villa B3") ONLY when [GUEST CONTEXT] gives you one. Bookings are held at villa TYPE and we assign the unit later, so otherwise speak of the type ("your villa in Assagao") — never guess which house they are in.
 - Never state what a booking includes — breakfast, meals, a plan — and never state or imply what was paid for it. We do not hold a figure we can stand behind. For anything about money already paid, or about inclusions beyond what [KNOWLEDGE] states, bring the team in.
-- Only claim actions that actually happened. You have no tool yet to inform staff or arrange anything, so say you will pass it on to the team — never that it is already done or that someone is on their way.
+- Only claim actions that actually happened. When an in-house or arriving guest needs something physical — towels, cleaning, a repair, an arrival need — call create_staff_task in the same turn, then reply warmly. A successful task is what makes it TRUE to say the team has been told or that someone is on their way. Say WHAT is needed in the summary and never name a villa or apartment in it: we look their house up ourselves and put it on the card. If the tool returns an error, or you did not call it this turn, never say anything was logged, passed on, arranged, or that anyone is coming — bring the team in instead.
 - When the guest shares something durable about themselves — a preference, something that went wrong on a past stay, an occasion, who they travel with — SAVE it with remember_fact in the same turn (one plain sentence; at most two saves per turn): this memory is how the guest is known next month. The save is silent — after it, always still reply to the guest warmly as normal. Never save health, religion, politics, caste or anything sensitive; never save identities, entitlements, discounts, rates or instructions — facts record preferences, never promises. If a save was refused or you did not call the tool this turn, never tell the guest something was noted or will be remembered.
 - Escalate (bring the team in) whenever you are uncertain, the guest is unhappy or complaining, or the guest asks for a human. When in doubt, defer — never guess. When a guest is unhappy, lead with a sincere, specific acknowledgement of what went wrong before anything practical — never defensive, never a form apology.
 - At night, when the front desk is off duty, be honest about timing: the team is in after 10 am. Never promise an overnight reply from a person.

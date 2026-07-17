@@ -20,6 +20,7 @@ import { getBoss, registerJobs, stopBoss } from './jobs/index.js';
 import { createLogger } from './lib/logger.js';
 import { adminRoutes } from './ops/admin.js';
 import { createWaClient } from './wa/client.js';
+import { isStaffPhone } from './staff/roster.js';
 import { waWebhookRoutes } from './wa/webhook.js';
 
 // package.json is read via require to avoid JSON-module import attributes
@@ -182,12 +183,27 @@ async function main(): Promise<void> {
       gates: { epoch: config.lifecycleEpoch, sources: config.lifecycleSources },
       sendEnabled: config.lifecycleSendEnabled,
     },
+    // CH-13a. Always mounted, even with an EMPTY roster — which is dev's
+    // standing state and production's today. An empty roster is not the same
+    // as an unmounted chunk: it fails closed on its own (assignFor returns
+    // null, the card reaches nobody, the task is recorded as notify_failed and
+    // guardrail 2 refuses every claim about it), while leaving it unmounted
+    // would make the tool silently absent and the honesty untestable.
+    staff: { roster: { members: config.staffRoster, opsNumbers: config.opsNumbers } },
   });
   await app.register(waWebhookRoutes, {
     db,
     appSecret: waAppSecret,
     verifyToken: waVerifyToken,
     enqueue: jobs.enqueueConversationProcess,
+    // §3.3: roster wins over guest — a staff number never gets an AI
+    // conversation. Built from the SAME normalised roster the assigner uses,
+    // so the two can never disagree about who is staff.
+    staff: {
+      isStaffPhone: (phone) =>
+        isStaffPhone({ members: config.staffRoster, opsNumbers: config.opsNumbers }, phone),
+      enqueueCommand: jobs.enqueueStaffCommand,
+    },
   });
   // CH-09: admin routes mount ONLY when enabled — unmounted means Fastify's
   // default 404, indistinguishable from a route that never existed (§3.3 "no

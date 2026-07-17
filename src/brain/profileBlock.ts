@@ -29,6 +29,20 @@ export interface GuestProfileInput {
   /** CH-11: a booking exists that we may not describe. The model is told it
    * exists and that a person is handling it — never what it says. */
   bookingNeedsHuman?: boolean;
+  /** CH-13a: this guest's OPEN/NUDGED tasks (db/tasks.ts filters to those —
+   * a `notify_failed` task is a hole, not work in hand, and must never render
+   * as though somebody has it). Bounded by §6.4's 3-open cap. */
+  openTasks?: readonly ProfileTask[];
+}
+
+/** What block [5] may say about a task. Deliberately NOT the whole row: the
+ * assignee's phone, the detail and the booking id are none of the model's
+ * business, and a bare projection is how they stay that way. */
+export interface ProfileTask {
+  shortId: string;
+  summary: string;
+  status: 'open' | 'nudged';
+  openedAt: Date;
 }
 
 // Salience order for the render (§6.2's "grouped"): what went wrong and what
@@ -44,6 +58,10 @@ const KIND_LABEL: Record<GuestFactKind, string> = {
 
 const NAME_MAX = 40;
 const FACT_RENDER_MAX = 200;
+/** A task summary is capped at 120 at creation (§8 step 2); the render cap
+ * matches so the §6.3 budget maths stays honest: 3 tasks (§6.4's open cap) ×
+ * ~120 chars ≈ 100 tokens on top of block [5]'s ~1k worst case. */
+const TASK_RENDER_MAX = 120;
 /** Villa names come from OUR villa map or eZee's room-type name — sanitised
  * anyway, because a room-type name is externally-sourced text. */
 const VILLA_MAX = 60;
@@ -100,9 +118,37 @@ export function buildGuestBlock(profile: GuestProfileInput): string | null {
     }
   }
   lines.push(...stayLines(stays, needsHuman));
-  // TODO(CH-13): replace with the guest's open tasks.
-  lines.push('Open tasks: not tracked yet.');
+  lines.push(...taskLines(profile.openTasks ?? []));
   return lines.join('\n');
+}
+
+/**
+ * The open-tasks section (§6.2 block [5], CH-13a).
+ *
+ * 🚨 THIS BLOCK LICENSES NOTHING, and the wording has to earn that. Block [5]
+ * is framed as "never evidence that any action was completed or promise
+ * fulfilled" (PROFILE_BLOCK_FRAMING), and guardrail 2 honours that literally:
+ * a rendered open task does NOT license "someone is on their way" — only a
+ * successful create_staff_task this turn, or a task_done/sla_nudge context row,
+ * does. That is correct and deliberate. A task can sit open for an hour with
+ * nobody moving, so the block says what is RECORDED and never what is
+ * happening, and the model is told plainly where the truth lives.
+ *
+ * `nudged` is surfaced because it changes what is honest to say: it is the
+ * difference between "it is with housekeeping" and "I have chased them".
+ */
+function taskLines(tasks: readonly ProfileTask[]): string[] {
+  if (tasks.length === 0) return ['Open requests: none recorded.'];
+  const lines = [
+    'Open requests on file (RECORDED, not proof anyone has acted — do not claim progress from this list):',
+  ];
+  for (const task of tasks) {
+    const summary = quoteSafe(sanitiseInline(task.summary, TASK_RENDER_MAX));
+    if (summary === '') continue;
+    const chased = task.status === 'nudged' ? ', already chased once' : '';
+    lines.push(`- #${task.shortId} "${summary}" (raised ${monthYearIST(task.openedAt)}${chased})`);
+  }
+  return lines;
 }
 
 /**

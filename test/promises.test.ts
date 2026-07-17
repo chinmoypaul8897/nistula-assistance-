@@ -134,12 +134,96 @@ describe('evidence channels', () => {
     expect(withFailure.violations.length).toBeGreaterThan(0);
   });
 
-  it('price tools license NOTHING (only remember_fact is registered)', () => {
+  it('price tools license NOTHING', () => {
     const quoteRun: ToolRun = { name: 'get_quote', input: {}, result: { ok: true, data: { total: 1 } } };
     const scan = scanPromises('The team has been informed.', { ...NO_EVIDENCE, toolRuns: [quoteRun] });
     expect(scan.violations.length).toBeGreaterThan(0);
-    expect([...TOOL_CLAIMS.keys()]).toEqual(['remember_fact']);
+  });
+
+  it('the registry is EXACTLY these two, and get_booking is deliberately absent', () => {
+    // get_booking is registered in NO class on purpose (CH-11 D2): C1's regex
+    // packs `confirmed` in with `informed`, so registering it would license
+    // "the team has been informed" off a mere booking lookup.
+    expect([...TOOL_CLAIMS.keys()].sort()).toEqual(['create_staff_task', 'remember_fact']);
     expect([...(TOOL_CLAIMS.get('remember_fact') ?? [])]).toEqual(['C4']);
+    expect([...(TOOL_CLAIMS.get('create_staff_task') ?? [])].sort()).toEqual(['C1', 'C2']);
+  });
+
+  it('a memory save still never cross-licenses a staff claim, and vice versa', () => {
+    const saved: ToolRun = { name: 'remember_fact', input: {}, result: { ok: true, data: {} } };
+    expect(
+      scanPromises('The team has been informed.', { ...NO_EVIDENCE, toolRuns: [saved] }).violations
+        .length,
+    ).toBeGreaterThan(0);
+    const tasked: ToolRun = { name: 'create_staff_task', input: {}, result: { ok: true, data: {} } };
+    expect(
+      scanPromises("I'll remember that for next time.", { ...NO_EVIDENCE, toolRuns: [tasked] })
+        .violations.length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe('🚨 C1/C2 — create_staff_task licenses ONLY a delivered task (CH-13a)', () => {
+  const delivered: ToolRun = {
+    name: 'create_staff_task',
+    input: {},
+    result: { ok: true, data: { shortId: 'A3F2K9' } },
+  };
+  const undelivered: ToolRun = {
+    name: 'create_staff_task',
+    input: {},
+    // What the tool returns when the card reached nobody. The task EXISTS.
+    result: { ok: false, error: 'NOT_NOTIFIED', data: { shortId: 'A3F2K9' } },
+  };
+
+  it.each([
+    'Two fresh towels are on their way up.',
+    'The team has been informed.',
+    "I've let housekeeping know.",
+    'Housekeeping is on their way.',
+  ])('a DELIVERED task licenses "%s"', (draft) => {
+    expect(scanPromises(draft, { ...NO_EVIDENCE, toolRuns: [delivered] }).violations).toEqual([]);
+  });
+
+  it.each([
+    'Two fresh towels are on their way up.',
+    'The team has been informed.',
+    'Housekeeping is on their way.',
+  ])('an UNDELIVERED task licenses NOTHING — "%s" is a violation', (draft) => {
+    // CH-12's blocker #5, held by construction: covered() counts successful
+    // runs only, so the tool's ok:false is the whole mechanism. A row in a
+    // table is not a person moving.
+    expect(
+      scanPromises(draft, { ...NO_EVIDENCE, toolRuns: [undelivered] }).violations.length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe('🚨 task_done / sla_nudge — the out-of-turn evidence channel (CH-13a)', () => {
+  it('sla_nudge licenses scenario 3\'s exact line', () => {
+    // "I've just nudged housekeeping" is the ONLY honest answer to "where are
+    // those?" 32 minutes in, and this row is the only thing that licenses it.
+    const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds(['sla_nudge']) };
+    expect(scanPromises("I've just nudged housekeeping.", evidence).violations).toEqual([]);
+  });
+
+  it('task_done licenses "that is sorted"', () => {
+    const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds(['task_done']) };
+    expect(scanPromises('That is sorted.', evidence).violations).toEqual([]);
+  });
+
+  it('🚨 but NEITHER licenses C2 — a nudge puts nobody in motion', () => {
+    for (const kind of ['sla_nudge', 'task_done']) {
+      const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds([kind]) };
+      expect(
+        scanPromises('Housekeeping is on their way.', evidence).violations.length,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('and neither licenses a memory promise', () => {
+    const evidence = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds(['task_done']) };
+    expect(scanPromises("I'll remember that.", evidence).violations.length).toBeGreaterThan(0);
   });
 });
 

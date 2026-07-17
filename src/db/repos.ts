@@ -436,3 +436,21 @@ export async function applyStatusUpdate(
     ? { outcome: 'missing' }
     : { outcome: 'stale', currentStatus: existing.status };
 }
+
+/**
+ * The body of one message by its Meta id (CH-13a).
+ *
+ * WHY the staff-command worker reads the body from here rather than off its job
+ * payload: the webhook has already stored the message durably, so a copy on the
+ * job would be a second source of truth for the same text — and it would put a
+ * guest-adjacent body into `pgboss.job`, which §3.3 gives no reason to allow.
+ * The job carries ids only.
+ */
+export async function getMessageBody(db: Db, waMessageId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ body: messages.body })
+    .from(messages)
+    .where(eq(messages.waMessageId, waMessageId))
+    .limit(1);
+  return row?.body ?? null;
+}

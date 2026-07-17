@@ -6,9 +6,11 @@
  *  - C1 completed actions ("the team has been informed") and
  *  - C2 dispatch-in-motion ("housekeeping is on their way") need HARD
  *    evidence: a successful tool call this turn whose name licenses the class
- *    (TOOL_CLAIMS — empty until CH-13/14 register their tools), or a
- *    sender:'system' context row since the guest's previous message whose
- *    raw.contextKind licenses it (CH-02 D5 opt-in tagging).
+ *    (TOOL_CLAIMS — `create_staff_task` since CH-13a), or a sender:'system'
+ *    context row since the guest's previous message whose raw.contextKind
+ *    licenses it (CH-02 D5 opt-in tagging — `task_done`/`sla_nudge` since
+ *    CH-13a are how a DONE and an SLA chase, which happen BETWEEN guest turns,
+ *    become claimable at all).
  *  - C3 team-referrals ("let me bring the team in") are the model doing what
  *    block [4] TELLS it to do — the fix for an unlicensed C3 is to MAKE it
  *    true (escalate), never to regenerate the model away from escalating.
@@ -68,25 +70,53 @@ const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
   { cls: 'C4', re: /\bnoted\s+for\s+(?:next\s+time|your\s+next\s+(?:stay|visit|trip))\b/i },
 ];
 
-/** Tool name → claim classes a SUCCESSFUL run licenses. First registration
- * (CH-09): remember_fact → C4 and ONLY C4 — a memory save must never
+/**
+ * Tool name → claim classes a SUCCESSFUL run licenses.
+ *
+ * remember_fact → C4 and ONLY C4 (CH-09) — a memory save must never
  * cross-license "the team has been informed". The price tools still back no
- * promise phrase.
- * TODO(CH-13): register create_staff_task → C1+C2 (scenario 3 blesses "on
- * their way" after a real task). TODO(CH-14): escalate_to_human → C3. */
+ * promise phrase, and get_booking is deliberately registered in NO class
+ * (CH-11 D2: C1's regex packs `confirmed` in with `informed`, so registering
+ * it would license "the team has been informed" off a booking lookup).
+ *
+ * create_staff_task → C1+C2 (CH-13a). Scenario 3 blesses "two fresh towels are
+ * on their way" after a real task, which is C2, and "the team has been
+ * informed", which is C1. The licence is safe ONLY because the tool's `ok`
+ * answers "did a human GET this?" and not "did a row get inserted?" — an
+ * undelivered card returns ok:false NOT_NOTIFIED, and `covered()` below counts
+ * successful runs only. That is the whole mechanism: no framework change, and
+ * CH-12's blocker #5 cannot recur here by construction.
+ *
+ * TODO(CH-14): escalate_to_human → C3.
+ */
 export const TOOL_CLAIMS: ReadonlyMap<string, ReadonlySet<ClaimClass>> = new Map([
   ['remember_fact', new Set<ClaimClass>(['C4'])],
+  ['create_staff_task', new Set<ClaimClass>(['C1', 'C2'])],
 ]);
 
-/** sender:'system' context-row kinds → the classes they license (§6.5 #2's
- * second evidence channel). TODO(CH-13): task_done + sla_nudge → C1.
+/**
+ * sender:'system' context-row kinds → the classes they license (§6.5 #2's
+ * second evidence channel — how OUT-OF-TURN events become claimable).
+ *
  * fact_saved (CH-09 audit): the worker writes it on a winning-claim save so
  * the NEXT turn's truthful "yes, I've noted it" confirmation stays licensed —
  * the evidence window (since the guest's previous message) gives it exactly
- * one turn of life, which is the honest decay. */
+ * one turn of life, which is the honest decay.
+ *
+ * task_done + sla_nudge (CH-13a) are C1 and NOT C2, deliberately:
+ *  - `task_done` means a human FINISHED. "It's sorted" is true; "someone is on
+ *    their way" is now false — they have been and gone.
+ *  - `sla_nudge` means we chased someone. "I've nudged housekeeping" is true —
+ *    it is scenario 3's exact line, and this row is the only thing that
+ *    licenses it. But a nudge puts NOBODY in motion, so C2 would be a lie.
+ * Same reasoning as ops_escalation → C3 only: an ops ping does not put
+ * housekeeping in motion either.
+ */
 export const CONTEXT_KIND_CLAIMS: Readonly<Record<string, readonly ClaimClass[]>> = {
   ops_escalation: ['C3'],
   fact_saved: ['C4'],
+  task_done: ['C1'],
+  sla_nudge: ['C1'],
 };
 
 /** Collapses claimable context-row kinds into the licensed class set. */

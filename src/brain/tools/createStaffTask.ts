@@ -202,7 +202,7 @@ async function raise(
     now: tasks.now,
   });
 
-  const notified = await tasks.notify(task);
+  const notified = await tasks.notify(task, tasks.guestFirstName);
   if (!notified.delivered) {
     // The task is real; the promise is not. ok:false is what stops guardrail 2
     // licensing C1/C2 — see the header.
