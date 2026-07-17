@@ -49,12 +49,29 @@ export type StaffTemplateKey = 'task_card' | 'escalation_card' | 'digest' | 'dra
 export type TemplateKey = ScheduledKind | StaffTemplateKey;
 
 /**
+ * STAFF-facing params (CH-13a). Everything Meta and the money rule demand —
+ * but a house name is LEGAL here.
+ *
+ * 🚨 TWO AUDIENCES, TWO CONTRACTS. This split exists because the old single
+ * `param` refused "Apartment 06" everywhere, which would have blocked the task
+ * card — and the fix is emphatically NOT to weaken the guard, because the same
+ * schema protects guests. `templates.ts` used to carry a TODO(CH-13) saying
+ * exactly this, and it was right:
+ *
+ *   staff card  → the physical door housekeeping must walk to. A house name is
+ *                 the POINT (OQ-19: eZee's assignment IS the door, read fresh
+ *                 from BKG-03 at task time — never the mirror's stale label).
+ *   guest body  → `param` below, which adds the house-name ban. Unchanged.
+ *
+ * Everything else is shared and stays shared, because it is about Meta's wire
+ * format and this project's money rule, neither of which cares who is reading:
+ *
  * Meta forbids newlines, tabs and runs of 4+ spaces INSIDE a parameter value
  * (the body may contain newlines; a {{n}} substitution may not). A param that
  * breaks this is rejected at send time with a 132000-class error, so we refuse
  * it here instead — where a test can see it.
  */
-const param = z
+const staffParam = z
   .string()
   .min(1)
   .max(200)
@@ -66,31 +83,35 @@ const param = z
   // no §6.5 guardrail behind it. A guest name of "₹5,000" would otherwise render
   // a rupee figure straight onto a guest's screen.
   .refine((v) => !/₹|\b(?:INR|Rs\.?)\s*\d/i.test(v), 'template params may not contain a ₹ figure')
-  // Enforced in the SLOT and not just the sentence. The bodies are checked for
-  // house names by a test, but a house can only ever reach a guest through a
-  // PARAM — and `villaType` is free text from eZee's back office, so "Nistula
-  // Villa B1" must not sail through onto a guest's screen.
-  //
-  // 🚨 TODO(CH-13) — THIS GUARD WILL BLOCK YOUR TASK CARD, AND THAT IS THE POINT.
-  // `STAFF_TEMPLATES.task_card` uses `villa: param`, so this refine REJECTS
-  // "Apartment 06" there too — and since OQ-19's 2026-07-16 answer the staff card
-  // MAY legitimately name the house (from a fresh BKG-03 read; it is the physical
-  // door housekeeping must walk to). Do NOT weaken `param` to let it through:
-  // that would re-open the guest-facing hole this exists to close. Give the STAFF
-  // slot its own schema — the two audiences are different contracts, which is the
-  // whole lesson of this codebase.
-  //
-  // Guard by the CONTRACT, not a shape enumeration: a villa TYPE is a bare word
-  // ("Nistula Apartment", "Nistula Villa") — a HOUSE is that word followed by a
-  // number, optionally via a letter ("Apartment 06", "Apartment 11", "Villa B3").
-  // The earlier `0?\d|[BC]\d` enumeration missed "Apartment 11" (a REAL house)
-  // because 0? matched empty and the trailing digit broke \b — the exact "guard
-  // by a list, not the contract" failure class this project keeps hitting.
-  .refine(
-    (v) => !/\b(?:Apartment|Villa)\s*[A-Za-z]?\d/i.test(v) && !/\bSiolim 4BHK\b/i.test(v),
-    'template params may not name a physical house (OQ-19 — eZee only guessed it)',
-  )
   .refine((v) => !/https?:\/\//i.test(v), 'template params may not carry a URL');
+
+/**
+ * Guest-facing params. Everything `staffParam` refuses, PLUS the house-name ban.
+ *
+ * Enforced in the SLOT and not just the sentence. The bodies are checked for
+ * house names by a test, but a house can only ever reach a guest through a
+ * PARAM — and `villaType` is free text from eZee's back office, so "Nistula
+ * Villa B1" must not sail through onto a guest's screen.
+ *
+ * WHY the ban survives OQ-19's answer (CH-13a — the reason changed, the rule
+ * did not): naming a house to a GUEST is no longer *contradictory* — the
+ * website abolished house-choice, so eZee's pick is the real door — but it is
+ * still gated on **OQ-15** (may we promise a specific house before arrival at
+ * all?) and on staleness (an assignment can move before the guest arrives).
+ * `stayView.TRUST_EZEE_ROOM_ASSIGNMENT` stays false for exactly that reason.
+ * Staff routing is a different predicate and uses `staffParam` above.
+ *
+ * Guard by the CONTRACT, not a shape enumeration: a villa TYPE is a bare word
+ * ("Nistula Apartment", "Nistula Villa") — a HOUSE is that word followed by a
+ * number, optionally via a letter ("Apartment 06", "Apartment 11", "Villa B3").
+ * The earlier `0?\d|[BC]\d` enumeration missed "Apartment 11" (a REAL house)
+ * because 0? matched empty and the trailing digit broke \b — the exact "guard
+ * by a list, not the contract" failure class this project keeps hitting.
+ */
+const param = staffParam.refine(
+  (v) => !/\b(?:Apartment|Villa)\s*[A-Za-z]?\d/i.test(v) && !/\bSiolim 4BHK\b/i.test(v),
+  'template params may not name a physical house (guest-facing: OQ-15)',
+);
 
 export interface TemplateDef {
   /** The name submitted to Meta. Versioned: a body change is a NEW template. */
@@ -195,26 +216,48 @@ export const LIFECYCLE_TEMPLATES: Record<ScheduledKind, TemplateDef> = {
 /* ── staff-facing (§5.3: the window rule binds staff numbers too) ─────────── */
 
 /**
- * Defined now, wired by CH-13/14/16. A task card or digest sent to a staff
- * number whose own 24h window is shut is business-initiated exactly like a
- * guest send, and Meta treats it identically — so it needs an approved template
- * or it fails with 131047.
+ * A task card or digest sent to a staff number whose own 24h window is shut is
+ * business-initiated exactly like a guest send, and Meta treats it identically
+ * — so it needs an approved template or it fails with 131047.
  *
- * TODO(CH-13): the `villa` param may NOT be filled from
- * bookings_mirror.physical_room_label — but the REASON inverted on 2026-07-16 and
- * the old one is dead. It is NOT "eZee's guess": the website abolished
- * house-choice, so eZee's assignment IS the physical door and CH-13's routing is
- * UNBLOCKED. This label is wrong because it is a SNAPSHOT, frozen at CH-11's
- * 14 Jul reconcile (only BKG-03 carries a room; the poller never does). Fill it
- * from a FRESH BKG-03 tran.RoomID read at task time. See CLAUDE.md §OQ-19.
+ * `task_card` is WIRED (CH-13a, staff/notifier.ts). The other three are still
+ * defined-not-wired, by CH-14/16.
+ *
+ * ⚠️ NOTE FOR CH-14/16, since CH-13a split the schemas and did not presume on
+ * your slots: `escalation_card`, `digest` and `draft_card` still use the
+ * GUEST-facing `param` for every field, which bans house names. That is
+ * probably wrong for at least `escalation_card.detail` — it carries the guest's
+ * own words to a human, and a guest who writes "the AC in Apartment 09 is weak"
+ * would make the card unsendable, so the escalation would go undelivered and
+ * guardrail 2 would then (correctly) refuse to tell the guest a human is
+ * coming. Decide it slot by slot, as this file now does: `staffParam` where a
+ * human is reading, `param` where the value is bound for a guest.
  */
 export const STAFF_TEMPLATES: Record<StaffTemplateKey, TemplateDef> = {
   task_card: def({
-    name: 'nst_task_card',
+    name: 'nst_task_card_v1',
     language: 'en',
     category: 'utility',
     order: ['shortId', 'villa', 'guestName', 'summary'],
-    schema: z.object({ shortId: param, villa: param, guestName: param, summary: param }),
+    // TWO SOURCES, TWO CONTRACTS — the split that matters on this card:
+    //  - `villa` is OUR verified fact, resolved server-side from a fresh BKG-03
+    //    read (staff/villaRoute.ts). A house name is the entire point: it is
+    //    the door housekeeping walks to. → staffParam.
+    //  - `summary` and `guestName` are SOMEBODY ELSE'S claim — the model
+    //    authored the summary and its likeliest source for a house is the
+    //    guest's own guess ("I'm in Apartment 09"), while the profile name is
+    //    attacker-chosen. A house there is an unverified claim COMPETING with
+    //    the slot we resolved, and a card reading "Apartment 06 · Rahul · towels
+    //    for Apartment 09" is worse than useless — it is two doors. → param.
+    // create_staff_task screens the summary first, so this is the backstop: if
+    // it ever regressed, the send fails cleanly as notify_failed and licenses
+    // no promise, rather than sending housekeeping somewhere on a guess.
+    schema: z.object({
+      shortId: staffParam,
+      villa: staffParam,
+      guestName: param,
+      summary: param,
+    }),
     render: (p) =>
       `NISTULA TASK #${p.shortId}\n${p.villa} · ${p.guestName} · ${p.summary}\nReply DONE ${p.shortId} when finished.`,
   }),
