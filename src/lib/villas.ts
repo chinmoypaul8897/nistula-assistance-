@@ -177,6 +177,29 @@ export function getVillaById(villaId: string): Villa | undefined {
   return VILLAS.find((v) => v.villaId === villaId);
 }
 
+/**
+ * Does this text NAME a physical house, as opposed to a villa type? (CH-13a.)
+ *
+ * ONE definition, because two would drift and this predicate now guards two
+ * different doors: the guest-facing template `param` (a house may not reach a
+ * guest — OQ-15) and `create_staff_task`'s summary screen (an unverified house
+ * may not compete with the door we resolved from eZee). They ask the same
+ * question and must never answer it differently.
+ *
+ * Guard by the CONTRACT, not a shape enumeration: a villa TYPE is a bare word
+ * ("Nistula Apartment", "Nistula Villa") — a HOUSE is that word followed by a
+ * number, optionally via a letter ("Apartment 06", "Apartment 11", "Villa B3").
+ * An earlier `0?\d|[BC]\d` enumeration missed "Apartment 11", a REAL house,
+ * because 0? matched empty and the trailing digit broke \b.
+ *
+ * NOT to be confused with stayGuards.scanUnitAssertions, which asks a different
+ * question — "is the model BINDING a house to this guest?" — and deliberately
+ * lets a bare mention through, because naming a house is how we sell.
+ */
+export function namesPhysicalHouse(text: string): boolean {
+  return /\b(?:Apartment|Villa)\s*[A-Za-z]?\d/i.test(text) || /\bSiolim 4BHK\b/i.test(text);
+}
+
 /** The canonical booking link to share (§5.1) — never build a booking ourselves. */
 export function bookingUrl(websiteBaseUrl: string, villaId: string): string {
   return `${websiteBaseUrl.replace(/\/+$/, '')}/villas/${villaId}`;

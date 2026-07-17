@@ -26,7 +26,13 @@ import { PHRASEBOOK, type SystemBlock } from './prompt.js';
 import { liveStays, needsHuman, type StayView } from './stayView.js';
 import { createHitRecorder } from './telemetry.js';
 import type { DegradedTracker } from './tools/degraded.js';
-import type { ToolContext, ToolRegistry, ToolRun } from './tools/registry.js';
+import type {
+  EzeeDoorReader,
+  ToolContext,
+  ToolRegistry,
+  ToolRun,
+  ToolTaskContext,
+} from './tools/registry.js';
 import type { WebsiteClient } from './tools/websiteApi.js';
 
 // §6.4 max 5 rounds per loop. A guardrail-1 violation regenerates once, which
@@ -61,6 +67,18 @@ export interface TurnDeps {
   knowledge: LoadedKnowledge;
   nightStart: string;
   nightEnd: string;
+  /**
+   * CH-13a. Absent ⇒ `create_staff_task` has no context and refuses, so the
+   * assistant simply has no hands (its state before this chunk). Grouped as one
+   * optional rather than three so it cannot be half-wired: a `notify` without an
+   * `assign` would silently route every card nowhere.
+   */
+  tasks?: {
+    /** A FRESH BKG-03 door read (staff/villaRoute.ts). */
+    resolveDoor: EzeeDoorReader;
+    assign: ToolTaskContext['assign'];
+    notify: ToolTaskContext['notify'];
+  };
 }
 
 export interface TurnResult {
@@ -197,6 +215,33 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
         linkedReference: null,
       },
     },
+    // CH-13a: the third instance of the same pattern, shared across BOTH loops
+    // for the same reason — a guardrail regenerate re-runs the tool loop, and
+    // without the shared `created` latch the model would raise a SECOND task
+    // (and buzz a housekeeper twice) for one ask.
+    //
+    // Absent when the chunk is unwired (deps.tasks undefined) — the model then
+    // simply has no hands, exactly as it had none before CH-13a, and block [4]
+    // still forbids claiming otherwise.
+    ...(deps.tasks === undefined
+      ? {}
+      : {
+          tasks: {
+            db: deps.db,
+            conversationId,
+            guestId: args.conversation.guestId,
+            guestFirstName: args.guestName ?? null,
+            stays: args.stays ?? [],
+            // The same DB clock as `booking.today` — the stage gate and block
+            // [6]'s stage line must never disagree inside one turn.
+            today: istCalendarDay(dbNow),
+            now: dbNow,
+            ezee: deps.tasks.resolveDoor,
+            assign: deps.tasks.assign,
+            notify: deps.tasks.notify,
+            created: { count: 0, shortIds: [] },
+          },
+        }),
   };
 
   // ONE wall-clock budget for the whole turn (first loop + any regenerate loop)

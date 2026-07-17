@@ -9,13 +9,20 @@
 import { z } from 'zod';
 import type { Db } from '../../db/client.js';
 import type { AlertLogger } from '../../ops/alerts.js';
+import type { Task, TaskKind } from '../../db/tasks.js';
+import type { DoorResolution } from '../../staff/villaRoute.js';
 import type { StayView } from '../stayView.js';
 import type { WebsiteClient } from './websiteApi.js';
 
 /** Friendly, model-facing error enum (§6.4). Kept small and stable.
  * REFUSED (CH-09): a screened-out remember_fact save — distinct from INVALID
  * so telemetry can count poisoning attempts, and ok:false by design so a
- * refused save can never license a memory claim (guardrail 2 C4). */
+ * refused save can never license a memory claim (guardrail 2 C4).
+ * NOT_NOTIFIED (CH-13a): a staff task was RAISED but its card reached nobody.
+ * A distinct code because the outcome is genuinely mixed and the model must
+ * act on the difference — the work is recorded, ops is paged, and yet no
+ * promise may be made. ok:false is what stops guardrail 2 licensing C1/C2:
+ * "housekeeping is on their way" claims a PERSON IS MOVING, and none is. */
 export type ToolErrorCode =
   | 'INVALID'
   | 'UNKNOWN_VILLA'
@@ -23,7 +30,8 @@ export type ToolErrorCode =
   | 'UNAVAILABLE'
   | 'UPSTREAM_DOWN'
   | 'UNKNOWN_TOOL'
-  | 'REFUSED';
+  | 'REFUSED'
+  | 'NOT_NOTIFIED';
 
 export type ToolResult =
   | { ok: true; data: unknown; note?: 'MIN_NIGHTS' }
@@ -109,6 +117,64 @@ export interface ToolBookingContext {
   };
 }
 
+/**
+ * Per-TURN task identity (CH-13a) — the third instance of the same pattern.
+ *
+ * Unlike memory/booking this group carries COLLABORATORS as well as data,
+ * because raising a task is the one tool whose result depends on reaching the
+ * outside world: guardrail 2 licenses "two towels are on their way" only when
+ * a card actually reached a human, so the notifier's verdict IS the tool's
+ * `ok`. The alternative — returning ok:true on the insert and letting the
+ * worker discover the delivery later — is precisely CH-12's blocker #5.
+ */
+export interface ToolTaskContext {
+  db: Db;
+  conversationId: string;
+  guestId: string;
+  /** For the card. Sanitised at render, not here. */
+  guestFirstName: string | null;
+  /** This guest's stays, already projected (the worker's single read) — the
+   * stage gate and the reservation number for the door read both come from
+   * here, never from a model argument. */
+  stays: readonly StayView[];
+  /** Today's IST calendar day from the DB clock — the SAME clock block [6]
+   * prints and the stage derives from, so the gate and the prompt can never
+   * disagree within one turn. */
+  today: string;
+  /** The DB clock instant — sla_deadline derives from it. Never new Date(). */
+  now: Date;
+  /** Absent ⇒ no fresh door read is possible, and every card routes to the
+   * frontdesk lead. Deliberately survivable: eZee being down must never stop a
+   * guest's request being logged. */
+  ezee: EzeeDoorReader | null;
+  /** The §8 roster ladder, injected as a function so the registry does not
+   * depend on config or the roster module. */
+  assign: (kind: TaskKind, villa: string | null) => TaskAssignment | null;
+  /** Sends the card and reports whether a human actually got it. The tool's
+   * `ok` is this verdict — see ToolTaskContext's header. */
+  notify: (task: Task) => Promise<{ delivered: boolean }>;
+  /**
+   * Mutable per-turn latch, exactly like `memory.saves`. The tool loop RE-RUNS
+   * on a guardrail regenerate, so without this the model raises a SECOND task
+   * (and sends a second card) for the same ask. The near-duplicate guard also
+   * absorbs it, but a latch is cheaper than a DB round trip and does not depend
+   * on two summaries being similar enough to match.
+   */
+  created: { count: number; shortIds: string[] };
+}
+
+/** The one eZee call a tool may make (BKG-03). Narrowed to a function type so
+ * the registry does not depend on the whole eZee client. */
+export type EzeeDoorReader = (reservationNo: string) => Promise<DoorResolution>;
+
+/** What `assign` returns — structurally the staff/roster.ts Assignment, named
+ * here so the registry stays free of that module. */
+export interface TaskAssignment {
+  phone: string;
+  member: { name: string } | null;
+  via: string;
+}
+
 /** Everything a handler needs, injected (no module globals). */
 export interface ToolContext {
   website: WebsiteClient;
@@ -122,6 +188,8 @@ export interface ToolContext {
   memory?: ToolMemoryContext;
   /** Absent ⇒ get_booking cannot answer (contexts with no guest identity). */
   booking?: ToolBookingContext;
+  /** Absent ⇒ create_staff_task cannot raise (contexts with no guest identity). */
+  tasks?: ToolTaskContext;
 }
 
 /** The Anthropic tool spec shape (a JSON-schema input_schema). */

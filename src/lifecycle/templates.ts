@@ -43,6 +43,7 @@
  */
 import { z } from 'zod';
 import type { scheduledMessageKindEnum } from '../db/schema.js';
+import { namesPhysicalHouse } from '../lib/villas.js';
 
 export type ScheduledKind = (typeof scheduledMessageKindEnum.enumValues)[number];
 export type StaffTemplateKey = 'task_card' | 'escalation_card' | 'digest' | 'draft_card';
@@ -101,15 +102,11 @@ const staffParam = z
  * `stayView.TRUST_EZEE_ROOM_ASSIGNMENT` stays false for exactly that reason.
  * Staff routing is a different predicate and uses `staffParam` above.
  *
- * Guard by the CONTRACT, not a shape enumeration: a villa TYPE is a bare word
- * ("Nistula Apartment", "Nistula Villa") — a HOUSE is that word followed by a
- * number, optionally via a letter ("Apartment 06", "Apartment 11", "Villa B3").
- * The earlier `0?\d|[BC]\d` enumeration missed "Apartment 11" (a REAL house)
- * because 0? matched empty and the trailing digit broke \b — the exact "guard
- * by a list, not the contract" failure class this project keeps hitting.
+ * The predicate lives in lib/villas.ts because CH-13a's `create_staff_task`
+ * screens its summary with the SAME question, and two copies would drift.
  */
 const param = staffParam.refine(
-  (v) => !/\b(?:Apartment|Villa)\s*[A-Za-z]?\d/i.test(v) && !/\bSiolim 4BHK\b/i.test(v),
+  (v) => !namesPhysicalHouse(v),
   'template params may not name a physical house (guest-facing: OQ-15)',
 );
 
