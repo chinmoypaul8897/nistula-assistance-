@@ -10,7 +10,7 @@
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import { getOrCreateConversation, upsertGuestByPhone } from '../src/db/repos.js';
@@ -370,5 +370,60 @@ describe('block [5] never sees a hole as work in hand', () => {
     await db.execute(sql`UPDATE tasks SET status = 'notify_failed' WHERE id = ${hole.id}`);
     const live = await getLiveTasksForGuest(db, guestId);
     expect(live.map((t) => t.shortId)).toEqual([ok.shortId]);
+  });
+});
+
+describe('🚨 CH-13a · the DONE transaction rolls back as one (real Postgres)', () => {
+  // Forced with a real trigger inside the real transaction rather than a mocked
+  // tx: the thing under test IS Postgres's rollback, so faking it away would
+  // leave the same hole the comment above closeTask says was reachable.
+  beforeEach(async () => {
+    await db.execute(sql`
+      CREATE OR REPLACE FUNCTION test_crash_on_evidence() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'simulated process death'; END;
+      $$ LANGUAGE plpgsql;`);
+    await db.execute(sql`
+      CREATE TRIGGER test_crash BEFORE INSERT ON messages FOR EACH ROW
+      WHEN (NEW.body LIKE 'task closed:%') EXECUTE FUNCTION test_crash_on_evidence();`);
+  });
+  afterEach(async () => {
+    await db.execute(sql`DROP TRIGGER IF EXISTS test_crash ON messages`);
+    await db.execute(sql`DROP FUNCTION IF EXISTS test_crash_on_evidence()`);
+  });
+
+  it('a death between the claim and the evidence leaves the task OPEN for the retry', async () => {
+    // The state the single transaction exists to make unreachable: task `done`,
+    // NO task_done row, guest never told — and the pg-boss retry finds the
+    // guarded UPDATE already lost, reports "already closed" and stops. A
+    // housekeeper delivered the towels and the system forgot. Zero evidence
+    // rows was reachable, not "exactly one".
+    const task = await seedTask();
+    await expect(
+      handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` }),
+    ).rejects.toThrow();
+
+    // The claim rolled back WITH the evidence, so the work is still visibly
+    // owed and a retry can redo both.
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('open');
+    expect((await findTaskByShortId(db, task.shortId))?.closedBy).toBeNull();
+    expect(sent.find((s) => s.to === GUEST)).toBeUndefined();
+  });
+
+  it('and the retry then closes it properly once the fault clears', async () => {
+    const task = await seedTask();
+    await expect(
+      handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` }),
+    ).rejects.toThrow();
+    await db.execute(sql`DROP TRIGGER test_crash ON messages`);
+
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('done');
+    expect(sent.find((s) => s.to === GUEST)?.body).toContain('2 extra towels');
+    const rows = [
+      ...(await db.execute(
+        sql`SELECT raw->>'contextKind' AS kind FROM messages WHERE conversation_id = ${conversationId} AND sender = 'system'`,
+      )),
+    ];
+    expect(rows).toEqual([{ kind: 'task_done' }]);
   });
 });

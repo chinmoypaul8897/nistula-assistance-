@@ -495,3 +495,35 @@ describe('similar — "near enough" (§6.4)', () => {
     expect(similar(a, b)).toBe(expected);
   });
 });
+
+describe('🚨 CH-13a · checkout morning routes off the stay they are IN (real Postgres)', () => {
+  it('names the house of the CURRENT stay, not the next booking', async () => {
+    // THE BLOCKER. `currentStay` was hand-rolled as `today < checkOut` while
+    // deriveStage — the gate that had already said inhouse — uses `<=`, and
+    // stayView.ts states the contract outright: "Check-out day still counts as
+    // in-house: they are in the villa until they go." So on checkout morning
+    // this found nothing, fell through to `checkIn > today`, and returned the
+    // guest's NEXT booking: the door was read against the AUGUST reservation
+    // and the card named a house the guest is not in — on one of the likeliest
+    // mornings to ask for anything (late checkout, luggage, a last clean).
+    //
+    // The mock answers per-reservation so the assertion is the OUTCOME a
+    // housekeeper reads — the house printed on the card — not which arguments
+    // some function received.
+    const today = { ...stay({ checkOut: TODAY, reservationNo: '972' }) };
+    const next = stay({ reservationNo: '999', checkIn: '2026-08-10', checkOut: '2026-08-14' });
+    const h = harness({
+      stays: [today, next],
+      ezee: vi.fn(async (reservationNo: string) =>
+        reservationNo === '972'
+          ? { resolved: true as const, label: 'Apartment 06', roomId: 'r6' }
+          : { resolved: true as const, label: 'Apartment 11', roomId: 'r11' },
+      ) as ToolTaskContext['ezee'],
+    });
+
+    expect(await run(h.ctx)).toMatchObject({ ok: true });
+    const [row] = await rows();
+    expect(row?.villaLabel).toBe('Apartment 06');
+    expect(row?.bookingId).toBe(bookingId);
+  });
+});
