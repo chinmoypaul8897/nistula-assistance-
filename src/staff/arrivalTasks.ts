@@ -27,11 +27,13 @@
 import { getMirrorByReservationNo } from '../db/bookings.js';
 import { FACTS_PER_GUEST_CAP, getActiveGuestFacts, getGuestByPhone } from '../db/guestMemory.js';
 import {
+  cancelLiveTaskByRequestKey,
   findTaskByRequestKey,
   insertTask,
   updateOpenTaskDeadline,
   type Task,
 } from '../db/tasks.js';
+import type { DbLike } from '../db/client.js';
 import type { Db } from '../db/client.js';
 import type { AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
@@ -88,7 +90,7 @@ export async function maybeCreateArrivalVerifyTask(
   ).filter((f) => f.kind === 'past_issue');
   if (pastIssues.length === 0) return skip(deps, reservationNo, 'no_past_issue');
 
-  const requestKey = `autotask:${row.ezeeReservationNo}:arrival_verify`;
+  const requestKey = arrivalTaskRequestKey(row.ezeeReservationNo);
   const existing = await findTaskByRequestKey(deps.db, requestKey);
   if (existing !== null) {
     // Already raised — but a booking.modified may have MOVED check-in since,
@@ -162,6 +164,30 @@ export async function maybeCreateArrivalVerifyTask(
 function skip(deps: ArrivalTaskDeps, reservationNo: string, reason: string): ArrivalTaskOutcome {
   deps.log.info?.({ reservationNo, reason }, '[arrival-task] no task');
   return { created: false, reason };
+}
+
+/** The deterministic idempotency key for a booking's arrival verify-task —
+ * ONE per reservation, shared by the create path and the cancel cleanup. */
+export function arrivalTaskRequestKey(reservationNo: string): string {
+  return `autotask:${reservationNo}:arrival_verify`;
+}
+
+/**
+ * Revoke a booking's arrival verify-task on cancel (round 4). A cancelled
+ * booking is business-terminal — the room will not be prepared for a guest who
+ * is not coming — so its verify-task must not linger open and nudge staff near
+ * the now-defunct check-in, exactly as the lifecycle scheduler revokes its
+ * pending messages. Idempotent and DB-only (no roster needed), so it runs on
+ * every cancel. Recorded limitation: a cancel is terminal for the task, so a
+ * later re-confirm of the SAME reservation number (rare — eZee issues a new
+ * number for a rebooking) will not re-raise it; the lifecycle re-arm is the
+ * safety net, and CH-14 can revisit if the front desk needs the card back.
+ */
+export async function cancelArrivalVerifyTask(
+  db: DbLike,
+  reservationNo: string,
+): Promise<Task | null> {
+  return cancelLiveTaskByRequestKey(db, arrivalTaskRequestKey(reservationNo));
 }
 
 /**

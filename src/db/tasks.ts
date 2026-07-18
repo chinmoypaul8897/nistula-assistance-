@@ -120,6 +120,27 @@ export async function findTaskByRequestKey(db: DbLike, requestKey: string): Prom
 }
 
 /**
+ * Cancel a LIVE task by its request key (CH-13b round 4). Used when the thing
+ * that spawned it is revoked — a booking.cancelled must kill its arrival
+ * verify-task, or the nudger later buzzes staff to prepare a room for a guest
+ * who is no longer arriving (the lifecycle scheduler revokes its messages on
+ * cancel; the task must mirror that). Guarded on the live statuses so a `done`
+ * task (the work really happened) or an already-cancelled one is untouched;
+ * returns the row it changed, or null.
+ */
+export async function cancelLiveTaskByRequestKey(
+  db: DbLike,
+  requestKey: string,
+): Promise<Task | null> {
+  const [row] = await db
+    .update(tasks)
+    .set({ status: 'cancelled' })
+    .where(and(eq(tasks.requestKey, requestKey), inArray(tasks.status, [...LIVE_TASK_STATUSES])))
+    .returning();
+  return row ?? null;
+}
+
+/**
  * Re-anchor an OPEN task's SLA deadline (CH-13b round 2). The arrival
  * verify-task's deadline is check-in-derived, and a booking.modified can move
  * check-in — a frozen deadline would nudge against the OLD date (axis-2: a

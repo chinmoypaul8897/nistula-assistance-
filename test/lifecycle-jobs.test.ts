@@ -196,3 +196,42 @@ describe('🚨 CH-13b · the arrival task rides processBookingJob on create AND 
     expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(1);
   });
 });
+
+describe('🚨 CH-13b round 4 — a cancel REVOKES the arrival verify-task', () => {
+  beforeEach(async () => {
+    const guest = await upsertGuestByPhone(db, '+917700900501', 'Rahul Mehta');
+    await insertGuestFactGuarded(db, {
+      guestId: guest.id,
+      kind: 'past_issue',
+      content: 'AC weak in the master last time',
+      sourceMessageId: null,
+    });
+  });
+
+  it('an open arrival task is cancelled when the booking is cancelled — no orphan nudge', async () => {
+    await processBookingJob(deps(), arrivalDeps(), 'created', '953');
+    expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(1);
+    // The guest cancels.
+    await processBookingJob(deps(), arrivalDeps(), 'cancelled', '953');
+    const [row] = [...(await db.execute(sql`SELECT status FROM tasks`))] as { status: string }[];
+    expect(row?.status).toBe('cancelled');
+    // Gone from the live set the nudger reads — no spurious "verify before arrival".
+    expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(0);
+  });
+
+  it('a DONE arrival task is NOT reopened by a later cancel', async () => {
+    await processBookingJob(deps(), arrivalDeps(), 'created', '953');
+    await db.execute(sql`UPDATE tasks SET status = 'done'`);
+    await processBookingJob(deps(), arrivalDeps(), 'cancelled', '953');
+    const [row] = [...(await db.execute(sql`SELECT status FROM tasks`))] as { status: string }[];
+    expect(row?.status).toBe('done'); // the work happened; a cancel does not undo it
+  });
+
+  it('cancelling a booking with no arrival task is a harmless no-op', async () => {
+    // No past_issue guest here — remove the fact so no task is raised.
+    await db.execute(sql`DELETE FROM guest_facts`);
+    await processBookingJob(deps(), arrivalDeps(), 'created', '953');
+    expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(0);
+    await expect(processBookingJob(deps(), arrivalDeps(), 'cancelled', '953')).resolves.toBeUndefined();
+  });
+});

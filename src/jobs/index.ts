@@ -42,7 +42,11 @@ import { runSender } from '../lifecycle/sender.js';
 import { istCalendarDay, nowIST } from '../lib/time.js';
 import { summarizeError } from '../lib/logger.js';
 import { buildStaffTaskDeps } from '../staff/index.js';
-import { maybeCreateArrivalVerifyTask, type ArrivalTaskDeps } from '../staff/arrivalTasks.js';
+import {
+  cancelArrivalVerifyTask,
+  maybeCreateArrivalVerifyTask,
+  type ArrivalTaskDeps,
+} from '../staff/arrivalTasks.js';
 import { handleStaffCommand } from '../staff/commands.js';
 import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
@@ -71,9 +75,10 @@ export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', 
 /**
  * One booking.* job's whole effect, in ONE place so it is testable end to end
  * (D9: one queue = one consumer). The lifecycle scheduling and CH-13b's arrival
- * verify-task are INDEPENDENT: the task runs on create OR modify (a hold that
- * later confirms arrives as a MODIFY, and would otherwise miss its task while
- * its lifecycle scheduled), never on cancel, and only when staff is wired.
+ * verify-task are INDEPENDENT: the task is RAISED on create OR modify (a hold
+ * that later confirms arrives as a MODIFY, and would otherwise miss its task
+ * while its lifecycle scheduled) when staff is wired, and REVOKED on cancel
+ * (round 4 — a lingering task nudges staff for a guest who is not coming).
  */
 export async function processBookingJob(
   scheduler: SchedulerDeps,
@@ -82,7 +87,13 @@ export async function processBookingJob(
   reservationNo: string,
 ): Promise<void> {
   await handleBookingEvent(scheduler, kind, reservationNo);
-  if (kind !== 'cancelled' && arrival !== null) {
+  if (kind === 'cancelled') {
+    // A cancel is business-terminal: revoke the arrival verify-task too, or it
+    // nudges staff to prepare a room for a guest who is not coming (round 4).
+    // scheduler.db, not arrival — cleanup must run even if the roster was
+    // unwired since the task was raised.
+    await cancelArrivalVerifyTask(scheduler.db, reservationNo);
+  } else if (arrival !== null) {
     await maybeCreateArrivalVerifyTask(arrival, reservationNo);
   }
 }
