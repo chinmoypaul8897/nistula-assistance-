@@ -219,6 +219,28 @@ describe('🚨 CH-13b round 4 — a cancel REVOKES the arrival verify-task', () 
     expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(0);
   });
 
+  it('🚨 round 5 — a NO_SHOW revokes the task too (terminal via a MODIFY, not a cancel event)', async () => {
+    // The round-4 fix keyed on kind==='cancelled'; a no_show is equally terminal
+    // but arrives as booking.modified. Guarding by the terminal CONTRACT catches it.
+    await processBookingJob(deps(), arrivalDeps(), 'created', '953');
+    expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(1);
+    await db.execute(sql`UPDATE bookings_mirror SET status = 'no_show' WHERE ezee_reservation_no = '953'`);
+    await processBookingJob(deps(), arrivalDeps(), 'modified', '953');
+    const [row] = [...(await db.execute(sql`SELECT status FROM tasks`))] as { status: string }[];
+    expect(row?.status).toBe('cancelled');
+    expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(0);
+  });
+
+  it('a CHECKED_OUT stay does NOT revoke the task — a stay that HAPPENED, closed by a human DONE', async () => {
+    // bookingState('checked_out') is 'ok', not terminal: the guest came, the
+    // verify-task is real work a human closes, exactly like the happy path.
+    await processBookingJob(deps(), arrivalDeps(), 'created', '953');
+    await db.execute(sql`UPDATE bookings_mirror SET status = 'checked_out' WHERE ezee_reservation_no = '953'`);
+    await processBookingJob(deps(), arrivalDeps(), 'modified', '953');
+    const [row] = [...(await db.execute(sql`SELECT status FROM tasks`))] as { status: string }[];
+    expect(row?.status).not.toBe('cancelled');
+  });
+
   it('a DONE arrival task is NOT reopened by a later cancel', async () => {
     await processBookingJob(deps(), arrivalDeps(), 'created', '953');
     await db.execute(sql`UPDATE tasks SET status = 'done'`);

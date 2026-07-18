@@ -27,10 +27,11 @@ import {
   type WorkerLogger,
 } from '../brain/worker.js';
 import type { Db } from '../db/client.js';
+import { getMirrorByReservationNo } from '../db/bookings.js';
 import { getMessageBody } from '../db/repos.js';
 import type { EzeeClient } from '../ezee/client.js';
 import { createEzeePoller } from '../ezee/poller.js';
-import type { GateContext } from '../lifecycle/gates.js';
+import { bookingState, type GateContext } from '../lifecycle/gates.js';
 import { runReconcile } from '../lifecycle/reconcile.js';
 import {
   handleBookingEvent,
@@ -75,10 +76,18 @@ export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', 
 /**
  * One booking.* job's whole effect, in ONE place so it is testable end to end
  * (D9: one queue = one consumer). The lifecycle scheduling and CH-13b's arrival
- * verify-task are INDEPENDENT: the task is RAISED on create OR modify (a hold
- * that later confirms arrives as a MODIFY, and would otherwise miss its task
- * while its lifecycle scheduled) when staff is wired, and REVOKED on cancel
- * (round 4 — a lingering task nudges staff for a guest who is not coming).
+ * verify-task are INDEPENDENT: the task is RAISED for a live booking (create OR
+ * modify — a hold that later confirms arrives as a MODIFY, and would otherwise
+ * miss its task while its lifecycle scheduled) when staff is wired, and REVOKED
+ * when the booking goes TERMINAL.
+ *
+ * 🚨 Revocation is guarded by the terminal CONTRACT (bookingState), NOT the
+ * event enum (round 5). Round 4 keyed it on kind==='cancelled' — but a no_show
+ * is equally terminal and reaches us as a booking.MODIFIED (a status diff), so
+ * an enum guard left a no-show's verify-task lingering. bookingState==='terminal'
+ * is exactly {cancelled, no_show} — the two states where the guest is not
+ * coming — while checked_in/checked_out stay 'ok' (a stay that HAPPENED; its
+ * task is closed by a human DONE, not auto-revoked).
  */
 export async function processBookingJob(
   scheduler: SchedulerDeps,
@@ -87,9 +96,14 @@ export async function processBookingJob(
   reservationNo: string,
 ): Promise<void> {
   await handleBookingEvent(scheduler, kind, reservationNo);
-  if (kind === 'cancelled') {
-    // A cancel is business-terminal: revoke the arrival verify-task too, or it
-    // nudges staff to prepare a room for a guest who is not coming (round 4).
+  // Revoke on EITHER signal of "the guest is not coming": a cancel EVENT (always
+  // terminal, robust to a racy mirror read), OR a mirror row that is terminal —
+  // which catches a no_show, terminal but delivered as a booking.MODIFIED. The
+  // enum alone (round 4) missed no_show; the contract alone would miss a cancel
+  // whose tombstone we cannot re-read. Together they are complete.
+  const row = await getMirrorByReservationNo(scheduler.db, reservationNo);
+  const terminal = kind === 'cancelled' || (row !== null && bookingState(row) === 'terminal');
+  if (terminal) {
     // scheduler.db, not arrival — cleanup must run even if the roster was
     // unwired since the task was raised.
     await cancelArrivalVerifyTask(scheduler.db, reservationNo);
