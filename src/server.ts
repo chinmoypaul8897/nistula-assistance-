@@ -19,6 +19,7 @@ import { createEzeeClient } from './ezee/client.js';
 import { getBoss, registerJobs, stopBoss } from './jobs/index.js';
 import { createLogger } from './lib/logger.js';
 import { adminRoutes } from './ops/admin.js';
+import { configureHealth, probeHealth } from './ops/health.js';
 import { createWaClient } from './wa/client.js';
 import { isStaffPhone } from './staff/roster.js';
 import { waWebhookRoutes } from './wa/webhook.js';
@@ -62,14 +63,22 @@ export function buildServer(logStream?: { write: (msg: string) => void }) {
               ok: { type: 'boolean' },
               version: { type: 'string' },
               uptime: { type: 'number' },
+              // CH-17 step 5: internal health, reported not gated — /health stays
+              // 200 while the process serves so a degraded external website can
+              // never trigger a Railway restart loop. The watchdog owns alerting.
+              db: { type: 'boolean' },
+              boss: { type: 'boolean' },
+              pollerAgeMs: { type: ['number', 'null'] },
+              senderAgeMs: { type: ['number', 'null'] },
+              degraded: { type: 'boolean' },
             },
-            required: ['ok', 'version', 'uptime'],
+            required: ['ok', 'version', 'uptime', 'db', 'boss', 'degraded'],
             additionalProperties: false,
           },
         },
       },
     },
-    async () => ({ ok: true, version, uptime: process.uptime() }),
+    async () => ({ ok: true, version, uptime: process.uptime(), ...(await probeHealth()) }),
   );
 
   return app;
@@ -146,6 +155,15 @@ async function main(): Promise<void> {
   // degraded tracker (process-global health), the tool registry.
   const website = createWebsiteClient({ baseUrl: config.websiteBaseUrl, log: app.log });
   const degraded = createDegradedTracker({ log: app.log });
+  // CH-17: wire /health + the watchdog probe to the live internals. Poller/sender
+  // ages are N/A when their feature is off, so dev (poller off) never alarms.
+  configureHealth({
+    db,
+    boss,
+    degraded,
+    pollerEnabled: config.ezeePollerEnabled,
+    senderEnabled: config.lifecycleSendEnabled,
+  });
   const toolRegistry = buildToolRegistry();
   // CH-10 eZee mirror: the client always builds (fetchSingleBooking is a
   // CH-11 dependency); whether the 60s poller mounts is the flag's call —

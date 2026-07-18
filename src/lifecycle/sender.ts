@@ -36,6 +36,7 @@ import { insertCostEvents } from '../db/repos.js';
 import { conversations, guests, scheduledMessages } from '../db/schema.js';
 import { istCalendarDay, nowIST } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
+import { noteHeartbeat } from '../ops/heartbeat.js';
 import type { WaClient } from '../wa/client.js';
 import type { GateContext } from './gates.js';
 import {
@@ -82,6 +83,10 @@ export interface SenderResult {
 /** One tick: send everything due. Never throws — a bad row must not wedge the cron. */
 export async function runSender(deps: SenderDeps): Promise<SenderResult> {
   const result: SenderResult = { attempted: 0, sent: 0, skipped: 0, deferred: 0, failed: 0 };
+  // CH-17: beat BEFORE the disabled check — the signal is "the sender cron is
+  // firing" (the watchdog reads sender last-RUN, not last-send). Only checked
+  // when LIFECYCLE_SEND_ENABLED=1, so a disabled dev sender never false-alarms.
+  noteHeartbeat('sender');
   if (!deps.enabled) {
     deps.log.info({}, '[lifecycle] sender disabled (LIFECYCLE_SEND_ENABLED=0) — nothing sent');
     return result;
