@@ -85,6 +85,14 @@ const seedDraft = (replyType: DraftReplyType, status: DraftStatus) => {
   });
 };
 
+const seedGuardrailHit = (rule: string) =>
+  db.insert(schema.rawEvents).values({
+    source: 'system',
+    eventType: 'guardrail',
+    processed: true,
+    payload: { rule, action: 'blocked' },
+  });
+
 const reportRow = async () =>
   [
     ...(await db.execute(
@@ -99,6 +107,11 @@ describe('runQualityReport', () => {
     await seedDraft('presales', 'edited');
     await seedDraft('instay', 'rejected');
     await seedDraft('instay', 'expired');
+    // Guardrail hits across two rules — the "top guardrail hits" signal.
+    await seedGuardrailHit('money');
+    await seedGuardrailHit('money');
+    await seedGuardrailHit('money');
+    await seedGuardrailHit('window');
 
     const { deps, carded } = mkDeps();
     const run = await runQualityReport(deps);
@@ -113,6 +126,9 @@ describe('runQualityReport', () => {
     expect(summary).toContain('edited 1 (25%)');
     expect(summary).toContain('expired 1');
     expect(summary).toContain('top presales 3');
+    // Step 4's "top guardrail hits" — WHICH rule fires most, not just how many.
+    expect(summary).toContain('guardrail hits 4');
+    expect(summary).toContain('top rules: money 3');
 
     const rows = await reportRow();
     expect(rows).toHaveLength(1);
@@ -120,12 +136,14 @@ describe('runQualityReport', () => {
       total: number;
       byStatus: Record<string, number>;
       byType: Record<string, number>;
+      topGuardrailRules: { rule: string; count: number }[];
     };
     expect(payload.total).toBe(5);
     expect(payload.byStatus.approved).toBe(2);
     expect(payload.byStatus.expired).toBe(1);
     expect(payload.byType.presales).toBe(3);
     expect(payload.byType.instay).toBe(2);
+    expect(payload.topGuardrailRules[0]).toEqual({ rule: 'money', count: 3 });
   });
 
   it('fails quiet on an empty week — no ops message, no report row', async () => {

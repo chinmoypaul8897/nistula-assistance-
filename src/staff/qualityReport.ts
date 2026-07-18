@@ -13,7 +13,12 @@ import { formatDayDisplay, istCalendarDay } from '../lib/time.js';
 import type { Db } from '../db/client.js';
 import { draftStatsSince, type DraftReplyType, type DraftStatus } from '../db/drafts.js';
 import { REPLY_TYPES } from '../config.js';
-import { countGuardrailHitsSince, insertRawEvent } from '../db/repos.js';
+import {
+  countGuardrailHitsSince,
+  insertRawEvent,
+  topGuardrailRulesSince,
+  type GuardrailRuleCount,
+} from '../db/repos.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { capUtf16 } from './digest.js';
@@ -50,6 +55,7 @@ export async function runQualityReport(deps: QualityReportDeps): Promise<Quality
   const since = new Date(now.getTime() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const stats = await draftStatsSince(deps.db, since);
   const guardrailHits = await countGuardrailHitsSince(deps.db, since);
+  const topGuardrailRules = await topGuardrailRulesSince(deps.db, since, 3);
   const totals = aggregate(stats);
 
   const run: QualityReportRun = { total: totals.total, guardrailHits, sent: false };
@@ -74,11 +80,12 @@ export async function runQualityReport(deps: QualityReportDeps): Promise<Quality
       byStatus: totals.byStatus,
       byType: totals.byType,
       guardrailHits,
+      topGuardrailRules,
     },
   });
 
   const day = formatDayDisplay(istCalendarDay(now));
-  const summary = buildReportSummary(totals, guardrailHits);
+  const summary = buildReportSummary(totals, guardrailHits, topGuardrailRules);
   run.sent = await sendToOps(deps, day, summary);
   deps.log.info?.({ total: totals.total, guardrailHits, sent: run.sent }, 'weekly quality report ran');
   return run;
@@ -103,7 +110,11 @@ function aggregate(stats: { replyType: DraftReplyType; status: DraftStatus; coun
 /** A single-line report body (Meta bans newlines in a param). Approval/edit rates
  * are over DECIDED drafts (approved+edited+rejected); expiry is a miss, not a
  * decision, so it is reported as its own count, not folded into the rate. */
-function buildReportSummary(totals: Totals, guardrailHits: number): string {
+function buildReportSummary(
+  totals: Totals,
+  guardrailHits: number,
+  topGuardrailRules: GuardrailRuleCount[],
+): string {
   const s = totals.byStatus;
   const decided = s.approved + s.edited + s.rejected;
   const pct = (n: number): string => (decided > 0 ? ` (${Math.round((n / decided) * 100)}%)` : '');
@@ -118,6 +129,11 @@ function buildReportSummary(totals: Totals, guardrailHits: number): string {
   ];
   if (topType !== null) parts.push(`top ${topType.type} ${topType.count}`);
   parts.push(`guardrail hits ${guardrailHits}`);
+  // Step 4's "top guardrail hits": WHICH rule fires most, so an operator can see
+  // what would break if a type auto-sent, not just how often.
+  if (topGuardrailRules.length > 0) {
+    parts.push(`top rules: ${topGuardrailRules.map((r) => `${r.rule} ${r.count}`).join(', ')}`);
+  }
   return capUtf16(parts.join(' · '), SUMMARY_MAX_UNITS);
 }
 

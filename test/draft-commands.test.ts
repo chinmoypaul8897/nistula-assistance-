@@ -125,6 +125,20 @@ describe('OK', () => {
     expect(await guestReplies()).toHaveLength(0);
     expect((await opsAcks()).some((a) => a.body.toLowerCase().includes('expired'))).toBe(true);
   });
+
+  it('does NOT send onto a thread a human has taken over (§6.7 line 1)', async () => {
+    const draft = await makeDraft();
+    await db.execute(sql`UPDATE conversations SET status = 'human_active' WHERE id = ${conversationId}`);
+    await handleStaffCommand(mkDeps().d, { phone: OPS, body: `OK ${draft.shortId}` });
+
+    // The guest gets NOTHING — the human is holding the thread; the draft is still
+    // recorded as approved and ops is told plainly it was not sent.
+    expect(await guestReplies()).toHaveLength(0);
+    expect((await findDraftByShortId(db, draft.shortId))?.status).toBe('approved');
+    expect((await opsAcks()).some((a) => a.body.toLowerCase().includes('taken this thread over'))).toBe(
+      true,
+    );
+  });
 });
 
 describe('EDIT', () => {

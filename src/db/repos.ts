@@ -138,6 +138,32 @@ export async function countGuardrailHitsSince(db: Db, since: Date): Promise<numb
   return row?.n ?? 0;
 }
 
+export interface GuardrailRuleCount {
+  rule: string;
+  count: number;
+}
+
+/**
+ * The most-fired guardrail RULES since `since` — CH-16's weekly quality report
+ * "top guardrail hits" (plan §8 CH-16 step 4). Each hit's rule lives in the
+ * source='system' event_type='guardrail' row's `payload->>'rule'` (brain/
+ * telemetry.ts); a missing rule folds into 'unknown' so the count still totals.
+ */
+export async function topGuardrailRulesSince(
+  db: Db,
+  since: Date,
+  limit = 3,
+): Promise<GuardrailRuleCount[]> {
+  const ruleExpr = sql<string>`coalesce(${rawEvents.payload}->>'rule', 'unknown')`;
+  return db
+    .select({ rule: ruleExpr, count: sql<number>`count(*)::int` })
+    .from(rawEvents)
+    .where(and(eq(rawEvents.eventType, 'guardrail'), gte(rawEvents.createdAt, since)))
+    .groupBy(ruleExpr)
+    .orderBy(desc(sql`count(*)`))
+    .limit(limit);
+}
+
 // --- CH-03 conversation-cursor repositories --------------------------------
 
 // created_at travels as Postgres TEXT, never a JS Date: timestamptz holds

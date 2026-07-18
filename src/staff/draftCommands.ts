@@ -18,6 +18,7 @@ import {
   type DraftDecision,
 } from '../db/drafts.js';
 import { getConversationTurnContext } from '../db/repos.js';
+import { isHumanActive } from '../brain/policy.js';
 import { scanForLeaks } from '../brain/leakGuards.js';
 import { sanitiseInline } from '../brain/prompt.js';
 import { alertOps } from '../ops/alerts.js';
@@ -104,6 +105,25 @@ async function sendApprovedReply(
       detail: { shortId: draft.shortId },
     });
     await ackOps(deps, opsPhone, `#${draft.shortId} approved, but I could not find the guest thread.`);
+    return;
+  }
+  // 🚨 §6.7 line 1 is absolute: human_active ⇒ the AI is SILENT. A takeover can
+  // land inside the draft's 30-min life (an echo, or a staff `AI OFF`), and this
+  // send goes as sender:'ai' out of turn — exactly the kind of send that rule
+  // exists for, and it is MOST likely on a needsHuman draft (force-drafted on the
+  // very threads humans jump into). SKIP, not defer, matching the DONE close-line
+  // (commands.ts tellGuest): the human is right there and will reply themselves.
+  // The draft is already decided; ops is told plainly it was not sent.
+  if (isHumanActive(ctx.conversation, deps.now())) {
+    deps.log.info?.(
+      { shortId: draft.shortId },
+      'approved draft not sent — a human holds the thread',
+    );
+    await ackOps(
+      deps,
+      opsPhone,
+      `#${draft.shortId} approved, but a human has taken this thread over — not sending. They will reply from the app.`,
+    );
     return;
   }
   if (isEdit) {

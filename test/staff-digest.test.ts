@@ -58,7 +58,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.execute(sql`TRUNCATE tasks, raw_events, messages, conversations, guests CASCADE`);
+  await db.execute(sql`TRUNCATE drafts, tasks, raw_events, messages, conversations, guests CASCADE`);
   const guest = await upsertGuestByPhone(db, GUEST, 'Rahul');
   guestId = guest.id;
   conversationId = (await getOrCreateConversation(db, guest.id)).id;
@@ -194,6 +194,25 @@ describe('the digest to OPS', () => {
     const run = await runMorningDigest(deps());
     expect(run).toMatchObject({ converted: 0, sent: false });
     expect(carded).toHaveLength(0);
+  });
+
+  it('🚨 CH-16: lists overnight expired drafts and does NOT fail-quiet when only drafts lapsed', async () => {
+    // A draft that lapsed overnight and nothing else — the digest must still fire
+    // and name it (plan step 2). updated_at sits inside the overnight window.
+    await db.insert(schema.drafts).values({
+      conversationId,
+      shortId: 'EXPD01',
+      replyType: 'presales',
+      proposedBody: 'x',
+      status: 'expired',
+      createdAt: new Date('2026-07-16T17:30:00Z'),
+      updatedAt: new Date('2026-07-16T18:00:00Z'),
+    });
+    const run = await runMorningDigest(deps());
+    expect(run.expiredDrafts).toBe(1);
+    expect(run.sent).toBe(true); // NOT suppressed by fail-quiet
+    const digest = carded.find((c) => c.key === 'digest');
+    expect(digest?.params.summary).toContain('1 draft(s) expired unapproved');
   });
 
   it('no OPS number configured — converts + cards but sends no digest (dev)', async () => {
