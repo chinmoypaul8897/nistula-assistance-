@@ -76,6 +76,14 @@ const MONTHS = [
   'December',
 ] as const;
 
+/** Bare 24-hour IST clock "HH:mm" — the morning digest's compact timestamp for
+ * an overnight item (CH-14b), e.g. "23:05". */
+export function formatISTClock(instant: Date): string {
+  const p = istParts(instant);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${pad(p.hour)}:${pad(p.minute)}`;
+}
+
 /** IST calendar day as YYYY-MM-DD — the business day for daily cost/lifecycle rollups. */
 export function istCalendarDay(instant: Date): string {
   const p = istParts(instant);

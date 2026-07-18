@@ -3,7 +3,7 @@
  * helper is one statement or an upsert-then-read; business logic lives in the
  * feature modules, never here.
  */
-import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Db, DbLike } from './client.js';
 import { conversations, costEvents, guests, messages, rawEvents } from './schema.js';
 
@@ -122,6 +122,20 @@ export async function updateRawEvent(
   patch: { processed: boolean; error: string | null },
 ): Promise<void> {
   await db.update(rawEvents).set(patch).where(eq(rawEvents.id, id));
+}
+
+/**
+ * How many guardrail hits landed since `since` (CH-14b morning digest). The
+ * telemetry recorder writes each hit as a raw_events row with source='system',
+ * event_type='guardrail' (brain/telemetry.ts) — a count, never the drafts (the
+ * digest is an overnight-health signal for ops, not a body dump).
+ */
+export async function countGuardrailHitsSince(db: Db, since: Date): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(rawEvents)
+    .where(and(eq(rawEvents.eventType, 'guardrail'), gte(rawEvents.createdAt, since)));
+  return row?.n ?? 0;
 }
 
 // --- CH-03 conversation-cursor repositories --------------------------------

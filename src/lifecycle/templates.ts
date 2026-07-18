@@ -303,7 +303,11 @@ export const STAFF_TEMPLATES: Record<StaffTemplateKey, TemplateDef> = {
     language: 'en',
     category: 'utility',
     order: ['day', 'summary'],
-    schema: z.object({ day: param, summary: param }),
+    // Staff-read (goes to OPS): the summary is built from task summaries, which
+    // carry the guest's own words — a ₹ figure, a house, a URL — so staffReadParam
+    // (the escalation-card lesson, CH-14a review). Meta still bans a newline in a
+    // param, so the digest builder keeps `summary` to ONE line.
+    schema: z.object({ day: staffReadParam, summary: staffReadParam }),
     render: (p) => `NISTULA DIGEST — ${p.day}\n${p.summary}`,
   }),
 
