@@ -121,6 +121,75 @@ export async function notifyTask(
   return { delivered: true, usedTemplate: result.usedTemplate };
 }
 
+/** The escalation card's context slot cap. Well inside Meta's 200-char limit;
+ * the tool has already flattened the last-5 lines to one line before this. */
+const DETAIL_MAX = 190;
+/** The authored reason label slot cap. */
+const REASON_MAX = 90;
+
+/**
+ * Sends the ESCALATION card (CH-14a, plan §8 CH-14 step 1) — the model-driven
+ * `escalate_to_human` handover, richer than a task card because a human is about
+ * to take the thread over and needs the context, not just the door.
+ *
+ * 🚨 ONE DELIBERATE DIVERGENCE FROM notifyTask, and it is the escalation
+ * contract: a failed send does NOT flip the task to `notify_failed`. An
+ * escalation's whole job is to reach a human, and unlike a one-shot task the SLA
+ * LADDER exists precisely to keep trying — so the task stays `open` for rung 1
+ * to retry (staff/sla.ts). Marking it terminal here would kill the ladder before
+ * its first rung. Ops is still paged, so an undelivered escalation is never
+ * silent; and the tool returns delivered=false, so guardrail 2 refuses to tell
+ * the guest a human is coming until one actually is (the fallback escalateToOps
+ * ping then fires — worker.ts). `reason`/`detail` are staff-read (a house name
+ * is legal — the guest's own words must reach the human); `guestName` is the
+ * attacker-chosen profile name and stays house-banned.
+ */
+export async function notifyEscalation(
+  deps: NotifierDeps,
+  task: Task,
+  guestFirstName: string | null,
+  reasonLabel: string,
+): Promise<NotifyResult> {
+  if (task.assignedPhone === null) {
+    await alertOps(deps.log, {
+      kind: 'escalation_notify_failed',
+      summary: 'An escalation could not be sent — no frontdesk/ops number is configured',
+      detail: { taskId: task.id, shortId: task.shortId, reason: 'no_assignee' },
+    });
+    return { delivered: false, usedTemplate: false };
+  }
+  const params = {
+    shortId: task.shortId,
+    guestName: sanitiseInline(guestFirstName ?? 'a guest', NAME_MAX) || 'a guest',
+    reason: sanitiseInline(reasonLabel, REASON_MAX) || 'needs a human',
+    detail: sanitiseInline(task.detail ?? '(no recent context)', DETAIL_MAX) || '(no recent context)',
+  };
+  const result = await deps.wa.sendTemplated(
+    task.assignedPhone,
+    { key: 'escalation_card', params },
+    { conversationId: null, sender: 'system' },
+  );
+  if (!result.ok) {
+    // No status flip (see the contract note above): the task stays `open`.
+    await alertOps(deps.log, {
+      kind: 'escalation_notify_failed',
+      summary: 'An escalation card did not reach the front desk — the ladder will retry',
+      detail: {
+        taskId: task.id,
+        shortId: task.shortId,
+        assignedPhone: task.assignedPhone,
+        reason: result.error,
+      },
+    });
+    return { delivered: false, usedTemplate: false };
+  }
+  deps.log.info?.(
+    { taskId: task.id, shortId: task.shortId, usedTemplate: result.usedTemplate },
+    'escalation card sent',
+  );
+  return { delivered: true, usedTemplate: result.usedTemplate };
+}
+
 /**
  * A card that never landed. The task stays in the DB — it is a real request
  * from a real guest — but on a `raise` its status flips to `notify_failed` so

@@ -28,9 +28,21 @@
  * between the claim and the fact for a guardrail to have to police. Recorded
  * as a §8-step-3 deviation.
  */
-import { closeTaskByShortId, findTaskByShortId, getLiveTasksForPhone, type Task } from '../db/tasks.js';
+import {
+  cancelLiveEscalationsForConversation,
+  closeTaskByShortId,
+  findTaskByShortId,
+  getLiveTasksForPhone,
+  type Task,
+} from '../db/tasks.js';
 import type { Db, DbLike } from '../db/client.js';
-import { getConversationTurnContext, insertMessage } from '../db/repos.js';
+import {
+  findConversationsByPhoneSuffix,
+  getConversationTurnContext,
+  insertMessage,
+  setTakeoverState,
+  type TakeoverCandidate,
+} from '../db/repos.js';
 import { sanitiseInline } from '../brain/prompt.js';
 import type { AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
@@ -51,6 +63,8 @@ export interface StaffCommandDeps {
 export type StaffCommand =
   | { kind: 'done'; shortId: string }
   | { kind: 'tasks' }
+  | { kind: 'ai_on'; digits: string }
+  | { kind: 'ai_off'; digits: string }
   | { kind: 'unknown' };
 
 /**
@@ -67,6 +81,15 @@ export function parseStaffCommand(body: string | null): StaffCommand {
   const done = /^done\s+#?([a-z0-9]{4,10})\b[\s.!]*$/i.exec(text);
   if (done !== null) return { kind: 'done', shortId: done[1] as string };
   if (/^tasks\b[\s.!?]*$/i.test(text)) return { kind: 'tasks' };
+  // AI OFF/ON <last4+> — a human takes over / hands back (CH-14a step 2c). The
+  // suffix is 4+ digits: "require more digits" on ambiguity is just a longer one.
+  const ai = /^ai\s+(on|off)\s+#?(\d{4,})\b[\s.!]*$/i.exec(text);
+  if (ai !== null) {
+    const digits = ai[2] as string;
+    return (ai[1] as string).toLowerCase() === 'on'
+      ? { kind: 'ai_on', digits }
+      : { kind: 'ai_off', digits };
+  }
   return { kind: 'unknown' };
 }
 
@@ -101,6 +124,11 @@ export async function handleStaffCommand(
       conversationId: null,
       sender: 'system',
     });
+    return;
+  }
+
+  if (command.kind === 'ai_on' || command.kind === 'ai_off') {
+    await handleAiToggle(deps, input.phone, command);
     return;
   }
 
@@ -168,6 +196,74 @@ function renderTaskList(open: Task[]): string {
     (t) => `#${t.shortId} · ${t.villaLabel ?? 'villa not confirmed'} · ${t.summary}`,
   );
   return ['Open for you:', ...lines, 'Reply DONE <id> when finished.'].join('\n');
+}
+
+/** How many candidates to name when a last-4 is ambiguous — enough to choose
+ * from without turning the reply into a directory. */
+const AMBIGUITY_LIST_MAX = 6;
+/** Guest names are attacker-chosen text; capped + stripped before a staff reply. */
+const CANDIDATE_NAME_MAX = 40;
+
+/**
+ * `AI OFF <last4>` (hold) / `AI ON <last4>` (release) — CH-14a step 2c.
+ *
+ * OFF sets `human_active_until = NULL` + status `human_active` (the status branch
+ * of policy.isHumanActive holds INDEFINITELY — this is a deliberate hold, not the
+ * echo's 2h TTL) and cancels the thread's open escalations (a human took it).
+ * ON sets status `ai_active` + TTL NULL, which force-releases even an unexpired
+ * 2h echo pause (isHumanActive short-circuits on a non-null TTL, so clearing it
+ * is what resumes the AI early).
+ *
+ * Ambiguity is REFUSED, never guessed: two guests sharing a last-4 get a
+ * candidate list (name + last4 + villa) and a request for more digits — the same
+ * fail-closed instinct as everything else on this line.
+ */
+async function handleAiToggle(
+  deps: StaffCommandDeps,
+  staffPhone: string,
+  command: { kind: 'ai_on' | 'ai_off'; digits: string },
+): Promise<void> {
+  const candidates = await findConversationsByPhoneSuffix(deps.db, command.digits);
+  const send = (body: string): Promise<unknown> =>
+    deps.wa.sendText(staffPhone, body, { conversationId: null, sender: 'system' });
+
+  if (candidates.length === 0) {
+    await send(`No guest ending in ${command.digits}. Reply TASKS to see your open work.`);
+    return;
+  }
+  if (candidates.length > 1) {
+    await send(
+      [
+        `More than one guest ends in ${command.digits} — reply with more digits:`,
+        ...candidates.slice(0, AMBIGUITY_LIST_MAX).map(candidateLine),
+      ].join('\n'),
+    );
+    return;
+  }
+
+  const target = candidates[0] as TakeoverCandidate;
+  const who = sanitiseInline(target.guestName ?? 'the guest', CANDIDATE_NAME_MAX) || 'the guest';
+  if (command.kind === 'ai_off') {
+    await setTakeoverState(deps.db, target.conversationId, 'human_active', null);
+    await cancelLiveEscalationsForConversation(deps.db, target.conversationId);
+    await send(
+      `AI paused for ${who} (…${target.last4}). It stays off until you send AI ON ${target.last4}.`,
+    );
+  } else {
+    await setTakeoverState(deps.db, target.conversationId, 'ai_active', null);
+    await send(`AI is back on for ${who} (…${target.last4}).`);
+  }
+  deps.log.info?.(
+    { conversationId: target.conversationId, action: command.kind },
+    'staff toggled AI on/off for a guest thread',
+  );
+}
+
+/** One line of the disambiguation prompt: name, last4, and the villa hint. */
+function candidateLine(c: TakeoverCandidate): string {
+  const who = sanitiseInline(c.guestName ?? 'a guest', CANDIDATE_NAME_MAX) || 'a guest';
+  const villa = c.villaLabel === null ? '' : ` · ${sanitiseInline(c.villaLabel, CANDIDATE_NAME_MAX)}`;
+  return `· ${who} (…${c.last4})${villa}`;
 }
 
 /**

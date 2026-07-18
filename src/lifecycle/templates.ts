@@ -217,18 +217,18 @@ export const LIFECYCLE_TEMPLATES: Record<ScheduledKind, TemplateDef> = {
  * business-initiated exactly like a guest send, and Meta treats it identically
  * — so it needs an approved template or it fails with 131047.
  *
- * `task_card` is WIRED (CH-13a, staff/notifier.ts). The other three are still
- * defined-not-wired, by CH-14/16.
+ * `task_card` is WIRED (CH-13a, staff/notifier.ts); `escalation_card` is WIRED
+ * (CH-14a, staff/notifier.ts `notifyEscalation`). `digest`/`draft_card` remain
+ * defined-not-wired, by CH-14b/16.
  *
- * ⚠️ NOTE FOR CH-14/16, since CH-13a split the schemas and did not presume on
- * your slots: `escalation_card`, `digest` and `draft_card` still use the
- * GUEST-facing `param` for every field, which bans house names. That is
- * probably wrong for at least `escalation_card.detail` — it carries the guest's
- * own words to a human, and a guest who writes "the AC in Apartment 09 is weak"
- * would make the card unsendable, so the escalation would go undelivered and
- * guardrail 2 would then (correctly) refuse to tell the guest a human is
- * coming. Decide it slot by slot, as this file now does: `staffParam` where a
- * human is reading, `param` where the value is bound for a guest.
+ * CH-14a decided `escalation_card` slot by slot (the note CH-13a left): the card
+ * is read ENTIRELY by a human on the front desk, and its `detail` carries the
+ * guest's OWN words — "the AC in Apartment 09 is weak" MUST reach that human, so
+ * banning house names there (guest-facing `param`) would make the card unsendable
+ * and the escalation undelivered, and guardrail 2 would then correctly refuse to
+ * tell the guest a human is coming. So `detail`/`reason`/`shortId` are `staffParam`
+ * (staff-read; house legal); `guestName` stays `param` (attacker-chosen profile
+ * name — a house there names nothing and the conservative ban is harmless).
  */
 export const STAFF_TEMPLATES: Record<StaffTemplateKey, TemplateDef> = {
   task_card: def({
@@ -264,7 +264,10 @@ export const STAFF_TEMPLATES: Record<StaffTemplateKey, TemplateDef> = {
     language: 'en',
     category: 'utility',
     order: ['shortId', 'guestName', 'reason', 'detail'],
-    schema: z.object({ shortId: param, guestName: param, reason: param, detail: param }),
+    // Staff-read card (see the block comment above): detail/reason/shortId are
+    // staffParam so a guest's own words naming a house reach the front desk;
+    // guestName stays param (attacker-chosen profile name).
+    schema: z.object({ shortId: staffParam, guestName: param, reason: staffParam, detail: staffParam }),
     render: (p) =>
       `NISTULA ESCALATION #${p.shortId}\n${p.guestName} · ${p.reason}\n${p.detail}\nReply in the guest's thread to take over.`,
   }),
