@@ -81,6 +81,25 @@ export function isRetryable(httpStatus: number | undefined, errorCode?: number):
   return true;
 }
 
+/**
+ * A Graph failure that means the ACCESS TOKEN itself is bad (expired/revoked),
+ * not this one message. CH-17 raises a DISTINCT alert for it ("rotate the token")
+ * so ops sees an actionable instruction, not another generic per-message failure.
+ *
+ * 🚨 Guard by the CONTRACT, not the `type` string. Meta stamps `type:
+ * 'OAuthException'` on MANY unrelated rejections — 131030 "recipient not in the
+ * allowed list" arrives as OAuthException + HTTP 400 (a wa-client test asserts
+ * exactly this), 100 "invalid parameter" likewise. The token-expiry contract is
+ * narrow: HTTP 401, or code 190 ("access token has expired"). Keying on the type
+ * string mis-paged every allowlist/param error as a dead token.
+ *
+ * NOT added to PERMANENT_META_CODES: a 401 can be a momentary auth blip, so retry
+ * policy is unchanged — only the alert kind differs.
+ */
+export function isTokenError(failure: SendFailure): boolean {
+  return failure.httpStatus === 401 || failure.errorCode === 190;
+}
+
 /** Settles a committed intent row as 'failed' and alerts ops. Never throws. */
 export async function failSend(
   db: Db,
@@ -103,9 +122,14 @@ export async function failSend(
     // DB gone mid-failure: the row stays 'queued' — inert by design; the
     // TODO(CH-17) stale-queued sweep is the recovery net. Alert regardless.
   }
+  // A dead token surfaces here as a per-message failure; raise the distinct
+  // token alert instead of the generic one so ops gets "rotate", not noise.
+  // (wa_token_expired is log-only in alertOps — a dead token would fail its own
+  // WhatsApp delivery with the same 401. §CH-02 D4 circularity.)
+  const tokenError = isTokenError(failure);
   await alertOps(log, {
-    kind: 'wa_send_failed',
-    summary: 'WhatsApp send failed',
+    kind: tokenError ? 'wa_token_expired' : 'wa_send_failed',
+    summary: tokenError ? 'WA token expired — rotate per runbook' : 'WhatsApp send failed',
     detail: {
       messageId,
       conversationId,
