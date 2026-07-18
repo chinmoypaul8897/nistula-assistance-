@@ -83,7 +83,7 @@ const planAgeHours = (c: TruthContext): number =>
  * safe. The poststay's is `check_out +1d`, and check_out is MUTABLE, so a
  * backwards amendment re-plans its instant into the past and AGES it: a typo
  * corrected too late costs the thank-you for ever.
- * TODO(CH-17): re-anchor poststay's bound on row.createdAt (its own instant is
+ * TODO(CH-18a): re-anchor poststay's bound on row.createdAt (its own instant is
  * not a safe clock). NOT by deferring — poststay is deliberately outside
  * PRE_STAY_KINDS, so it has no stay_over backstop, and a permanently-deferring
  * row is permanently the OLDEST (sender.ts orders by send_at, limit 10): a
