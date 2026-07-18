@@ -191,6 +191,7 @@ async function main(): Promise<void> {
     degraded,
     knowledge: kb,
     opsNumbers: config.opsNumbers,
+    healthchecksUrl: config.healthchecksUrl,
     nightStart: config.nightStart,
     nightEnd: config.nightEnd,
     ezee: { client: ezee, pollerEnabled: config.ezeePollerEnabled },

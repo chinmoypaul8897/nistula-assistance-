@@ -138,6 +138,20 @@ export async function countGuardrailHitsSince(db: Db, since: Date): Promise<numb
   return row?.n ?? 0;
 }
 
+/**
+ * The newest message timestamp in a direction ('in'/'out'), or null if none —
+ * CH-17's quiet-channel monitor (both directions stale for 30 min in business
+ * hours ⇒ verify the webhook subscription). ::text → Date is safe here: a 30-min
+ * staleness check does not need the microsecond precision the cursor guards.
+ */
+export async function lastMessageAt(db: Db, direction: 'in' | 'out'): Promise<Date | null> {
+  const [row] = await db
+    .select({ at: sql<string | null>`max(${messages.createdAt})::text` })
+    .from(messages)
+    .where(eq(messages.direction, direction));
+  return row?.at != null ? new Date(row.at) : null;
+}
+
 export interface GuardrailRuleCount {
   rule: string;
   count: number;
