@@ -38,6 +38,17 @@ const staffMemberSchema = z.object({
   villas: z.array(z.string()),
 });
 
+/**
+ * The canonical conversation reply types (CH-16). ONE source shared by three
+ * places that must never drift: the CH-11 stage words mapped to conversation
+ * types (draftRouting), the `draft_reply_type` DB enum, and the ONLY legal
+ * `AUTO_SEND_TYPES` entries. A typo in AUTO_SEND_TYPES would otherwise silently
+ * never match a stored draft's type, so unlocking a type would appear to do
+ * nothing — boot-validated below instead.
+ */
+export const REPLY_TYPES = ['presales', 'arrival', 'instay', 'poststay'] as const;
+export type ReplyType = (typeof REPLY_TYPES)[number];
+
 // Raw-string view of §3.7. Defaults are the registry's inline defaults.
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
@@ -143,7 +154,7 @@ export interface Config {
   opsNumbers: string[];
   staffRoster: StaffMember[];
   draftMode: boolean;
-  autoSendTypes: string[];
+  autoSendTypes: ReplyType[];
   nightStart: string;
   nightEnd: string;
   adminBearerToken: string | undefined;
@@ -218,9 +229,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     opsNumbers: parseOpsNumbers(raw.OPS_NUMBERS),
     staffRoster: parseStaffRoster(raw.STAFF_ROSTER_JSON),
     draftMode: raw.DRAFT_MODE === 'true',
-    autoSendTypes: raw.AUTO_SEND_TYPES.split(',')
-      .map((s) => s.trim())
-      .filter((s) => s !== ''),
+    autoSendTypes: parseAutoSendTypes(raw.AUTO_SEND_TYPES),
     nightStart: raw.NIGHT_START,
     nightEnd: raw.NIGHT_END,
     adminBearerToken: raw.ADMIN_BEARER_TOKEN,
@@ -229,6 +238,25 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     costAlertInrPerDay: raw.COST_ALERT_INR_PER_DAY,
     fakeNowIst: raw.FAKE_NOW_IST,
   };
+}
+
+// CH-16: AUTO_SEND_TYPES unlocks a conversation type to bypass draft mode. A
+// non-canonical entry is a typo that would silently never match — fail BOOT so
+// an operator learns immediately that "presale" (say) unlocked nothing.
+function parseAutoSendTypes(csv: string): ReplyType[] {
+  const types: ReplyType[] = [];
+  for (const entry of csv
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')) {
+    if (!(REPLY_TYPES as readonly string[]).includes(entry)) {
+      throw new ConfigError(
+        `AUTO_SEND_TYPES entry "${entry}" is not a reply type (${REPLY_TYPES.join('|')})`,
+      );
+    }
+    if (!types.includes(entry as ReplyType)) types.push(entry as ReplyType);
+  }
+  return types;
 }
 
 // §3.3 roster integrity: staff/ops phones normalise at config load or boot FAILS.

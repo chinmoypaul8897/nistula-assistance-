@@ -101,6 +101,19 @@ describe('roster integrity at config load (§3.3)', () => {
     });
     expect(config.opsNumbers).toEqual(['+917700900010']);
   });
+});
+
+describe('AUTO_SEND_TYPES validation (CH-16)', () => {
+  it('accepts the four canonical reply types', () => {
+    const config = loadConfig({ ...minimalEnv, AUTO_SEND_TYPES: 'presales, instay' });
+    expect(config.autoSendTypes).toEqual(['presales', 'instay']);
+  });
+
+  it('fails boot on a non-canonical type (a typo must not silently unlock nothing)', () => {
+    expect(() => loadConfig({ ...minimalEnv, AUTO_SEND_TYPES: 'presale' })).toThrow(
+      /AUTO_SEND_TYPES/,
+    );
+  });
 
   it('refuses a roster where two members share one phone', () => {
     const roster = JSON.stringify([

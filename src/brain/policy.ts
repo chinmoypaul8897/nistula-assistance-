@@ -226,7 +226,7 @@ function decideKind(
  * sibling predicates that already had it right: lifecycle/sender.ts and the DONE
  * close-line guard in staff/commands.ts.
  */
-function isHumanActive(
+export function isHumanActive(
   conversation: Pick<Conversation, 'status' | 'humanActiveUntil'>,
   now: Date,
 ): boolean {

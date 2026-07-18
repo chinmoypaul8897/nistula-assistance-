@@ -126,6 +126,24 @@ const param = staffParam.refine(
   'template params may not name a physical house (guest-facing: OQ-15)',
 );
 
+/**
+ * The CH-16 draft-card body slot: the AI's already-vetted reply shown to an
+ * approver. `staffReadParam`'s floor (no newlines/tabs, no 4+ spaces) but a
+ * larger cap, because the approver is judging the WHOLE reply, not a one-line
+ * summary. The notifier flattens newlines and caps the code-point count so a
+ * preview always fits this UTF-16 max. The FULL untruncated reply lives in
+ * `drafts.proposed_body` and is what `OK` sends. The 800 ceiling keeps the whole
+ * rendered card inside Meta's 1024-char body at real-number cutover
+ * (WA_TEMPLATE_MODE=simulate today makes it free-form, so the limit is a
+ * cutover concern, not a dev one).
+ */
+const draftBodyParam = z
+  .string()
+  .min(1)
+  .max(800)
+  .refine((v) => !/[\n\r\t]/.test(v), 'template params may not contain newlines or tabs')
+  .refine((v) => !/ {4,}/.test(v), 'template params may not contain 4+ consecutive spaces');
+
 export interface TemplateDef {
   /** The name submitted to Meta. Versioned: a body change is a NEW template. */
   name: string;
@@ -332,7 +350,21 @@ export const STAFF_TEMPLATES: Record<StaffTemplateKey, TemplateDef> = {
     language: 'en',
     category: 'utility',
     order: ['shortId', 'guestName', 'replyType', 'body'],
-    schema: z.object({ shortId: param, guestName: param, replyType: param, body: param }),
+    // 🚨 NOT `param` (CH-16). The body is the AI's OWN reply, already cleared by
+    // the §6.5 guardrail pipeline — it legitimately carries a ₹ figure (guardrail
+    // 1 matched it to tool JSON) and a booking URL, both of which `param` bans.
+    // Using `param` here would make `schema.parse` THROW on the single most common
+    // draft (a quote with a link) and the approver would get nothing — the exact
+    // failure the escalation and digest cards already learned (CH-14a review, see
+    // staffReadParam above). Staff-read slots, so the guest-facing OQ-15/money
+    // screens do not apply; the reply reaches the GUEST only after `OK`, through
+    // the normal window-aware guest path where those guardrails already ran.
+    schema: z.object({
+      shortId: staffReadParam,
+      guestName: staffReadParam,
+      replyType: staffReadParam,
+      body: draftBodyParam,
+    }),
     render: (p) =>
       `DRAFT #${p.shortId} for ${p.guestName} (${p.replyType})\n---\n${p.body}\n---\nReply: OK ${p.shortId} · EDIT ${p.shortId} <new text> · NO ${p.shortId}`,
   }),

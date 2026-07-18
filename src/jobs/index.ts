@@ -27,8 +27,10 @@ import {
   type WorkerLogger,
 } from '../brain/worker.js';
 import { sql } from 'drizzle-orm';
+import type { ReplyType } from '../config.js';
 import type { Db } from '../db/client.js';
 import { getMirrorByReservationNo } from '../db/bookings.js';
+import { insertDraft } from '../db/drafts.js';
 import { findConversationForTakeover, getMessageBody } from '../db/repos.js';
 import type { EzeeClient } from '../ezee/client.js';
 import { createEzeePoller } from '../ezee/poller.js';
@@ -50,6 +52,9 @@ import {
   type ArrivalTaskDeps,
 } from '../staff/arrivalTasks.js';
 import { handleStaffCommand } from '../staff/commands.js';
+import { notifyDraft } from '../staff/draftNotify.js';
+import { runDraftExpiry, DRAFT_EXPIRY_CRON } from '../staff/draftExpiry.js';
+import { runQualityReport, QUALITY_REPORT_CRON } from '../staff/qualityReport.js';
 import { applyHumanTakeover } from '../staff/humanTakeover.js';
 import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
@@ -71,6 +76,9 @@ export const LIFECYCLE_RECONCILE_QUEUE = 'lifecycle.reconcile';
 export const STAFF_COMMAND_QUEUE = 'staff.command';
 export const STAFF_SLA_QUEUE = 'staff.sla';
 export const STAFF_DIGEST_QUEUE = 'staff.digest';
+// CH-16 draft mode: the 5-min expiry sweep and the Sunday-18:00 quality report.
+export const DRAFT_EXPIRY_QUEUE = 'draft.expiry';
+export const DRAFT_QUALITY_REPORT_QUEUE = 'draft.quality_report';
 export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
   created: BOOKING_CREATED_QUEUE,
   modified: BOOKING_MODIFIED_QUEUE,
@@ -273,6 +281,21 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     // The whole overnight queue: convert + one card each + the OPS sends.
     expireInSeconds: 420,
   });
+  // CH-16 draft mode. Expiry: retryLimit 0 — the next 5-min tick IS the retry
+  // (the SLA-queue precedent). Report: a few backed-off retries so a transient
+  // blip at 18:00 Sunday does not lose the week's quality-bar data.
+  await boss.createQueue(DRAFT_EXPIRY_QUEUE, {
+    policy: 'stately',
+    retryLimit: 0,
+    expireInSeconds: 120,
+  });
+  await boss.createQueue(DRAFT_QUALITY_REPORT_QUEUE, {
+    policy: 'stately',
+    retryLimit: 3,
+    retryDelay: 60,
+    retryBackoff: true,
+    expireInSeconds: 120,
+  });
 }
 
 /**
@@ -363,6 +386,11 @@ export interface JobsDeps {
    * that is a different thing from unmounted, and it fails closed on its own:
    * assignFor returns null, the card reaches nobody, and nothing is promised. */
   staff?: { roster: Roster };
+  /** CH-16 draft mode. draftMode = DRAFT_MODE, autoSendTypes = AUTO_SEND_TYPES
+   * (both from config). Default direct (draftMode false) so a jobs test that
+   * omits them keeps pre-CH-16 behaviour; production always passes config's. */
+  draftMode?: boolean;
+  autoSendTypes?: readonly ReplyType[];
 }
 
 export interface Jobs {
@@ -431,6 +459,17 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     // On-demand hysteresis (CH-08): the worker reports overflow; the gate —
     // token-trim OR gap ≥ the nightly threshold — shares ONE constant source.
     summarise: { enqueue: enqueueSummarise, gapMin: thresholds.minUnsummarised },
+    // CH-16 draft mode. The `drafts` slice is ALWAYS wired (it is core, not an
+    // optional feature); whether a reply is drafted is decided by draftMode +
+    // autoSendTypes + needsHuman inside the worker. `create` runs in the claim
+    // tx; `notify` cards ops via the same window-aware chokepoint the task
+    // cards use.
+    draftMode: deps.draftMode ?? false,
+    autoSendTypes: deps.autoSendTypes ?? [],
+    drafts: {
+      create: (tx, input) => insertDraft(tx, input),
+      notify: (opsNumbers, card) => notifyDraft({ log: deps.log, wa: deps.wa }, opsNumbers, card),
+    },
   };
   const summariserDeps: SummariserDeps = {
     db: deps.db,
@@ -485,6 +524,28 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   await scheduleCron(deps.boss, CONVERSATION_SWEEP_QUEUE, windows.sweepIntervalCron, 'Asia/Kolkata');
   // The 04:00 IST nightly compaction (plan.md CH-08 step 2 / §2.3).
   await scheduleCron(deps.boss, SUMMARISER_NIGHTLY_QUEUE, thresholds.cron, 'Asia/Kolkata');
+  // CH-16 draft-mode maintenance — ALWAYS on (draft mode is core, not staff-gated;
+  // the worker creates drafts regardless of the roster). Expiry sweeps lapsed
+  // drafts every 5 min; the quality report runs Sunday 18:00 IST. Both are
+  // fail-quiet and safe with no OPS number (dev's state).
+  await deps.boss.work(DRAFT_EXPIRY_QUEUE, workOptions, async () => {
+    await runDraftExpiry({ db: deps.db, log: deps.log, now: () => new Date() });
+  });
+  await scheduleCron(deps.boss, DRAFT_EXPIRY_QUEUE, DRAFT_EXPIRY_CRON, 'Asia/Kolkata', {
+    singletonKey: 'draft_expiry',
+  });
+  await deps.boss.work(DRAFT_QUALITY_REPORT_QUEUE, workOptions, async () => {
+    await runQualityReport({
+      db: deps.db,
+      log: deps.log,
+      wa: deps.wa,
+      opsNumbers: deps.opsNumbers ?? [],
+      now: () => new Date(),
+    });
+  });
+  await scheduleCron(deps.boss, DRAFT_QUALITY_REPORT_QUEUE, QUALITY_REPORT_CRON, 'Asia/Kolkata', {
+    singletonKey: 'draft_quality_report',
+  });
   if (deps.ezee !== undefined) {
     if (deps.ezee.pollerEnabled) {
       const poller = createEzeePoller({

@@ -96,3 +96,11 @@ export function isStaffPhone(roster: Roster, phone: string): boolean {
 export function memberFor(roster: Roster, phone: string): StaffMember | null {
   return roster.members.find((m) => m.phone === phone) ?? null;
 }
+
+/** Is this an OPS number specifically (not merely on the roster)? CH-16's draft
+ * decisions (OK/EDIT/NO) are honoured from ops numbers only — a housekeeper must
+ * not be able to approve a guest reply. `isStaffPhone` lumps both together for the
+ * webhook gate; this is the narrower predicate. Normalised-vs-normalised. */
+export function isOpsNumber(roster: Roster, phone: string): boolean {
+  return roster.opsNumbers.some((n) => n === phone);
+}

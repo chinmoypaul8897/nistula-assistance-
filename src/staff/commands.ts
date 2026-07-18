@@ -46,7 +46,8 @@ import {
 import { sanitiseInline } from '../brain/prompt.js';
 import type { AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
-import { memberFor, type Roster } from './roster.js';
+import { handleDraftDecision, parseDraftCommand } from './draftCommands.js';
+import { isOpsNumber, memberFor, type Roster } from './roster.js';
 
 export interface StaffCommandDeps {
   db: Db;
@@ -111,6 +112,16 @@ export async function handleStaffCommand(
   const who = member?.name ?? 'ops';
 
   if (command.kind === 'unknown') {
+    // CH-16: an ops number's message might be a draft decision (OK/EDIT/NO), which
+    // parseStaffCommand deliberately does not know. Honoured from OPS numbers only
+    // — a housekeeper's "OK 3F2K" stays ordinary chatter and never approves a reply.
+    if (isOpsNumber(deps.roster, input.phone)) {
+      const draftCommand = parseDraftCommand(input.body);
+      if (draftCommand !== null) {
+        await handleDraftDecision(deps, input.phone, draftCommand);
+        return;
+      }
+    }
     // Stored by the webhook, never AI-processed (plan step 3). Not an error: a
     // staff member chatting on the line is normal, and guessing at what they
     // meant is how a task gets closed by accident.
