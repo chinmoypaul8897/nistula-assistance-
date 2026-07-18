@@ -298,3 +298,38 @@ describe('🚨 CH-13b review fixes — the leak, the SLA, the facts limit', () =
     expect(row?.detail).toContain('dripped onto the floor'); // the tail survives
   });
 });
+
+describe('🚨 CH-13b round 2 — re-anchor the deadline when a modify moves check-in', () => {
+  const deadlineOf = async () =>
+    new Date(
+      (
+        [...(await db.execute(sql`SELECT sla_deadline FROM tasks`))] as { sla_deadline: string | Date }[]
+      )[0]!.sla_deadline,
+    );
+
+  it('a modify moving arrival EARLIER moves the open task deadline earlier', async () => {
+    await seedReturningGuest(['AC weak'], { checkIn: '2026-07-25' });
+    await maybeCreateArrivalVerifyTask(deps(), '980');
+    const before = await deadlineOf();
+    // The guest moves their arrival 6 days earlier.
+    await upsertMirrorRow(db, mirrorInput({ checkIn: '2026-07-19', checkOut: '2026-07-22' }));
+    expect(await maybeCreateArrivalVerifyTask(deps(), '980')).toEqual({
+      created: false,
+      reason: 'deadline_reanchored',
+    });
+    const after = await deadlineOf();
+    expect(after.getTime()).toBeLessThan(before.getTime());
+    expect(await rows()).toHaveLength(1); // no second card
+  });
+
+  it('does NOT re-anchor a task that is no longer open (done stays done)', async () => {
+    await seedReturningGuest(['AC weak'], { checkIn: '2026-07-25' });
+    await maybeCreateArrivalVerifyTask(deps(), '980');
+    await db.execute(sql`UPDATE tasks SET status = 'done'`);
+    await upsertMirrorRow(db, mirrorInput({ checkIn: '2026-07-19' }));
+    expect(await maybeCreateArrivalVerifyTask(deps(), '980')).toEqual({
+      created: false,
+      reason: 'already_created',
+    });
+  });
+});

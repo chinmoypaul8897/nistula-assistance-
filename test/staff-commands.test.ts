@@ -159,6 +159,29 @@ describe('DONE — the close', () => {
     expect(sent.find((s) => s.to === ANITA)?.body).toContain(task.shortId);
   });
 
+  it('🚨 CH-13b · DONE on a SYSTEM task closes it SILENTLY — no guest line, no task_done row', async () => {
+    // The round-2 BLOCKER: a media system-task carries the guest's conversationId,
+    // so the null guard let DONE send the guest \"That is done — guest sent media
+    // the assistant could not read…\" (internal wording + a false claim). Guarded
+    // now by ORIGIN, not conversationId.
+    const task = await seedTask({
+      origin: 'system',
+      summary: 'guest sent media the assistant could not read — please follow up',
+    });
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });
+
+    // Closed, staff acknowledged — the staff side is untouched.
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('done');
+    expect(sent.find((s) => s.to === ANITA)?.body).toContain(task.shortId);
+    // The guest heard NOTHING, and NO task_done evidence row was written (it
+    // would license a referent-free \"that's sorted\" to a guest who asked nothing).
+    expect(sent.find((s) => s.to === GUEST)).toBeUndefined();
+    const systemRows = await db.execute(
+      sql`SELECT 1 FROM messages WHERE conversation_id = ${conversationId} AND sender = 'system'`,
+    );
+    expect([...systemRows]).toHaveLength(0);
+  });
+
   it('writes the task_done evidence row that licenses the AI’s next reply', async () => {
     const task = await seedTask();
     await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });

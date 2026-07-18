@@ -120,6 +120,27 @@ export async function findTaskByRequestKey(db: DbLike, requestKey: string): Prom
 }
 
 /**
+ * Re-anchor an OPEN task's SLA deadline (CH-13b round 2). The arrival
+ * verify-task's deadline is check-in-derived, and a booking.modified can move
+ * check-in — a frozen deadline would nudge against the OLD date (axis-2: a
+ * terminal state keyed on a MUTABLE fact). Guarded on `open` so a done or nudged
+ * task is never disturbed; returns the row it changed, or null if it was not
+ * open. `nudged` is deliberately excluded — once chased, leave it chased.
+ */
+export async function updateOpenTaskDeadline(
+  db: DbLike,
+  taskId: string,
+  slaDeadline: Date,
+): Promise<Task | null> {
+  const [row] = await db
+    .update(tasks)
+    .set({ slaDeadline })
+    .where(and(eq(tasks.id, taskId), eq(tasks.status, 'open')))
+    .returning();
+  return row ?? null;
+}
+
+/**
  * Inserts an open task with a fresh short id.
  *
  * Retries on the SHORT-ID unique — a collision is ~1-in-a-billion per attempt,

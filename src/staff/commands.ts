@@ -190,7 +190,12 @@ function renderTaskList(open: Task[]): string {
  * Different facts, different rules.
  */
 async function writeTaskDoneEvidence(db: DbLike, task: Task): Promise<void> {
-  if (task.conversationId === null) return;
+  // 🚨 Guard by ORIGIN, not conversationId (CH-13b round 2). A `system` task
+  // (the media follow-up, the arrival verify) is NOT the guest's request, so
+  // closing it licenses NO guest-facing claim — a task_done row here would let
+  // the AI tell the guest "that's sorted" about something they never asked for.
+  // The conversationId guard alone missed the media task, which carries one.
+  if (task.conversationId === null || task.origin !== 'guest') return;
   await insertMessage(db, {
     conversationId: task.conversationId,
     direction: 'out',
@@ -203,7 +208,13 @@ async function writeTaskDoneEvidence(db: DbLike, task: Task): Promise<void> {
 }
 
 async function tellGuest(deps: StaffCommandDeps, task: Task): Promise<void> {
-  if (task.conversationId === null) return;
+  // 🚨 ORIGIN, not just conversationId (CH-13b round 2). A `system` task's
+  // summary is INTERNAL ops wording ("guest sent media the assistant could not
+  // read — please follow up"), and the guest never asked for it — sending "That
+  // is done — <that>" would leak the wording AND falsely claim we did something
+  // for them. The media task carries a real conversationId, so the null guard
+  // alone let it through.
+  if (task.conversationId === null || task.origin !== 'guest') return;
   const ctx = await getConversationTurnContext(deps.db, task.conversationId).catch(() => null);
   if (ctx === null) return;
 

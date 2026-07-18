@@ -26,7 +26,12 @@
  */
 import { getMirrorByReservationNo } from '../db/bookings.js';
 import { FACTS_PER_GUEST_CAP, getActiveGuestFacts, getGuestByPhone } from '../db/guestMemory.js';
-import { findTaskByRequestKey, insertTask, type Task } from '../db/tasks.js';
+import {
+  findTaskByRequestKey,
+  insertTask,
+  updateOpenTaskDeadline,
+  type Task,
+} from '../db/tasks.js';
 import type { Db } from '../db/client.js';
 import type { AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
@@ -84,7 +89,18 @@ export async function maybeCreateArrivalVerifyTask(
   if (pastIssues.length === 0) return skip(deps, reservationNo, 'no_past_issue');
 
   const requestKey = `autotask:${row.ezeeReservationNo}:arrival_verify`;
-  if ((await findTaskByRequestKey(deps.db, requestKey)) !== null) {
+  const existing = await findTaskByRequestKey(deps.db, requestKey);
+  if (existing !== null) {
+    // Already raised — but a booking.modified may have MOVED check-in since,
+    // and the deadline is check-in-derived. Re-anchor an OPEN task so the nudge
+    // fires against the CURRENT arrival, not the stale one (round 2: a terminal
+    // skip keyed on a mutable fact). No new card — the front desk already has
+    // it; only the reminder clock moves.
+    const freshDeadline = arrivalTaskDeadline(row.checkIn, deps.now);
+    if (existing.status === 'open' && existing.slaDeadline.getTime() !== freshDeadline.getTime()) {
+      await updateOpenTaskDeadline(deps.db, existing.id, freshDeadline);
+      return skip(deps, reservationNo, 'deadline_reanchored');
+    }
     return skip(deps, reservationNo, 'already_created');
   }
 
