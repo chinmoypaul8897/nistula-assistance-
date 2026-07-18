@@ -23,6 +23,7 @@ import {
 import { getGuestStays, linkStaysByPhone, recordReferenceAttempt } from '../db/stays.js';
 import {
   claimConversationTurn,
+  countAiMessagesSince,
   findStaleConversations,
   getConversationTurnContext,
   getUnprocessedGuestMessages,
@@ -30,7 +31,7 @@ import {
   resolveMessageCursor,
 } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
-import { istCalendarDay } from '../lib/time.js';
+import { atISTHour, istCalendarDay } from '../lib/time.js';
 import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
@@ -45,7 +46,7 @@ import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
 import { raiseMediaFrontdeskTask } from '../staff/mediaTask.js';
 import { LIFECYCLE_TEMPLATES, MARKETING_KINDS } from '../lifecycle/templates.js';
 import { isRefusal, leadQuoteFromToolRuns, scheduleLeadFollowup } from '../lifecycle/leadFollowup.js';
-import { decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
+import { DAILY_AI_TURN_CAP, decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
 import { detectLang, detectRegister } from './prefDetect.js';
 import { PHRASEBOOK } from './prompt.js';
 import { deriveStage, needsHuman, projectAll } from './stayView.js';
@@ -161,11 +162,20 @@ export async function processConversation(
     needsHuman: needsHuman(stays, today),
   };
 
+  // CH-17: the per-conversation 60-turns/day cap. Count today's AI replies (IST
+  // day) and route the cap through COOL_OFF — no new counter table, and it
+  // recovers automatically tomorrow when the count resets under the cap.
+  const aiTurnsToday = await countAiMessagesSince(
+    deps.db,
+    conversationId,
+    atISTHour(ctx.dbNow, '00:00'),
+  );
   const directive = decidePolicy({
     messages: msgs,
     conversation: ctx.conversation,
     now: ctx.dbNow,
     overLimit: deps.rateWindow.isOverLimit(ctx.guestPhone, ctx.dbNow),
+    overDailyTurnCap: aiTurnsToday >= DAILY_AI_TURN_CAP,
   });
   const plan = settlePlanFor(directive, ctx.conversation.status);
 

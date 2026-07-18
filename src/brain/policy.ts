@@ -147,12 +147,20 @@ export interface Directive {
   guestTextTail: string;
 }
 
+/** CH-17 step 4: a single conversation is capped at this many AI turns per IST
+ * day. Past it, the guest gets the cool-off line and store-only until midnight
+ * (the count resets with the day and the next NORMAL turn restores ai_active). */
+export const DAILY_AI_TURN_CAP = 60;
+
 export interface PolicyInput {
   /** The unprocessed guest batch, oldest first. */
   messages: Message[];
   conversation: Pick<Conversation, 'status' | 'humanActiveUntil'>;
   now: Date;
   overLimit: boolean;
+  /** CH-17: this conversation already hit DAILY_AI_TURN_CAP AI turns today.
+   * Optional (defaults false) so pre-CH-17 callers/tests are unaffected. */
+  overDailyTurnCap?: boolean;
 }
 
 /**
@@ -195,7 +203,9 @@ function decideKind(
   batchText: string,
   hasLocation: boolean,
 ): DirectiveKind {
-  if (input.overLimit) return 'COOL_OFF';
+  // CH-17: the per-conversation daily turn cap shares the COOL_OFF path — same
+  // once-only line, same cooloff status, same next-day restore.
+  if (input.overLimit || input.overDailyTurnCap === true) return 'COOL_OFF';
   if (isHumanActive(input.conversation, input.now)) return 'HUMAN_ACTIVE';
   if (flags.containsHumanRequest) return 'HUMAN_REQUEST';
   if (flags.containsComplaint) return 'COMPLAINT_SUSPECT';

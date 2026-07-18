@@ -14,8 +14,9 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { Db } from '../db/client.js';
 import { getRecentMessages, type Conversation, type Message } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
-import { istCalendarDay } from '../lib/time.js';
+import { istCalendarDay, isNightIST } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
+import { costStatus } from '../ops/costMeter.js';
 import type { ConverseFn } from './claude.js';
 import { buildTurnContext, type TranscriptOverflow } from './contextBuilder.js';
 import { recordUsage } from './cost.js';
@@ -177,6 +178,41 @@ export interface TurnArgs {
  */
 export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<TurnResult> {
   const { dbNow, conversationId } = args;
+
+  // CH-17 cost meter, checked pre-model + pre-claim so the whole turn is skipped
+  // and stays retry-safe (D2). At 4× the daily budget STOP calling Anthropic:
+  // the guest still gets an honest hold line and a human is brought in
+  // (escalate 'referral' makes that true), and ops is paged. Auto-resumes at IST
+  // midnight (costMeter's day key rolls over). At 2× alert once, keep serving.
+  // Unconfigured (tests / pre-boot) ⇒ level 'ok', so nothing changes.
+  const cost = costStatus(istCalendarDay(dbNow));
+  if (cost.level === 'hard') {
+    await alertOps(deps.log, {
+      kind: 'cost_kill_switch',
+      summary: 'daily Anthropic spend hit 4x the budget — AI paused, bringing humans in',
+      detail: { totalInr: Math.round(cost.total), budgetInr: cost.thresholdInr },
+    });
+    const night = isNightIST(dbNow, deps.nightStart, deps.nightEnd);
+    return {
+      text: night ? PHRASEBOOK.outsideKnowledgeNight : PHRASEBOOK.outsideKnowledge,
+      toolRuns: [],
+      escalate: 'referral',
+      securityEscalate: null,
+      strikeReference: null,
+      linkedReference: null,
+      guestPhone: args.guestPhone,
+      guestId: args.conversation.guestId,
+      overflow: { trimmedByTokens: false, uncoveredCount: 0 },
+    };
+  }
+  if (cost.level === 'soft') {
+    await alertOps(deps.log, {
+      kind: 'cost_soft_alarm',
+      summary: 'daily Anthropic spend hit 2x the budget — still serving',
+      detail: { totalInr: Math.round(cost.total), budgetInr: cost.thresholdInr },
+    });
+  }
+
   // Everything the model SEES is contextBuilder's job (CH-08 extraction):
   // windowed transcript, summary/guest blocks, guardrail-2 evidence, [6].
   const { system, baseMessages, systemEvidence, isNight, overflow } = await buildTurnContext(

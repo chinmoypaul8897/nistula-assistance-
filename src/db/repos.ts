@@ -139,6 +139,30 @@ export async function countGuardrailHitsSince(db: Db, since: Date): Promise<numb
 }
 
 /**
+ * How many AI replies this conversation has sent since `since` — CH-17's
+ * per-conversation daily turn cap (§8 step 4). Counting real AI messages is the
+ * honest answer to "how many turns did this thread get today?" — no counter
+ * table to drift. `sender='ai'` already implies an outbound reply.
+ */
+export async function countAiMessagesSince(
+  db: Db,
+  conversationId: string,
+  since: Date,
+): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.sender, 'ai'),
+        gte(messages.createdAt, since),
+      ),
+    );
+  return row?.n ?? 0;
+}
+
+/**
  * The newest message timestamp in a direction ('in'/'out'), or null if none —
  * CH-17's quiet-channel monitor (both directions stale for 30 min in business
  * hours ⇒ verify the webhook subscription). ::text → Date is safe here: a 30-min

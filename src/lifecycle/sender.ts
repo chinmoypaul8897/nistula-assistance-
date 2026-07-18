@@ -32,9 +32,9 @@
  */
 import { and, eq, isNull, lte, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { insertCostEvents } from '../db/repos.js';
 import { conversations, guests, scheduledMessages } from '../db/schema.js';
-import { istCalendarDay, nowIST } from '../lib/time.js';
+import { nowIST } from '../lib/time.js';
+import { recordTemplateCost } from '../brain/cost.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import { noteHeartbeat } from '../ops/heartbeat.js';
 import type { WaClient } from '../wa/client.js';
@@ -265,12 +265,11 @@ async function sendOne(deps: SenderDeps, row: ScheduledRow, now: Date): Promise<
     return 'failed';
   }
 
-  // §5.3/§4: a real template send is billable — meter it. A free-form send inside
-  // an open window is not, and must not be counted as one.
+  // §5.3/§4: a real template send is billable — meter it (CH-17: a real INR
+  // estimate + the intra-day cost meter, via the shared helper). A free-form send
+  // inside an open window is not, and must not be counted as one.
   if (planned.asTemplate) {
-    await insertCostEvents(deps.db, [
-      { day: istCalendarDay(nowIST()), kind: 'wa_template', quantity: '1', inrEstimate: '0' },
-    ]);
+    await recordTemplateCost({ db: deps.db, log: deps.log }, nowIST());
   }
 
   deps.log.info(
