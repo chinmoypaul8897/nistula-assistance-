@@ -266,6 +266,7 @@ describe('🚨 CH-13b review fixes — the leak, the SLA, the facts limit', () =
     const [row] = [
       ...(await db.execute(sql`SELECT sla_deadline FROM tasks`)),
     ] as { sla_deadline: string | Date }[];
+    if (row === undefined) throw new Error('no task row');
     const deadline = new Date(row.sla_deadline);
     // ~1 day before check-in (2026-07-24), NOT NOW+10min (2026-07-17 10:00).
     expect(deadline.getTime()).toBeGreaterThan(new Date('2026-07-23T00:00:00Z').getTime());
