@@ -28,6 +28,23 @@ export interface WaValue {
   contacts?: WaContact[];
   messages?: WaInboundMessage[];
   statuses?: WaStatus[];
+  /** CH-14a coexistence (§5.3): messages the front desk sent from their own
+   * WhatsApp app, echoed to us. PROVISIONAL — the exact shape is re-verified at
+   * the CH-18 cutover against real captures; parsed tolerantly until then. */
+  message_echoes?: WaMessageEcho[];
+}
+
+/** One `smb_message_echoes` entry — a staff-app send. We read only the
+ * recipient (to route the takeover) and the text (to store what was said). */
+export interface WaMessageEcho {
+  /** The business line the staff sent FROM. */
+  from?: string;
+  /** The recipient — the guest whose thread this pauses. */
+  to?: string;
+  id?: string;
+  timestamp?: string;
+  type?: string;
+  text?: { body?: string };
 }
 
 export interface WaContact {

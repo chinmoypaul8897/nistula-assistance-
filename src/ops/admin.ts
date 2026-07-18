@@ -25,9 +25,26 @@ export interface AdminRouteOptions {
   db: Db;
   /** Boot-guaranteed ≥16 chars when routes are enabled (config.ts guard). */
   bearerToken: string;
+  /**
+   * CH-14a: the dev counterpart to the prod `smb_message_echoes` path — lets a
+   * developer pause the AI without a second WhatsApp number (the live-demo
+   * blocker CH-13 kept hitting). Same shared takeover core as the webhook.
+   * Absent ⇒ the sim route returns 503.
+   */
+  coexistence?: {
+    findConversation: (phone: string) => Promise<{ conversationId: string } | null>;
+    apply: (input: {
+      conversationId: string;
+      echo: { waMessageId?: string; body: string | null; raw?: unknown };
+    }) => Promise<void>;
+  };
 }
 
 const bodySchema = z.object({ phone: z.string().min(1).max(32) });
+const simReplySchema = z.object({
+  phone: z.string().min(1).max(32),
+  text: z.string().min(1).max(1000),
+});
 
 /** Fastify plugin carrying the admin routes; register at boot ONLY when enabled. */
 export const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => {
@@ -90,6 +107,31 @@ export const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, op
       });
     } catch (error) {
       request.log.error({ err: summarizeError(error) }, 'admin guest-lookup failed');
+      return reply.code(500).send({ error: 'internal' });
+    }
+  });
+
+  // CH-14a: the dev human-takeover trigger — the same effect a staff app send
+  // has in prod (pause the AI 2h, cancel the pending debounce + open escalations).
+  app.post('/admin/simulate-human-reply', async (request, reply) => {
+    if (opts.coexistence === undefined) {
+      return reply.code(503).send({ error: 'coexistence not wired' });
+    }
+    const parsed = simReplySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid body' });
+    const phone = normalizePhone(parsed.data.phone);
+    if (phone === null) return reply.code(400).send({ error: 'invalid phone' });
+    try {
+      // Find-only: a sim can only pause a real guest thread with prior inbound.
+      const conv = await opts.coexistence.findConversation(phone);
+      if (conv === null) return reply.code(404).send({ error: 'no guest thread' });
+      await opts.coexistence.apply({
+        conversationId: conv.conversationId,
+        echo: { body: parsed.data.text, raw: { contextKind: 'human_echo', via: 'admin_sim' } },
+      });
+      return await reply.send({ ok: true, conversationId: conv.conversationId });
+    } catch (error) {
+      request.log.error({ err: summarizeError(error) }, 'admin simulate-human-reply failed');
       return reply.code(500).send({ error: 'internal' });
     }
   });

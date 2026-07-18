@@ -42,6 +42,19 @@ export interface WaWebhookOptions {
     /** Wakes the staff-command worker. Same injection discipline as `enqueue`. */
     enqueueCommand: (input: { phone: string; waMessageId: string }) => Promise<void>;
   };
+  /**
+   * CH-14a coexistence (§5.3). Absent ⇒ `smb_message_echoes` stays a logged
+   * no-op (its pre-CH-14 behaviour). `findConversation` is FIND-ONLY (a vendor
+   * the front desk messaged must not grow a guest thread); `apply` runs the
+   * shared takeover core (staff/humanTakeover.ts).
+   */
+  coexistence?: {
+    findConversation: (phone: string) => Promise<{ conversationId: string } | null>;
+    apply: (input: {
+      conversationId: string;
+      echo: { waMessageId?: string; body: string | null; raw?: unknown };
+    }) => Promise<void>;
+  };
 }
 
 /** Fastify plugin carrying both /webhooks/whatsapp routes; register at boot with live deps. */
@@ -100,7 +113,7 @@ export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app,
     // on timeout and wa_message_id dedupe makes redelivery a no-op.
     await reply.code(200).send();
     try {
-      await ingest(raw, opts.db, request.log, opts.enqueue, opts.staff);
+      await ingest(raw, opts.db, request.log, opts.enqueue, opts.staff, opts.coexistence);
     } catch (error) {
       // Post-ack there is nothing to return to Meta; the raw row (when it
       // was written) carries the error per the D6 write contract.
@@ -119,6 +132,7 @@ async function ingest(
   log: FastifyBaseLogger,
   enqueue: Enqueue,
   staff: WaWebhookOptions['staff'],
+  coexistence: WaWebhookOptions['coexistence'],
 ): Promise<void> {
   let body: WaWebhookBody;
   try {
@@ -157,7 +171,7 @@ async function ingest(
   for (const [index, entry] of entries.entries()) {
     try {
       for (const change of entry.changes ?? []) {
-        await handleChange(change, db, log, enqueue, staff);
+        await handleChange(change, db, log, enqueue, staff, coexistence);
       }
     } catch (error) {
       // summarizeError, never error.message: drizzle's message embeds bound
@@ -177,10 +191,22 @@ async function handleChange(
   log: FastifyBaseLogger,
   enqueue: Enqueue,
   staff: WaWebhookOptions['staff'],
+  coexistence: WaWebhookOptions['coexistence'],
 ): Promise<void> {
+  if (change.field === 'smb_message_echoes') {
+    // CH-14a coexistence (§5.3). Only when wired; else a logged no-op as before.
+    if (coexistence !== undefined) {
+      for (const echo of change.value?.message_echoes ?? []) {
+        await handleEcho(echo, db, log, staff, coexistence);
+      }
+    } else {
+      log.info({ field: change.field }, 'echo received but coexistence unwired — raw stored');
+    }
+    return;
+  }
   if (change.field !== 'messages') {
-    // smb_message_echoes / history land in CH-14/CH-18 — until then unknown
-    // fields are a tolerated, logged no-op with the payload kept raw (§5.3).
+    // history / smb_app_state_sync land in CH-18 — until then unknown fields are
+    // a tolerated, logged no-op with the payload kept raw (§5.3).
     log.info({ field: change.field }, 'webhook change field not handled yet — raw stored');
     return;
   }
@@ -191,6 +217,48 @@ async function handleChange(
   for (const status of value.statuses ?? []) {
     await handleStatus(status, db, log);
   }
+}
+
+/**
+ * A staff-app send, echoed to us (CH-14a, §2.2 step 6). It pauses the AI on the
+ * RECIPIENT's (the guest's) thread. Two skips, both load-bearing:
+ *  - recipient is a roster/OPS number → the front desk messaged a colleague or a
+ *    vendor; that must NEVER create or pause a guest thread.
+ *  - recipient has no guest thread with prior inbound → `findConversation` is
+ *    find-only and returns null; we do not conjure a conversation from an echo.
+ * Fixtures are PROVISIONAL (§5.3) and this parses tolerantly — a missing/odd
+ * field is a skip, never a throw (the raw payload is already stored).
+ */
+async function handleEcho(
+  echo: NonNullable<WaValue['message_echoes']>[number],
+  db: Db,
+  log: FastifyBaseLogger,
+  staff: WaWebhookOptions['staff'],
+  coexistence: NonNullable<WaWebhookOptions['coexistence']>,
+): Promise<void> {
+  const to = typeof echo?.to === 'string' ? normalizePhone(echo.to) : null;
+  if (to === null) {
+    log.info('echo missing a normalisable recipient — skipped, raw stored');
+    return;
+  }
+  if (staff !== undefined && staff.isStaffPhone(to)) {
+    log.info('echo to a roster/ops number — ignored (not a guest thread)');
+    return;
+  }
+  const conv = await coexistence.findConversation(to);
+  if (conv === null) {
+    log.info('echo recipient has no guest thread with prior inbound — ignored');
+    return;
+  }
+  await coexistence.apply({
+    conversationId: conv.conversationId,
+    echo: {
+      waMessageId: typeof echo?.id === 'string' ? echo.id : undefined,
+      body: echo?.text?.body ?? null,
+      raw: echo,
+    },
+  });
+  log.info({ conversationId: conv.conversationId }, 'human echo — AI paused (coexistence)');
 }
 
 /**
