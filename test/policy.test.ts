@@ -283,6 +283,13 @@ describe('settlePlanFor (directive → worker settlement)', () => {
     });
   });
 
+  it('🚨 HUMAN_ACTIVE never calls the model and sends nothing (CH-14 step 5)', () => {
+    // §6.7 line 1: a human holds the thread ⇒ store-only, the AI is silent. The
+    // worker keys the whole turn on modelRuns; nothing is sent, no status touched.
+    const plan = settlePlanFor(directive('HUMAN_ACTIVE'), 'human_active');
+    expect(plan).toMatchObject({ modelRuns: false, send: null, escalate: null, statusTransition: null });
+  });
+
   it('COMPLAINT_SUSPECT runs the model with must_escalate set', () => {
     const plan = settlePlanFor(directive('COMPLAINT_SUSPECT'), 'ai_active');
     expect(plan).toMatchObject({ modelRuns: true, mustEscalate: true, escalate: 'complaint' });

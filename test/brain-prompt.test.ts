@@ -62,6 +62,9 @@ describe('buildSystemPrompt', () => {
     // CH-06: KNOWLEDGE is the source of truth; never invent, never state a deposit.
     expect(rules).toContain('[KNOWLEDGE] block above is your source of truth');
     expect(rules).toContain('Never state a deposit amount');
+    // CH-14b step 5 (OQ-27): a NIGHT hand-off must promise "after 10", never "shortly".
+    expect(rules).toContain('first thing after 10 am');
+    expect(rules).toContain('never "shortly"');
   });
 
   it('renders the SITUATION with no unresolved placeholders (day and night)', () => {
