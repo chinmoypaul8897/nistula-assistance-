@@ -120,6 +120,12 @@ export const guests = pgTable('guests', {
   marketingOptIn: boolean('marketing_opt_in').notNull().default(false),
   marketingOptInSource: marketingOptInSourceEnum('marketing_opt_in_source'),
   marketingOptInAt: timestamp('marketing_opt_in_at', { withTimezone: true }),
+  // WHY a separate opt-OUT flag (§3.3 "opt_out_marketing honoured everywhere"),
+  // not just marketing_opt_in=false: an explicit STOP is a durable, distinct
+  // fact from "never opted in". Only opt_out_marketing lets us (a) honour a
+  // withdrawal permanently and (b) NOT re-solicit an opted-out guest with the
+  // post-stay YES invite. STOP sets this true; it is never auto-cleared.
+  optOutMarketing: boolean('opt_out_marketing').notNull().default(false),
   notes: text('notes'),
   ...timestamps,
 });

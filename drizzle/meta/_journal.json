@@ -92,6 +92,13 @@
       "when": 1784355802418,
       "tag": "0012_task-nudge-count",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1784374742145,
+      "tag": "0013_marketing-opt-out",
+      "breakpoints": true
     }
   ]
 }

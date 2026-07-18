@@ -1,0 +1,1 @@
+ALTER TABLE "guests" ADD COLUMN "opt_out_marketing" boolean DEFAULT false NOT NULL;
