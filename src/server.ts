@@ -18,7 +18,10 @@ import { closeDb, getDb } from './db/client.js';
 import { createEzeeClient } from './ezee/client.js';
 import { getBoss, registerJobs, stopBoss } from './jobs/index.js';
 import { createLogger } from './lib/logger.js';
+import { istCalendarDay, nowIST } from './lib/time.js';
 import { adminRoutes } from './ops/admin.js';
+import { configureOpsAlerts } from './ops/alerts.js';
+import { configureCostMeter, seedCostMeter } from './ops/costMeter.js';
 import { configureHealth, probeHealth } from './ops/health.js';
 import { createWaClient } from './wa/client.js';
 import { isStaffPhone } from './staff/roster.js';
@@ -164,6 +167,12 @@ async function main(): Promise<void> {
     pollerEnabled: config.ezeePollerEnabled,
     senderEnabled: config.lifecycleSendEnabled,
   });
+  // CH-17: alertOps now WhatsApp-delivers to OPS_NUMBERS (log-only until this
+  // runs); the cost meter gates Anthropic spend at 2×/4× the daily budget and is
+  // SEEDED from cost_events so a redeploy keeps today's tally.
+  configureOpsAlerts({ wa, opsNumbers: config.opsNumbers });
+  configureCostMeter({ thresholdInr: config.costAlertInrPerDay });
+  await seedCostMeter(db, istCalendarDay(nowIST()));
   const toolRegistry = buildToolRegistry();
   // CH-10 eZee mirror: the client always builds (fetchSingleBooking is a
   // CH-11 dependency); whether the 60s poller mounts is the flag's call —

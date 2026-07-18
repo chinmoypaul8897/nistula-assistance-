@@ -90,6 +90,9 @@ describe('runDailyRollup', () => {
     await insertTask(db, {
       conversationId: conversation.id,
       guestId: conversation.guestId,
+      bookingId: null,
+      villaLabel: null,
+      requestKey: null,
       kind: 'escalation',
       origin: 'guest',
       summary: 'help',
