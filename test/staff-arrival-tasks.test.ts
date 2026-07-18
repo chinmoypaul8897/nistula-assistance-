@@ -180,8 +180,12 @@ describe('maybeCreateArrivalVerifyTask — the fail-closed skips', () => {
 
   it('a booking mirrored BEFORE the epoch gets nothing', async () => {
     await seedReturningGuest();
-    // Epoch after the row's createdAt ⇒ before_epoch.
-    const future = new Date(NOW.getTime() + 86_400_000);
+    // 🚨 The row's created_at is the REAL DB clock (upsertMirrorRow), so the epoch
+    // must be after the REAL now — not NOW+1day, which the wall clock overtakes
+    // once the real date passes 2026-07-18 (this test reddened `main` on 18 Jul,
+    // green in the morning and red after 15:20 IST — the wall-clock flake the
+    // repo warns about). A fixed far-future epoch is after any real created_at.
+    const future = new Date('2099-01-01T00:00:00Z');
     expect(await maybeCreateArrivalVerifyTask(deps({ epoch: future }), '980')).toEqual({
       created: false,
       reason: 'before_epoch',
