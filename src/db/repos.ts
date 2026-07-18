@@ -333,6 +333,117 @@ export async function getConversationTurnContext(
 }
 
 /**
+ * CH-14a takeover writes. Two functions, deliberately not one, because the
+ * facts differ:
+ *  - `setHumanActiveUntil` (the echo / dev-sim path) touches ONLY the TTL and
+ *    NEVER the status — a human replying does not change whether the thread was
+ *    ai_active or cooloff; `isHumanActive` reads the TTL first, so the 2h pause
+ *    holds regardless. Clobbering status here would drop a live cool-off.
+ *  - `setTakeoverState` (the staff `AI OFF`/`AI ON` commands) is an EXPLICIT
+ *    state change and sets both: OFF holds indefinitely (status human_active,
+ *    TTL null → the status branch of isHumanActive holds); ON force-releases
+ *    (status ai_active, TTL null → releases even an unexpired 2h echo TTL, which
+ *    isHumanActive short-circuits on when non-null).
+ */
+export async function setHumanActiveUntil(
+  db: DbLike,
+  conversationId: string,
+  until: Date,
+): Promise<void> {
+  await db
+    .update(conversations)
+    .set({ humanActiveUntil: until })
+    .where(eq(conversations.id, conversationId));
+}
+
+export async function setTakeoverState(
+  db: DbLike,
+  conversationId: string,
+  status: Extract<Conversation['status'], 'ai_active' | 'human_active'>,
+  humanActiveUntil: Date | null,
+): Promise<void> {
+  await db
+    .update(conversations)
+    .set({ status, humanActiveUntil })
+    .where(eq(conversations.id, conversationId));
+}
+
+/**
+ * The conversation a human takeover applies to (CH-14a). FIND-ONLY — never
+ * `getOrCreateConversation`: an echo whose recipient is a vendor the front desk
+ * messaged must NOT grow a guest conversation (the §5.3 skip rule). The EXISTS
+ * guard is the "no prior guest inbound → skip" half: a guest who only ever
+ * appeared via a booking mirror (never messaged us) has no AI thread to pause.
+ * Returns null in either case, and the caller skips.
+ */
+export async function findConversationForTakeover(
+  db: Db,
+  phone: string,
+): Promise<{ conversationId: string; guestId: string } | null> {
+  const rows = await db.execute<{ conversation_id: string; guest_id: string }>(sql`
+    SELECT c.id AS conversation_id, c.guest_id AS guest_id
+    FROM conversations c
+    JOIN guests g ON g.id = c.guest_id
+    WHERE g.phone = ${phone}
+      AND EXISTS (
+        SELECT 1 FROM messages m
+        WHERE m.conversation_id = c.id AND m.direction = 'in' AND m.sender = 'guest'
+      )
+    LIMIT 1
+  `);
+  const row = [...rows][0];
+  return row ? { conversationId: row.conversation_id, guestId: row.guest_id } : null;
+}
+
+/** A candidate for the staff `AI ON/OFF <last4>` disambiguation prompt. */
+export interface TakeoverCandidate {
+  conversationId: string;
+  guestName: string | null;
+  last4: string;
+  villaLabel: string | null;
+}
+
+/**
+ * Guests whose phone ENDS in `digits` (CH-14a, `AI ON/OFF <last4>`). Suffix
+ * match (`LIKE '%digits'`) because staff read the last few digits off a card,
+ * not the full E.164. `digits` is validated to be pure digits by the command
+ * parser, and is bound (not interpolated) here anyway (§3.3). The villa hint is
+ * the guest's most recent task's door — a disambiguation aid when two guests
+ * share a suffix; null when they have no task. `>1 row` is the ambiguity the
+ * command refuses on.
+ */
+export async function findConversationsByPhoneSuffix(
+  db: Db,
+  digits: string,
+): Promise<TakeoverCandidate[]> {
+  const pattern = `%${digits}`;
+  const rows = await db.execute<{
+    conversation_id: string;
+    guest_name: string | null;
+    last4: string;
+    villa_label: string | null;
+  }>(sql`
+    SELECT c.id AS conversation_id,
+           COALESCE(g.first_name, g.wa_profile_name) AS guest_name,
+           RIGHT(g.phone, 4) AS last4,
+           (SELECT t.villa_label FROM tasks t
+             WHERE t.guest_id = g.id AND t.villa_label IS NOT NULL
+             ORDER BY t.opened_at DESC LIMIT 1) AS villa_label
+    FROM conversations c
+    JOIN guests g ON g.id = c.guest_id
+    WHERE g.phone LIKE ${pattern}
+    ORDER BY c.updated_at DESC
+    LIMIT 10
+  `);
+  return [...rows].map((row) => ({
+    conversationId: row.conversation_id,
+    guestName: row.guest_name,
+    last4: row.last4,
+    villaLabel: row.villa_label,
+  }));
+}
+
+/**
  * Conversations owed a processing pass: oldest unprocessed guest message
  * older than the threshold (CH-03 sweeper). LEFT JOIN on the pointer row
  * makes a dangling pointer degrade to "everything unprocessed" — the same
