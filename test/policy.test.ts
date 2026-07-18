@@ -241,10 +241,58 @@ describe('inbound helpers', () => {
   });
 });
 
+describe('MARKETING_STOP (CH-15)', () => {
+  it('routes a pure STOP to MARKETING_STOP with the confirm line', () => {
+    const d = decide([text('STOP')]);
+    expect(d.kind).toBe('MARKETING_STOP');
+    expect(d.flags.containsStop).toBe(true);
+    expect(settlePlanFor(d, 'ai_active')).toMatchObject({
+      modelRuns: false,
+      send: 'marketingStopConfirm',
+      telemetry: 'marketing_stop',
+      escalate: null,
+    });
+  });
+
+  it.each(['unsubscribe', 'stop these messages', 'band karo', 'please stop sending texts', 'stop.'])(
+    'treats %j as a stop',
+    (t) => expect(decide([text(t)]).flags.containsStop).toBe(true),
+  );
+
+  it.each(['please stop, the AC is broken', "I'll stop by later", 'non-stop rain here', 'stop the AC'])(
+    'does NOT treat %j as a stop (homograph guard)',
+    (t) => expect(decide([text(t)]).flags.containsStop).toBe(false),
+  );
+
+  it('a more urgent route wins, but the opt-out FLAG is still set', () => {
+    // The opt-out is flag-driven in the worker, so it fires even when the
+    // directive routes to complaint / human-request / human-active.
+    const complaint = decide([text('unsubscribe, the villa was filthy')]);
+    expect(complaint.flags.containsStop).toBe(true);
+    expect(complaint.kind).toBe('COMPLAINT_SUSPECT');
+
+    const human = decide([text('stop these and get me a human')]);
+    expect(human.flags.containsStop).toBe(true);
+    expect(human.kind).toBe('HUMAN_REQUEST');
+
+    const held = decide([text('STOP')], {
+      conversation: { status: 'human_active', humanActiveUntil: null },
+    });
+    expect(held.flags.containsStop).toBe(true);
+    expect(held.kind).toBe('HUMAN_ACTIVE');
+  });
+});
+
 describe('settlePlanFor (directive → worker settlement)', () => {
   const directive = (kind: Directive['kind']): Directive => ({
     kind,
-    flags: { botQuestion: false, containsHumanRequest: false, containsComplaint: false, hasMedia: false },
+    flags: {
+      botQuestion: false,
+      containsHumanRequest: false,
+      containsComplaint: false,
+      containsStop: false,
+      hasMedia: false,
+    },
     guestTextTail: 'tail',
   });
 
