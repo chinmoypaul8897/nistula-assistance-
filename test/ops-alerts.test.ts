@@ -31,7 +31,7 @@ afterEach(() => resetOpsAlerts());
 describe('alertOps delivery', () => {
   it('logs AND delivers to every ops number when configured', async () => {
     const { wa, sent } = fakeWa();
-    let now = 1_000_000;
+    const now = 1_000_000;
     configureOpsAlerts({ wa, opsNumbers: [OPS_A, OPS_B], now: () => now });
     const log = mkLog();
 
