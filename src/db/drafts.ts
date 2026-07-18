@@ -112,6 +112,17 @@ export async function expireStaleDrafts(db: DbLike, cutoff: Date): Promise<Draft
     .returning();
 }
 
+/** How many drafts EXPIRED since `since` — the morning digest's overnight count.
+ * Keyed on updated_at, which the sweep's status flip advances (created_at would
+ * count drafts made overnight regardless of whether they lapsed). */
+export async function countExpiredDraftsSince(db: DbLike, since: Date): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(drafts)
+    .where(and(eq(drafts.status, 'expired'), gte(drafts.updatedAt, since)));
+  return row?.count ?? 0;
+}
+
 /** One (reply_type, status) tally for the weekly quality report. */
 export interface DraftStatRow {
   replyType: DraftReplyType;

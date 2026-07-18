@@ -19,6 +19,7 @@ import {
   type Task,
 } from '../db/tasks.js';
 import { countGuardrailHitsSince } from '../db/repos.js';
+import { countExpiredDraftsSince } from '../db/drafts.js';
 import { sanitiseInline } from '../brain/prompt.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
@@ -56,6 +57,9 @@ export interface DigestRun {
   openEscalations: number;
   openTasks: number;
   guardrailHits: number;
+  /** CH-16: drafts that lapsed overnight (guest replies that reached nobody in
+   * time). Each was already ops-alerted at expiry; the digest is the roundup. */
+  expiredDrafts: number;
   sent: boolean;
 }
 
@@ -91,18 +95,27 @@ export async function runMorningDigest(deps: DigestDeps): Promise<DigestRun> {
   // All open escalations (now INCLUDING the just-woken ones) + open tasks.
   const openEscalations = await getLiveTasksByKinds(deps.db, ['escalation']);
   const openTasks = await getLiveTasksByKinds(deps.db, ['housekeeping', 'maintenance', 'frontdesk']);
-  const guardrailHits = await countGuardrailHitsSince(deps.db, mostRecentNightStart(now, deps.nightStart));
+  const nightStart = mostRecentNightStart(now, deps.nightStart);
+  const guardrailHits = await countGuardrailHitsSince(deps.db, nightStart);
+  const expiredDrafts = await countExpiredDraftsSince(deps.db, nightStart);
 
   const run: DigestRun = {
     converted: converted.length,
     openEscalations: openEscalations.length,
     openTasks: openTasks.length,
     guardrailHits,
+    expiredDrafts,
     sent: false,
   };
 
   // Fail-quiet on a genuinely quiet night — no daily empty ping.
-  if (run.converted === 0 && run.openEscalations === 0 && run.openTasks === 0 && run.guardrailHits === 0) {
+  if (
+    run.converted === 0 &&
+    run.openEscalations === 0 &&
+    run.openTasks === 0 &&
+    run.guardrailHits === 0 &&
+    run.expiredDrafts === 0
+  ) {
     deps.log.info?.({}, 'morning digest — nothing overnight, no digest sent');
     return run;
   }
@@ -111,7 +124,14 @@ export async function runMorningDigest(deps: DigestDeps): Promise<DigestRun> {
   const summary = buildSummary(run, converted[0]);
   run.sent = await sendToOps(deps, day, summary);
   deps.log.info?.(
-    { converted: run.converted, openEscalations: run.openEscalations, openTasks: run.openTasks, guardrailHits, sent: run.sent },
+    {
+      converted: run.converted,
+      openEscalations: run.openEscalations,
+      openTasks: run.openTasks,
+      guardrailHits,
+      expiredDrafts,
+      sent: run.sent,
+    },
     'morning digest ran',
   );
   return run;
@@ -131,6 +151,7 @@ function buildSummary(run: DigestRun, firstConverted: Task | undefined): string 
   }
   parts.push(`${run.openEscalations} escalation(s) + ${run.openTasks} task(s) open`);
   if (run.guardrailHits > 0) parts.push(`${run.guardrailHits} guardrail hit(s) overnight`);
+  if (run.expiredDrafts > 0) parts.push(`${run.expiredDrafts} draft(s) expired unapproved`);
   return capUtf16(parts.join('; '), SUMMARY_MAX_UNITS);
 }
 
@@ -139,7 +160,7 @@ function buildSummary(run: DigestRun, firstConverted: Task | undefined): string 
  * measured in UTF-16 units, so a code-point cap alone could still produce a
  * string zod rejects — an emoji-heavy summary would then silently kill the
  * OPS digest (review DEFECT). */
-function capUtf16(s: string, maxUnits: number): string {
+export function capUtf16(s: string, maxUnits: number): string {
   if (s.length <= maxUnits) return s;
   let end = maxUnits;
   const code = s.charCodeAt(end - 1);
