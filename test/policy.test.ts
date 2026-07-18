@@ -254,14 +254,30 @@ describe('MARKETING_STOP (CH-15)', () => {
     });
   });
 
-  it.each(['unsubscribe', 'stop these messages', 'band karo', 'please stop sending texts', 'stop.'])(
-    'treats %j as a stop',
-    (t) => expect(decide([text(t)]).flags.containsStop).toBe(true),
-  );
+  it.each([
+    'unsubscribe',
+    'stop these messages',
+    'band karo',
+    'please stop sending texts',
+    'stop.',
+    'opt-out',
+    'opt out of these messages',
+    'stop your messages',
+    'stop the marketing texts',
+    'stop marketing',
+    'unsubscribe me from these',
+  ])('treats %j as a stop', (t) => expect(decide([text(t)]).flags.containsStop).toBe(true));
 
-  it.each(['please stop, the AC is broken', "I'll stop by later", 'non-stop rain here', 'stop the AC'])(
-    'does NOT treat %j as a stop (homograph guard)',
-    (t) => expect(decide([text(t)]).flags.containsStop).toBe(false),
+  it.each([
+    'please stop, the AC is broken',
+    "I'll stop by later",
+    'non-stop rain here',
+    'stop the AC',
+    "please don't stop sending me offers", // negated — the OPPOSITE of a stop
+    'never stop sending these',
+    'stop messaging me here, just call me', // channel switch, not an unsubscribe
+  ])('does NOT treat %j as a stop (homograph/negation guard)', (t) =>
+    expect(decide([text(t)]).flags.containsStop).toBe(false),
   );
 
   it('a more urgent route wins, but the opt-out FLAG is still set', () => {

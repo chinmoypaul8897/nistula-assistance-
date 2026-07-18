@@ -38,7 +38,7 @@ import { isWindowOpen } from './draftGuards.js';
 import { guestTextOf, isAffirmative } from './inbound.js';
 import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
 import { raiseMediaFrontdeskTask } from '../staff/mediaTask.js';
-import { MARKETING_KINDS } from '../lifecycle/templates.js';
+import { LIFECYCLE_TEMPLATES, MARKETING_KINDS } from '../lifecycle/templates.js';
 import { isRefusal, leadQuoteFromToolRuns, scheduleLeadFollowup } from '../lifecycle/leadFollowup.js';
 import { decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
 import { detectLang, detectRegister } from './prefDetect.js';
@@ -421,18 +421,42 @@ export async function processConversation(
       .filter((t): t is string => t !== null)
       .join('\n');
 
+    // Audit (pre-merge review): a STOP that routed to a MORE-URGENT directive
+    // (complaint/human-request) opted the guest out WITHOUT a confirmation line —
+    // the write happened (it is in the claim tx, flag-driven), but is otherwise
+    // invisible. Surface it so a durable opt-out is never silent.
+    if (directive.flags.containsStop && directive.kind !== 'MARKETING_STOP') {
+      deps.log.info(
+        { conversationId, guestId: ctx.conversation.guestId, directive: directive.kind },
+        'marketing opt-out applied without a confirmation line',
+      );
+    }
+
     // CH-15 step 6: capture in-chat marketing consent. A clear affirmative within
-    // 7 days of a post-stay thank-you (the ONLY place we ask "may we write to
-    // you?") is a YES. Deterministic and GUARDED (captureInChatOptIn never
-    // overrides an opt-out or an existing opt-in). Runs regardless of the model —
-    // a store-only/takeover turn still carries the guest's "yes". Best-effort: a
-    // missed capture just means no marketing, the safe side.
+    // 7 days of the CONSENT-asking thank-you (nst_poststay_v2 — the ONLY place we
+    // ask "may we write to you?") is a YES. Deterministic and GUARDED
+    // (captureInChatOptIn never overrides an opt-out or an existing opt-in).
+    // GATED (pre-merge review) on the model actually running AND not a complaint:
+    // consent must be a genuine reply to the invite, never a stray "yes" in a
+    // store-only/takeover/complaint turn. Best-effort — a missed capture just
+    // means no marketing, the safe side.
     try {
-      if (isAffirmative(guestBatchText)) {
+      if (
+        turn !== null &&
+        !directive.flags.containsComplaint &&
+        isAffirmative(guestBatchText)
+      ) {
         const since = new Date(
           ctx.dbNow.getTime() - CONSENT_YES_WINDOW_DAYS * 24 * 3600_000,
         );
-        if (await hasRecentPoststay(deps.db, ctx.conversation.guestId, since)) {
+        if (
+          await hasRecentPoststay(
+            deps.db,
+            ctx.conversation.guestId,
+            since,
+            LIFECYCLE_TEMPLATES.poststay.name,
+          )
+        ) {
           const captured = await captureInChatOptIn(
             deps.db,
             ctx.conversation.guestId,
@@ -455,10 +479,12 @@ export async function processConversation(
     // days. Marketing, so it only SENDS to an opted-in guest (gated at send time)
     // — a fresh enquirer with no opt-in path gets nothing, by design (§8 step 6).
     // Excludes prearrival/inhouse (they already hold a booking — a lead nudge
-    // would be wrong) and needsHuman (a broken booking is not a sales lead).
-    // Requires the model ran (toolRuns exist only then). Best-effort.
+    // would be wrong), needsHuman (a broken booking is not a sales lead), and a
+    // STOP turn (pre-merge review: never schedule a fresh marketing row for a
+    // guest we just opted out). Requires the model ran (toolRuns exist only then).
     if (
       turn !== null &&
+      !directive.flags.containsStop &&
       stayContext.stage !== 'prearrival' &&
       stayContext.stage !== 'inhouse' &&
       !stayContext.needsHuman &&

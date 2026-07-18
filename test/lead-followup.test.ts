@@ -464,4 +464,21 @@ describe('lead detection through the real worker', () => {
     await processConversation(quotingRig(), conversation.id);
     expect(await leadRows()).toHaveLength(0);
   });
+
+  it('a STOP + quote in one turn opts out and schedules NO lead', async () => {
+    const { guest, conversation } = await seedConversation(db, '+917700900574');
+    // Trips containsStop (unsubscribe) AND containsComplaint (filthy) → the model
+    // runs (COMPLAINT_SUSPECT) and quotes, but a STOP turn must never schedule a
+    // fresh marketing nudge for a guest just opted out.
+    await seedGuestMessage(
+      db,
+      conversation.id,
+      'unsubscribe, the villa was filthy — but what is the december rate for B3?',
+      30,
+    );
+    await processConversation(quotingRig(), conversation.id);
+    expect(await leadRows()).toHaveLength(0);
+    const [g] = await db.select().from(schema.guests).where(eq(schema.guests.id, guest.id));
+    expect(g?.optOutMarketing).toBe(true);
+  });
 });

@@ -26,7 +26,9 @@ import { isAffirmative } from '../src/brain/inbound.js';
 import { DEBOUNCE_WINDOWS } from '../src/brain/debounce.js';
 import { PHRASEBOOK } from '../src/brain/prompt.js';
 import { processConversation, type WorkerDeps } from '../src/brain/worker.js';
-import { MARKETING_KINDS } from '../src/lifecycle/templates.js';
+import { LIFECYCLE_TEMPLATES, MARKETING_KINDS } from '../src/lifecycle/templates.js';
+
+const POSTSTAY_TEMPLATE = LIFECYCLE_TEMPLATES.poststay.name; // the consent-asking v2
 import { createWaClient } from '../src/wa/client.js';
 import { noToolDeps, textResult } from './helpers/brain.js';
 import { seedConversation, seedGuestMessage } from './helpers/seed.js';
@@ -116,10 +118,18 @@ describe('isAffirmative', () => {
     'accepts %j',
     (t) => expect(isAffirmative(t)).toBe(true),
   );
-  it.each(['no thanks', 'not now', 'maybe later', 'what are the rates'])(
-    'rejects %j',
-    (t) => expect(isAffirmative(t)).toBe(false),
-  );
+  // The negated declines to the YES/NO invite must fail closed (pre-merge review).
+  it.each([
+    'no thanks',
+    'not now',
+    'maybe later',
+    'what are the rates',
+    'absolutely not',
+    'of course not',
+    'not sure',
+    'no, of course not',
+    'yes but not this time', // any co-occurring negator fails closed
+  ])('rejects %j', (t) => expect(isAffirmative(t)).toBe(false));
 });
 
 // ── consent DB helpers ───────────────────────────────────────────────────────
@@ -179,9 +189,22 @@ describe('consent DB helpers', () => {
     const weekAgo = new Date(now.getTime() - 6 * 86_400_000);
     const longAgo = new Date(now.getTime() - 60 * 86_400_000);
 
-    await insertScheduled(g, 'poststay', { status: 'sent', updatedAt: weekAgo });
-    expect(await hasRecentPoststay(db, g, new Date(now.getTime() - 7 * 86_400_000))).toBe(true);
-    expect(await hasRecentPoststay(db, g, new Date(now.getTime() - 3 * 86_400_000))).toBe(false);
+    await insertScheduled(g, 'poststay', {
+      status: 'sent',
+      updatedAt: weekAgo,
+      templateName: POSTSTAY_TEMPLATE,
+    });
+    const wk = POSTSTAY_TEMPLATE;
+    expect(await hasRecentPoststay(db, g, new Date(now.getTime() - 7 * 86_400_000), wk)).toBe(true);
+    expect(await hasRecentPoststay(db, g, new Date(now.getTime() - 3 * 86_400_000), wk)).toBe(false);
+    // A NON-consent poststay (a pre-CH-15 v1 body) must NOT count as the invite.
+    const g2 = await seedGuest();
+    await insertScheduled(g2, 'poststay', {
+      status: 'sent',
+      updatedAt: weekAgo,
+      templateName: 'nst_poststay_v1',
+    });
+    expect(await hasRecentPoststay(db, g2, new Date(now.getTime() - 7 * 86_400_000), wk)).toBe(false);
 
     await insertScheduled(g, 'lead_followup', { status: 'sent', createdAt: weekAgo });
     await insertScheduled(g, 'lead_followup', { status: 'pending', createdAt: longAgo });
@@ -262,9 +285,12 @@ describe('STOP through the real worker', () => {
 // ── YES opt-in through the worker ────────────────────────────────────────────
 
 describe('post-stay YES opt-in through the real worker', () => {
-  it('captures consent for a YES within 7 days of a sent poststay', async () => {
+  const seedPoststay = (guestId: string, templateName = POSTSTAY_TEMPLATE) =>
+    insertScheduled(guestId, 'poststay', { status: 'sent', templateName }); // updatedAt = now
+
+  it('captures consent for a YES within 7 days of the consent thank-you', async () => {
     const { guest, conversation } = await seedConversation(db, '+917700900611');
-    await insertScheduled(guest.id, 'poststay', { status: 'sent' }); // updatedAt = now
+    await seedPoststay(guest.id);
     await seedGuestMessage(db, conversation.id, 'yes please, do keep in touch', 30);
 
     await processConversation(rig(), conversation.id);
@@ -283,10 +309,50 @@ describe('post-stay YES opt-in through the real worker', () => {
     expect((await getGuest(guest.id))?.marketingOptIn).toBe(false);
   });
 
+  it('does NOT capture after a NON-consent (v1) poststay — the invite was never asked', async () => {
+    const { guest, conversation } = await seedConversation(db, '+917700900614');
+    await seedPoststay(guest.id, 'nst_poststay_v1'); // no "Reply YES" in the v1 body
+    await seedGuestMessage(db, conversation.id, 'yes, can you send December availability?', 30);
+
+    await processConversation(rig(), conversation.id);
+    expect((await getGuest(guest.id))?.marketingOptIn).toBe(false);
+  });
+
+  it('does NOT capture a "yes" inside a complaint', async () => {
+    const { guest, conversation } = await seedConversation(db, '+917700900615');
+    await seedPoststay(guest.id);
+    await seedGuestMessage(db, conversation.id, 'yes, honestly the AC was broken the whole stay', 30);
+
+    await processConversation(rig(), conversation.id);
+    expect((await getGuest(guest.id))?.marketingOptIn).toBe(false);
+  });
+
+  it('does NOT capture a "yes" under a human takeover', async () => {
+    const { guest, conversation } = await seedConversation(db, '+917700900616');
+    await db
+      .update(schema.conversations)
+      .set({ status: 'human_active' })
+      .where(eq(schema.conversations.id, conversation.id));
+    await seedPoststay(guest.id);
+    await seedGuestMessage(db, conversation.id, 'yes, 3pm on the 5th works', 30);
+
+    await processConversation(rig(), conversation.id);
+    expect((await getGuest(guest.id))?.marketingOptIn).toBe(false);
+  });
+
+  it('does NOT capture a NEGATED reply to the invite', async () => {
+    const { guest, conversation } = await seedConversation(db, '+917700900617');
+    await seedPoststay(guest.id);
+    await seedGuestMessage(db, conversation.id, 'absolutely not', 30);
+
+    await processConversation(rig(), conversation.id);
+    expect((await getGuest(guest.id))?.marketingOptIn).toBe(false);
+  });
+
   it('does NOT re-opt-in a guest who explicitly opted out', async () => {
     const { guest, conversation } = await seedConversation(db, '+917700900613');
     await db.update(guests).set({ optOutMarketing: true }).where(eq(guests.id, guest.id));
-    await insertScheduled(guest.id, 'poststay', { status: 'sent' });
+    await seedPoststay(guest.id);
     await seedGuestMessage(db, conversation.id, 'yes ok', 30);
 
     await processConversation(rig(), conversation.id);

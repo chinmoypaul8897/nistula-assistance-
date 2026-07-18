@@ -95,18 +95,29 @@ export async function cancelPendingLeadFollowups(db: Db, guestId: string): Promi
   return rows.length;
 }
 
-/** True iff a post-stay thank-you was SENT to this guest at/after `since` — the
- * gate that turns an ordinary "yes" into marketing consent (plan step 6: YES
- * within 7 days of the thank-you). updated_at is the sent-time proxy (the
- * send-intent claim flips status→sent in the same statement). */
-export async function hasRecentPoststay(db: Db, guestId: string, since: Date): Promise<boolean> {
+/** True iff the CONSENT-ASKING post-stay thank-you was SENT to this guest at/after
+ * `since` — the gate that turns an ordinary "yes" into marketing consent (plan
+ * step 6: YES within 7 days of the thank-you).
+ *
+ * 🚨 Keyed on the exact template NAME, not the `poststay` kind (pre-merge review):
+ * only nst_poststay_v2 carries "Reply YES", but pre-CH-15 rows are v1 (no invite),
+ * so a kind-based match would treat a "yes" after a v1 thank-you as consent to a
+ * question never asked. The contract is "was the guest ASKED for consent?", not
+ * "is this kind poststay?". updated_at is the sent-time proxy (the send-intent
+ * claim flips status→sent in the same statement). */
+export async function hasRecentPoststay(
+  db: Db,
+  guestId: string,
+  since: Date,
+  consentTemplate: string,
+): Promise<boolean> {
   const [row] = await db
     .select({ id: scheduledMessages.id })
     .from(scheduledMessages)
     .where(
       and(
         eq(scheduledMessages.guestId, guestId),
-        eq(scheduledMessages.kind, 'poststay'),
+        eq(scheduledMessages.templateName, consentTemplate),
         eq(scheduledMessages.status, 'sent'),
         gte(scheduledMessages.updatedAt, since),
       ),
