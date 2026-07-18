@@ -129,6 +129,23 @@ describe('parseStaffCommand — what a human actually types', () => {
   });
 
   it.each([
+    ['AI OFF 0801', 'ai_off', '0801'],
+    ['ai off 0801', 'ai_off', '0801'],
+    ['AI ON 0801', 'ai_on', '0801'],
+    ['AI ON #0801', 'ai_on', '0801'],
+    ['AI OFF 917700900801', 'ai_off', '917700900801'], // more digits (disambiguation)
+  ])('%s parses as an AI toggle', (text, kind, digits) => {
+    expect(parseStaffCommand(text)).toEqual({ kind, digits });
+  });
+
+  it.each(['AI OFF', 'AI ON abc', 'AI sideways 0801', 'AI OFF 12'])(
+    '%s is NOT an AI toggle',
+    (text) => {
+      expect(parseStaffCommand(text)).toEqual({ kind: 'unknown' });
+    },
+  );
+
+  it.each([
     'done',
     'I am done for the day',
     'the towels are DONE A3F2K9 by the way',
@@ -297,15 +314,18 @@ describe('the SLA nudger', () => {
   const slaDeps = (now: Date) => ({ db, log, wa, roster: ROSTER, now: () => now });
   const LATE = new Date('2026-07-17T10:31:00Z'); // 31 min after NOW; housekeeping SLA is 30
 
-  it('🚨 CH-13b · an escalation-kind task nudges at its 10-min SLA (the groundwork)', async () => {
-    // CH-13b's escalation-SLA "groundwork" is the escalation:10 constant (shipped
-    // CH-13a) + the kind-blind nudger: an escalation task overdue at 10 min is
-    // nudged like any other. The 10/20-min re-ping LADDER is CH-14; this proves
-    // the first rung is wired.
+  it('🚨 CH-14a · an escalation nudges at 10 min but stays OPEN for the 2nd rung', async () => {
+    // CH-14a turned CH-13b's escalation groundwork into a 2-rung LADDER. The
+    // first rung fires at the 10-min deadline (re-ping the front desk) but leaves
+    // the task `open` so rung 2 (cc OPS at 20 min) can still fire — unlike a
+    // generic kind, which reaches `nudged` on its single rung. The full ladder is
+    // proven in staff-sla-ladder.test.ts; this is the wiring check.
     const task = await seedTask({ kind: 'escalation', assignedPhone: MEERA });
     const tenMin = new Date(NOW.getTime() + 11 * 60_000); // 11 > the 10-min SLA
     expect(await runSlaNudger(slaDeps(tenMin))).toEqual({ considered: 1, nudged: 1 });
-    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('nudged');
+    const after = await findTaskByShortId(db, task.shortId);
+    expect(after?.status).toBe('open'); // intermediate rung — still live for rung 2
+    expect(after?.nudgeCount).toBe(1);
     // And it is NOT yet overdue at 9 minutes — the deadline is real.
     const nine = new Date(NOW.getTime() + 9 * 60_000);
     const fresh = await seedTask({ kind: 'escalation', assignedPhone: MEERA });
@@ -464,5 +484,65 @@ describe('🚨 CH-13a · the DONE transaction rolls back as one (real Postgres)'
       )),
     ];
     expect(rows).toEqual([{ kind: 'task_done' }]);
+  });
+});
+
+describe('AI ON/OFF — a human takes over / hands back (CH-14a)', () => {
+  async function convRow() {
+    const [row] = await db.select().from(schema.conversations).where(sql`id = ${conversationId}`);
+    return row as { status: string; humanActiveUntil: Date | null };
+  }
+
+  it('AI OFF <last4> holds the thread indefinitely and cancels open escalations', async () => {
+    await insertTask(db, {
+      conversationId,
+      guestId,
+      bookingId: null,
+      villaLabel: null,
+      kind: 'escalation',
+      summary: 'needs a person',
+      detail: null,
+      assignedPhone: MEERA,
+      requestKey: null,
+      origin: 'guest',
+      now: NOW,
+    });
+    await handleStaffCommand(deps(), { phone: MEERA, body: 'AI OFF 0801' });
+    const c = await convRow();
+    expect(c.status).toBe('human_active');
+    expect(c.humanActiveUntil).toBeNull(); // indefinite hold, not the 2h echo TTL
+    const [task] = await db.select().from(schema.tasks);
+    expect(task?.status).toBe('cancelled');
+    expect(sent.find((s) => s.to === MEERA)?.body).toContain('AI paused');
+  });
+
+  it('AI ON <last4> force-releases, clearing an unexpired echo TTL', async () => {
+    await db
+      .update(schema.conversations)
+      .set({ humanActiveUntil: new Date(NOW.getTime() + 3_600_000) })
+      .where(sql`id = ${conversationId}`);
+    await handleStaffCommand(deps(), { phone: MEERA, body: 'AI ON 0801' });
+    const c = await convRow();
+    expect(c.status).toBe('ai_active');
+    expect(c.humanActiveUntil).toBeNull();
+    expect(sent.find((s) => s.to === MEERA)?.body).toContain('back on');
+  });
+
+  it('an AMBIGUOUS last-4 refuses with a candidate list and changes NOTHING', async () => {
+    // A second guest whose phone ALSO ends in 0801.
+    const other = await upsertGuestByPhone(db, '+918800900801', 'Priya');
+    await getOrCreateConversation(db, other.id);
+    await handleStaffCommand(deps(), { phone: MEERA, body: 'AI OFF 0801' });
+    const reply = sent.find((s) => s.to === MEERA)?.body ?? '';
+    expect(reply).toContain('More than one guest');
+    expect(reply).toContain('more digits');
+    // No thread was paused.
+    expect((await convRow()).status).toBe('ai_active');
+  });
+
+  it('an unknown suffix says so and pauses nothing', async () => {
+    await handleStaffCommand(deps(), { phone: MEERA, body: 'AI OFF 9999' });
+    expect(sent.find((s) => s.to === MEERA)?.body).toContain('No guest ending in 9999');
+    expect((await convRow()).status).toBe('ai_active');
   });
 });

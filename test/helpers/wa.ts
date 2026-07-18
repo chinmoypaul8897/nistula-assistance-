@@ -47,6 +47,14 @@ export async function buildWaApp(
       isStaffPhone: (phone: string) => boolean;
       enqueueCommand: (input: { phone: string; waMessageId: string }) => Promise<void>;
     };
+    /** CH-14a coexistence — the `smb_message_echoes` takeover path. */
+    coexistence?: {
+      findConversation: (phone: string) => Promise<{ conversationId: string } | null>;
+      apply: (input: {
+        conversationId: string;
+        echo: { waMessageId?: string; body: string | null; raw?: unknown };
+      }) => Promise<void>;
+    };
   },
 ) {
   const app = Fastify(
@@ -59,6 +67,7 @@ export async function buildWaApp(
     // CH-02-era tests exercise storage, not the queue — no-op by default.
     enqueue: opts?.enqueue ?? (async () => {}),
     ...(opts?.staff === undefined ? {} : { staff: opts.staff }),
+    ...(opts?.coexistence === undefined ? {} : { coexistence: opts.coexistence }),
   });
   return app;
 }
