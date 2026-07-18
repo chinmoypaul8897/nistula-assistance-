@@ -1660,6 +1660,30 @@ tool creating the task, the ladder's two rungs, the takeover pausing the AI — 
 that drive the REAL code paths (the tool handler, `runSlaNudger`, `applyHumanTakeover`, the webhook
 plugin, the admin route), never internals.)*
 
+**🚨 PRE-MERGE ADVERSARIAL REVIEW (the standing practice) — RED, then fixed to GREEN.** A 7-lens
+review (3 default-to-refuted skeptics per finding + a completeness critic + a chief synthesis, ~27
+agents) over the CH-14a diff returned **RED** on TWO real bugs, both fixed before merge; 4 of the 5
+confirmed findings were the SAME bug seen from different lenses:
+1. **BLOCKER — `isHumanActive` guarded by the mutable TTL, not the contract (THE recurring class,
+   again).** An `AI OFF` indefinite hold (status='human_active', TTL null) was silently downgraded to
+   a 2h window the moment the staff member replied in-thread: the echo stamps `human_active_until =
+   now+2h` WITHOUT touching status, and `isHumanActive` read the TTL FIRST — so 2h after the human's
+   last reply the AI resumed a thread staff explicitly locked (§6.7 line 1 + the "stays off until AI
+   ON" promise). Fixed: `status==='human_active' || (ttl && ttl>now)` — matching the two sibling
+   predicates (sender.ts, the DONE close-line) that already had it right. The pre-existing
+   `policy.test.ts` assertion `{human_active, past TTL} → NORMAL` encoded the OLD (dormant, pre-CH-14a)
+   contract and was corrected; an INTERACTION test (AI OFF → echo → clock past TTL → still held) pins it.
+2. **DEFECT (effectively BLOCKER) — the escalation card's ₹/URL ban jammed its own delivery.**
+   `escalation_card.detail`/`reason` were `staffParam` (bans ₹/URL), but `detail` is built from the
+   transcript INCLUDING the AI's own rate quotes — so a pricing-dispute escalation (the commonest
+   trigger) failed `schema.parse`, the front desk got NOTHING, and the SLA ladder re-failed every
+   tick. Fixed: the card is ENTIRELY staff-read, so all four slots now use a new **`staffReadParam`**
+   (Meta's newline/tab/4-space floor ONLY — no ₹/URL/house ban, since none reaches a guest); a
+   real-schema `renderTemplate('escalation_card', …)` test proves a ₹-laden and a URL-laden detail
+   deliver. Also strengthened: a DIRECT `markRungFired` guard test (the mid-ladder tests passed via
+   `findOverdueTasks` filtering, not the guard). One finder (decision-audit) died on a connection
+   error (26/27 agents); its lens was covered by the two that ran.
+
 **Built:**
 - **`escalate_to_human` tool** (`src/brain/tools/escalateToHuman.ts`) — the model's referral, now a
   TRACKED task so the ladder can chase it. DAY → an `escalation` task (sla 10m) + `escalation_card`
@@ -1740,6 +1764,18 @@ plugin, the admin route), never internals.)*
    escalation tasks — a larger change with contract-guard risk. Fail-closed and honest meanwhile.
 2. **The `smb_message_echoes` fixtures are PROVISIONAL** (§5.3) — authored from the documented shape,
    parsed tolerantly; re-verify against real captures at the CH-18 cutover.
+3. **OQ-27 (→ CH-14b) — a NIGHT escalation licenses a C3 "someone will reply shortly" claim** just
+   like a day one, but nobody is paged until 10:00. The plan explicitly scopes night guest-wording to
+   CH-14b step 5 (block [4]/[6] "state the 10am reality"); the signal `queued_for:'morning'` + block
+   [6]'s night flag + the phrasebook's night variant are in place per plan, so this is CH-14b's
+   ENFORCEMENT to add — flagged by the review, recorded sharply, NOT pulled forward.
+4. **Deferred review MINORs (→ CH-14b/CH-17, none break a non-negotiable):** a 2nd same-turn
+   `escalate_to_human` replays the card (double-buzz the front desk — needs a per-turn "delivered"
+   latch, not just the count, so a first FAILED notify still retries); a `mustEscalate` turn fires
+   `escalateToOps` AND the escalation card (two audiences, borderline-intended); a Meta-redelivered
+   echo re-extends the 2h TTL (gate the side-effects on `insertMessage` isNew); the SLA re-ping prints
+   the SLA constant not elapsed ("after 10 min" at the 20-min rung); the AI ON/OFF ambiguity list
+   shows an identical last-4 and only offers "more digits". Each is fail-closed/honest today.
 
 **How to verify:**
 - `docker compose up -d postgres` → `pnpm check` (green on the EXIT CODE).
