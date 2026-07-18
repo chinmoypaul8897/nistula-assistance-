@@ -53,6 +53,7 @@ import { handleStaffCommand } from '../staff/commands.js';
 import { applyHumanTakeover } from '../staff/humanTakeover.js';
 import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
+import { runMorningDigest, DIGEST_CRON } from '../staff/digest.js';
 import type { WaClient } from '../wa/client.js';
 
 export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
@@ -69,6 +70,7 @@ export const LIFECYCLE_SEND_QUEUE = 'lifecycle.send';
 export const LIFECYCLE_RECONCILE_QUEUE = 'lifecycle.reconcile';
 export const STAFF_COMMAND_QUEUE = 'staff.command';
 export const STAFF_SLA_QUEUE = 'staff.sla';
+export const STAFF_DIGEST_QUEUE = 'staff.digest';
 export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
   created: BOOKING_CREATED_QUEUE,
   modified: BOOKING_MODIFIED_QUEUE,
@@ -252,6 +254,15 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     policy: 'stately',
     retryLimit: 0, // the next 5-minute tick IS the retry
     // 20 overdue tasks × up to 2 window-aware sends × the lib/http 3-try ladder.
+    expireInSeconds: 420,
+  });
+  // CH-14b: the 10:00 morning digest — stately + a constant singletonKey so a
+  // run that overran cannot double-convert or double-send. retryLimit 0: a
+  // failed run waits for tomorrow (the conversion is idempotent, so no harm).
+  await boss.createQueue(STAFF_DIGEST_QUEUE, {
+    policy: 'stately',
+    retryLimit: 0,
+    // The whole overnight queue: convert + one card each + the OPS sends.
     expireInSeconds: 420,
   });
 }
@@ -619,13 +630,30 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     await scheduleCron(deps.boss, STAFF_SLA_QUEUE, SLA_NUDGER_CRON, 'Asia/Kolkata', {
       singletonKey: 'sla',
     });
+    // CH-14b: the 10:00 morning digest. `now` re-derived per run (never captured)
+    // so a long-lived process's overnight window cannot rot.
+    await deps.boss.work(STAFF_DIGEST_QUEUE, workOptions, async () => {
+      await runMorningDigest({
+        db: deps.db,
+        log: deps.log,
+        wa: deps.wa,
+        roster,
+        opsNumbers: roster.opsNumbers,
+        nightStart: deps.nightStart ?? '20:00',
+        now: () => new Date(),
+      });
+    });
+    await scheduleCron(deps.boss, STAFF_DIGEST_QUEUE, DIGEST_CRON, 'Asia/Kolkata', {
+      singletonKey: 'digest',
+    });
     deps.log.info(
       { roster: roster.members.length, ops: roster.opsNumbers.length },
-      'staff tasks ENABLED (SLA nudger every 5 min)',
+      'staff tasks ENABLED (SLA nudger every 5 min; morning digest 10:00)',
     );
   } else {
     // A cron left by an earlier boot must not fire into a workerless queue.
     await deps.boss.unschedule(STAFF_SLA_QUEUE).catch(() => {});
+    await deps.boss.unschedule(STAFF_DIGEST_QUEUE).catch(() => {});
   }
 
   // ── CH-14a human takeover (coexistence) ─────────────────────────────────

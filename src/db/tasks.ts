@@ -453,3 +453,43 @@ export async function markNotifyFailed(db: DbLike, taskId: string): Promise<void
     .set({ status: 'notify_failed' })
     .where(and(eq(tasks.id, taskId), eq(tasks.status, 'open')));
 }
+
+/**
+ * A night_queue task WAKES into a live escalation at the 10:00 digest (CH-14b,
+ * plan §8 CH-14 step 3 "night_queue tasks convert to escalation tasks, sla
+ * starts"). Guarded UPDATE of every OPEN night_queue row: kind → escalation, the
+ * day front desk assigned, the SLA clock started fresh (deadline passed in — one
+ * clock per tick), and nudge_count reset so the CH-14a ladder chases it from rung
+ * 0. Idempotent: after the flip the WHERE no longer matches, so a re-run converts
+ * nothing. Returns the rows it changed so the digest can list them and send each
+ * its now-due escalation card. Converting ALL open night_queue is correct — night
+ * escalations are only created at night with a next-10:00 deadline, so at THIS
+ * digest they are all due.
+ */
+export async function convertNightQueueTasks(
+  db: DbLike,
+  input: { assignedPhone: string | null; slaDeadline: Date },
+): Promise<Task[]> {
+  return db
+    .update(tasks)
+    .set({
+      kind: 'escalation',
+      assignedPhone: input.assignedPhone,
+      slaMinutes: SLA_MINUTES.escalation,
+      slaDeadline: input.slaDeadline,
+      nudgeCount: 0,
+    })
+    .where(and(eq(tasks.kind, 'night_queue'), eq(tasks.status, 'open')))
+    .returning();
+}
+
+/** Open/nudged tasks of the given kinds — the morning digest's overnight
+ * counts (CH-14b). Newest first. */
+export async function getLiveTasksByKinds(db: DbLike, kinds: TaskKind[]): Promise<Task[]> {
+  if (kinds.length === 0) return [];
+  return db
+    .select()
+    .from(tasks)
+    .where(and(inArray(tasks.kind, kinds), inArray(tasks.status, [...LIVE_TASK_STATUSES])))
+    .orderBy(desc(tasks.openedAt));
+}
