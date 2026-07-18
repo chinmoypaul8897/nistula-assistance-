@@ -83,6 +83,7 @@
 | **OQ-24** | **🚨 Does VOIDING a booking in eZee reach the queue? CANCEL does; a void has produced NOTHING in 2h.** If the front desk voids, we message guests about dead stays. | front desk + Paul | CH-10 mirror truth · CH-12 sends | 🔴 |
 | **OQ-19** | **A guest cannot book a specific house — eZee picks it. PROVEN.** ✅ SYMPTOM CLOSED 2026-07-16: the website ABOLISHED house-choice (sells the 3 types). Launch unblocked; CH-13 unblocked (route off eZee BKG-03 RoomID). **Open business Q: are Apt 06/09/11 really interchangeable?** | **Paul + eZee acct mgr** | website launch · CH-13 | 🟡 |
 | **OQ-25** | **🚨 Will the villa team actually MESSAGE the WhatsApp line, and how often?** A staff number quiet for 24h is unreachable by free-form, so every task card to it fails and the guest is (correctly) promised nothing. The whole hands-of-the-AI mechanism rests on this. | front desk + villa team | CH-13a task cards · cutover | 🔴 |
+| **OQ-28** | **May a FRESH pre-sales enquirer (no prior opt-in) get ONE lead follow-up on a legitimate-interest basis?** CH-15 ships opt-in-required (fail-closed), so a never-stayed lead gets nothing — the feature reaches only opted-in returning guests who re-enquire. | Paul + planning | CH-15 reach | 🟡 |
 
 ---
 
@@ -454,6 +455,29 @@ The refusal is a decision in code, not an accident of missing data.
 
 **What changes once they answer:** one environment variable. If yes, add the channels to
 `LIFECYCLE_SOURCES` and roughly triple the lifecycle's reach.
+
+### OQ-28 — May a fresh pre-sales enquirer get one lead follow-up without prior opt-in?
+**Status:** 🟡 (filed by CH-15; A2 Paul-confirmed the fail-closed default.)
+
+**What we need to know:** a guest who asks us for a quote but has never stayed has no way to opt in
+(opt-in comes only from the post-stay YES). CH-15 makes the lead follow-up a **marketing** message,
+so it is blocked at send time unless the guest opted in. **Are we permitted — by our own policy and by
+Meta/DPDP — to send ONE lead follow-up to a fresh enquirer on a legitimate-interest basis (they asked
+us for a price), or is explicit opt-in mandatory?**
+
+**Why it matters to a real guest:** as shipped, a brand-new enquirer who does not book gets **nothing**
+— the lead follow-up reaches only previously opted-in returning guests who re-enquire. That is the
+safe, compliant default, but it makes the "nudge a non-converted lead" feature narrow: the population
+it nominally targets (new leads) is exactly the population it never reaches.
+
+**What we shipped meanwhile:** opt-in required (fail-closed). The `lead_followup` row is still
+scheduled on every qualifying quote, but `sendGuards.marketingBlock` skips it with
+`no_marketing_opt_in` unless the guest has opted in and not opted out. STOP is always honoured.
+
+**What changes once they answer:** if legitimate-interest is permitted, treat `lead_followup` as
+utility-basis for a first, single nudge (or add a `legitimate_interest` consent basis) — widening the
+feature to its intended population. If not, the current behaviour is final and the feature is
+returning-guest-only by design.
 
 ### OQ-21 — Is everything in eZee a real, paying guest?
 **Status:** 🔴 (team-question Q39.)
