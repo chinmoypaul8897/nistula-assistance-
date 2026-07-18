@@ -189,15 +189,20 @@ export const LIFECYCLE_TEMPLATES: Record<ScheduledKind, TemplateDef> = {
   }),
 
   poststay: def({
-    name: 'nst_poststay_v1',
+    // v2: the consent line was appended (CH-15). A body change is a NEW Meta
+    // template, so the name is bumped — the old v1 approval does not carry over.
+    name: 'nst_poststay_v2',
     language: 'en',
     category: 'utility',
     order: ['firstName'],
     schema: z.object({ firstName: param }),
-    // TODO(CH-15): append the consent line ("May we write to you when the season
-    // turns? Reply YES and we will.") — win-back has no opted-in guest without it.
+    // The consent invite (CH-15 step 6): win-back / lead follow-up require an
+    // opt-in, and this soft "Reply YES" is the ONLY place a guest is ever asked.
+    // A YES within 7 days sets marketing_opt_in (worker, deterministic). This
+    // stays a UTILITY template — it is a genuine post-stay service message that
+    // happens to ask; the marketing gate governs what we send AFTER a YES.
     render: (p) =>
-      `${p.firstName}, thank you for staying with us. We hope Goa was kind to you — and if anything could have been better, we would genuinely like to hear it.`,
+      `${p.firstName}, thank you for staying with us. We hope Goa was kind to you — and if anything could have been better, we would genuinely like to hear it. May we write to you when the season turns? Reply YES and we will.`,
   }),
 
   winback: def({
@@ -225,6 +230,17 @@ export const LIFECYCLE_TEMPLATES: Record<ScheduledKind, TemplateDef> = {
       `${p.firstName}, a gentle note about the ${p.villaType} you were considering for ${p.dates}. No rush at all — we are right here if you would like the link again. (Reply STOP anytime to stop these.)`,
   }),
 };
+
+/**
+ * The marketing family, DERIVED from the catalog's category — so a future
+ * marketing kind joins it for free. STOP cancels exactly these (consent.ts),
+ * and the send-time opt-in gate applies to exactly these (sendGuards). This is
+ * the CH-13b rule made structural: guard the family by the CONTRACT
+ * (category === 'marketing'), never a hard-coded ['winback', 'lead_followup'].
+ */
+export const MARKETING_KINDS: readonly ScheduledKind[] = (
+  Object.keys(LIFECYCLE_TEMPLATES) as ScheduledKind[]
+).filter((kind) => LIFECYCLE_TEMPLATES[kind].category === 'marketing');
 
 /* ── staff-facing (§5.3: the window rule binds staff numbers too) ─────────── */
 
