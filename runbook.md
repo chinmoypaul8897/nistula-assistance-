@@ -765,10 +765,62 @@ booking amount may be the OTA net, and no deposit figure is published) · the
 **meal plan** (an opaque code, OQ-16) · an **address or map pin** (none exists —
 OQ-12; the pre-arrival asks for an arrival time and promises a human sends one).
 
+## Draft mode (CH-16)
+
+Draft mode is the trust gate: on the real number the AI **proposes**, a human
+**approves** each send, and conversation types unlock to auto-send one at a time
+as they earn it. It is controlled by two env vars (§3.7):
+
+- **`DRAFT_MODE`** (default `true`) — when on, a MODEL-authored reply is held as a
+  `drafts` row and an ops number is carded instead of the guest being replied to.
+  Deterministic policy lines (a rate-limit cool-off, the "bringing the front desk
+  in" human-request line, the media "mind typing it?" line) always go DIRECT —
+  they are pre-vetted and time-sensitive.
+- **`AUTO_SEND_TYPES`** (default empty) — a CSV of reply types that BYPASS drafting
+  and send straight to the guest. The only legal values are the four conversation
+  types: `presales` (a lead), `arrival` (pre-arrival), `instay` (in-house),
+  `poststay` (departed). A typo fails BOOT (it would otherwise silently unlock
+  nothing). A guest holding a booking a human must see (`needsHuman` — a
+  cancellation for next week, a multi-room stay) is ALWAYS drafted, even for an
+  unlocked type.
+
+### 🚨 Merging CH-16 changes what the live number does — set the env deliberately
+
+`DRAFT_MODE` defaults to `true`, so a fresh deploy would flip the live test number
+from replying directly to needing ops approval — and with no `OPS_NUMBERS` set
+there, a guest would get nothing (fail-closed silence). **Keep the test number on
+direct replies until the draft demo is run on purpose:** set
+`AUTO_SEND_TYPES=presales,arrival,instay,poststay` on Railway (or `DRAFT_MODE=false`).
+To run the draft demo, narrow `AUTO_SEND_TYPES` and make sure `OPS_NUMBERS` holds a
+real approver number that has messaged the line within 24 h (the same 24 h-window
+rule that binds staff cards — a cold ops number cannot receive a draft card in
+`simulate`).
+
+### The ops command sheet (from an OPS number only)
+
+A draft card reads:
+`DRAFT #<id> for <guest> (<type>) --- <reply> --- Reply: OK <id> · EDIT <id> <new text> · NO <id>`
+- **`OK <id>`** — send the AI's reply to the guest verbatim.
+- **`EDIT <id> <new text>`** — send YOUR words instead (skips the model guardrails,
+  but the window check and a leak-scan advisory still run; the edit is kept as gold
+  data for the unlock decision).
+- **`NO <id>`** — drop it; the guest gets nothing.
+These are honoured from `OPS_NUMBERS` only — a housekeeper typing `OK` is chatter.
+A draft not decided within **30 minutes** expires (the guest gets nothing; ops is
+alerted and the morning digest rolls up the count).
+
+### The unlock ritual
+
+Every Sunday 18:00 IST a **quality report** goes to ops (and is stored in
+`raw_events` as `quality_report`): per-type counts, approval rate, edit rate,
+expiry rate, and the week's guardrail hits. To unlock a type once its approval rate
+is high and its edit rate low: **add that type to `AUTO_SEND_TYPES` on Railway and
+redeploy.** Unlock ONE type at a time and watch the next report. To pull back, remove
+it — the change is just an env edit.
+
 ## Sections to come
 
 - Staff command sheet: `DONE <id>` · `TASKS` · `AI ON/OFF <last4>` — CH-13/14
-- Draft-mode unlock ritual — CH-16
 - Incidents: webhook silent · eZee down · degraded mode · cost spike — CH-17/18
 - Env rotation (WA token!) · backups & restore drill · go-live checklist — CH-18a
 
