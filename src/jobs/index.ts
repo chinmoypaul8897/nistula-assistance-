@@ -27,8 +27,10 @@ import {
   type WorkerLogger,
 } from '../brain/worker.js';
 import { sql } from 'drizzle-orm';
+import type { ReplyType } from '../config.js';
 import type { Db } from '../db/client.js';
 import { getMirrorByReservationNo } from '../db/bookings.js';
+import { insertDraft } from '../db/drafts.js';
 import { findConversationForTakeover, getMessageBody } from '../db/repos.js';
 import type { EzeeClient } from '../ezee/client.js';
 import { createEzeePoller } from '../ezee/poller.js';
@@ -50,6 +52,7 @@ import {
   type ArrivalTaskDeps,
 } from '../staff/arrivalTasks.js';
 import { handleStaffCommand } from '../staff/commands.js';
+import { notifyDraft } from '../staff/draftNotify.js';
 import { applyHumanTakeover } from '../staff/humanTakeover.js';
 import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
@@ -363,6 +366,11 @@ export interface JobsDeps {
    * that is a different thing from unmounted, and it fails closed on its own:
    * assignFor returns null, the card reaches nobody, and nothing is promised. */
   staff?: { roster: Roster };
+  /** CH-16 draft mode. draftMode = DRAFT_MODE, autoSendTypes = AUTO_SEND_TYPES
+   * (both from config). Default direct (draftMode false) so a jobs test that
+   * omits them keeps pre-CH-16 behaviour; production always passes config's. */
+  draftMode?: boolean;
+  autoSendTypes?: readonly ReplyType[];
 }
 
 export interface Jobs {
@@ -431,6 +439,17 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     // On-demand hysteresis (CH-08): the worker reports overflow; the gate —
     // token-trim OR gap ≥ the nightly threshold — shares ONE constant source.
     summarise: { enqueue: enqueueSummarise, gapMin: thresholds.minUnsummarised },
+    // CH-16 draft mode. The `drafts` slice is ALWAYS wired (it is core, not an
+    // optional feature); whether a reply is drafted is decided by draftMode +
+    // autoSendTypes + needsHuman inside the worker. `create` runs in the claim
+    // tx; `notify` cards ops via the same window-aware chokepoint the task
+    // cards use.
+    draftMode: deps.draftMode ?? false,
+    autoSendTypes: deps.autoSendTypes ?? [],
+    drafts: {
+      create: (tx, input) => insertDraft(tx, input),
+      notify: (opsNumbers, card) => notifyDraft({ log: deps.log, wa: deps.wa }, opsNumbers, card),
+    },
   };
   const summariserDeps: SummariserDeps = {
     db: deps.db,

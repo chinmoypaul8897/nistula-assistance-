@@ -34,7 +34,12 @@ import { istCalendarDay } from '../lib/time.js';
 import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
+import { shouldDraftReply, stageToReplyType } from './draftRouting.js';
 import { isWindowOpen } from './draftGuards.js';
+import type { ReplyType } from '../config.js';
+import type { DbLike } from '../db/client.js';
+import type { Draft, NewDraft } from '../db/drafts.js';
+import type { DraftCardInput } from '../staff/draftNotify.js';
 import { guestTextOf, isAffirmative } from './inbound.js';
 import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
 import { raiseMediaFrontdeskTask } from '../staff/mediaTask.js';
@@ -70,6 +75,17 @@ export interface WorkerDeps extends TurnDeps {
    * Optional: skip-model policy paths and older tests never detect overflow
    * (the nightly pass covers those threads). */
   summarise?: { enqueue: (conversationId: string) => Promise<void>; gapMin: number };
+  /** CH-16 draft mode. Wired from config in jobs/index.ts; ABSENT in unit tests
+   * that predate draft mode ⇒ direct send (pre-CH-16 behaviour, and a
+   * fail-open only in tests — production always wires all three). `create` runs
+   * INSIDE the claim tx (atomic with the turn — a crash must not lose the
+   * reply); `notify` cards the ops number(s) post-tx. */
+  draftMode?: boolean;
+  autoSendTypes?: readonly ReplyType[];
+  drafts?: {
+    create: (tx: DbLike, input: NewDraft) => Promise<Draft>;
+    notify: (opsNumbers: readonly string[], card: DraftCardInput) => Promise<{ delivered: boolean }>;
+  };
 }
 
 /**
@@ -208,6 +224,22 @@ export async function processConversation(
   // Practically closed only on sweeper recovery after a >24h outage.
   const windowOpen = isWindowOpen(newest.createdAt, ctx.dbNow);
 
+  // CH-16 draft mode: hold this reply for ops approval instead of sending it?
+  // Scope (Paul-confirmed): MODEL turns only — a deterministic phrasebook/policy
+  // send (cool-off throttle, human-request ack, media "mind typing it?") is
+  // pre-vetted and sometimes time-sensitive, so it stays direct. `needsHuman`
+  // FORCES a draft even for an unlocked type (draftRouting / stayView contract).
+  const replyType = stageToReplyType(stayContext.stage);
+  const willDraft =
+    deps.drafts !== undefined &&
+    turn !== null &&
+    shouldDraftReply({
+      draftMode: deps.draftMode ?? false,
+      autoSendTypes: deps.autoSendTypes ?? [],
+      replyType,
+      needsHuman: stayContext.needsHuman,
+    });
+
   // ONE transaction (CH-03 decision D2): claim (+ guarded status CASE) + send
   // intent commit atomically so every failure state stays observable. Claim
   // FIRST inside the tx: a losing claim writes nothing. `claimed` is tracked
@@ -215,6 +247,8 @@ export async function processConversation(
   let claimed = false;
   let announced = false;
   let intentId: string | null = null;
+  // CH-16: set instead of intentId when the reply was committed as a DRAFT.
+  let draftShortId: string | null = null;
   await deps.db.transaction(async (tx) => {
     const res = await claimConversationTurn(tx, {
       conversationId,
@@ -240,13 +274,28 @@ export async function processConversation(
     // requested edge (a CH-14 human takeover racing in suppresses it safely).
     announced = !plan.announceOnTransition || res.status === plan.statusTransition?.to;
     if (body !== null && announced && windowOpen) {
-      const intent = await deps.wa.createSendIntent(
-        tx,
-        body,
-        { conversationId, sender: 'ai' },
-        turn !== null && turn.toolRuns.length > 0 ? { raw: { toolRuns: turn.toolRuns } } : undefined,
-      );
-      intentId = intent.id;
+      if (willDraft && turn !== null && deps.drafts !== undefined) {
+        // Draft mode: commit the proposed reply for approval instead of sending
+        // it — in the SAME tx as the claim, so a crash never loses the turn (the
+        // send-intent reasoning). No guest send-intent; the card goes post-tx.
+        const tools = turn.toolRuns.map((r) => r.name);
+        const draft = await deps.drafts.create(tx, {
+          conversationId,
+          replyType,
+          proposedBody: body,
+          contextNote:
+            tools.length > 0 ? `${stayContext.stage} · tools: ${tools.join(', ')}` : stayContext.stage,
+        });
+        draftShortId = draft.shortId;
+      } else {
+        const intent = await deps.wa.createSendIntent(
+          tx,
+          body,
+          { conversationId, sender: 'ai' },
+          turn !== null && turn.toolRuns.length > 0 ? { raw: { toolRuns: turn.toolRuns } } : undefined,
+        );
+        intentId = intent.id;
+      }
     }
   });
 
@@ -256,7 +305,7 @@ export async function processConversation(
     // Crash forensics: a 'turn claimed' line with no matching dispatch
     // outcome marks the (milliseconds-wide) claim→dispatch crash window.
     deps.log.info(
-      { conversationId, upto: newest.id, intentId, directive: directive.kind },
+      { conversationId, upto: newest.id, intentId, draftShortId, directive: directive.kind },
       'turn claimed',
     );
     // Escalation BEFORE the guest dispatch: a reply saying "bringing the team
@@ -326,7 +375,17 @@ export async function processConversation(
         outcome: 'linked',
       });
     }
-    if (intentId !== null && body !== null) {
+    if (draftShortId !== null && body !== null && deps.drafts !== undefined) {
+      // CH-16: the reply is a draft — card the ops number(s) instead of the
+      // guest. Post-tx, winning-claim path only, exactly where the guest
+      // dispatch used to be, so the same crash-forensics window applies.
+      await deps.drafts.notify(deps.opsNumbers, {
+        shortId: draftShortId,
+        guestName: ctx.guestName,
+        replyType,
+        body,
+      });
+    } else if (intentId !== null && body !== null) {
       await deps.wa.dispatchText({ messageId: intentId, toE164: ctx.guestPhone, body, conversationId });
     }
     if (body !== null && announced && !windowOpen) {

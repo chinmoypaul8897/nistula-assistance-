@@ -190,6 +190,12 @@ async function main(): Promise<void> {
     // guardrail 2 refuses every claim about it), while leaving it unmounted
     // would make the tool silently absent and the honesty untestable.
     staff: { roster: { members: config.staffRoster, opsNumbers: config.opsNumbers } },
+    // CH-16 draft mode. DRAFT_MODE defaults true, so unless AUTO_SEND_TYPES
+    // unlocks a type the AI drafts for ops approval rather than replying direct.
+    // 🚨 On the live test number, keep replies DIRECT until the draft demo is run
+    // deliberately by setting AUTO_SEND_TYPES to all four types (runbook).
+    draftMode: config.draftMode,
+    autoSendTypes: config.autoSendTypes,
   });
   await app.register(waWebhookRoutes, {
     db,
