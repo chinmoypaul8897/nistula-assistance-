@@ -179,6 +179,43 @@ export interface ToolTaskContext {
   created: { count: number };
 }
 
+/**
+ * Per-TURN escalation identity (CH-14a) — the fourth instance of the pattern,
+ * and like tasks it carries COLLABORATORS: an escalation's `ok` depends on a card
+ * reaching a human (guardrail 2 C3), so the notifier's verdict IS the tool's `ok`.
+ */
+export interface ToolEscalationContext {
+  db: Db;
+  conversationId: string;
+  guestId: string;
+  /** For the card; sanitised at render. */
+  guestFirstName: string | null;
+  /** OLDEST guest message of the batch — the deterministic retry key (identity,
+   * like ToolTaskContext.requestCursorId). */
+  requestCursorId: string | null;
+  /** The IST night window (§3.7 NIGHT_START/NIGHT_END) — the SAME strings the
+   * turn's leak-guard reads, so the tool and the turn never disagree on day/night. */
+  nightStart: string;
+  nightEnd: string;
+  /** The DB clock instant — the night check and the night_queue deadline derive
+   * from it. Never new Date(). */
+  now: Date;
+  /** The §8 roster ladder — an escalation routes to the frontdesk lead. */
+  assign: (kind: TaskKind, villa: string | null) => TaskAssignment | null;
+  /** Sends the escalation card and reports whether a human got it — the tool's
+   * `ok`. Unlike a task card a failure leaves the task `open` (the ladder retries). */
+  notify: (
+    task: Task,
+    guestFirstName: string | null,
+    reasonLabel: string,
+  ) => Promise<{ delivered: boolean }>;
+  /** The recent transcript, flattened to ONE line for the card's detail slot. */
+  recentContext: () => Promise<string>;
+  /** Mutable per-turn latch (cap 1), shared across the regenerate loop like
+   * memory.saves / tasks.created. */
+  raised: { count: number };
+}
+
 /** The one eZee call a tool may make (BKG-03). Narrowed to a function type so
  * the registry does not depend on the whole eZee client. */
 export type EzeeDoorReader = (reservationNo: string) => Promise<DoorResolution>;
@@ -206,6 +243,8 @@ export interface ToolContext {
   booking?: ToolBookingContext;
   /** Absent ⇒ create_staff_task cannot raise (contexts with no guest identity). */
   tasks?: ToolTaskContext;
+  /** Absent ⇒ escalate_to_human cannot bring a person in (no guest identity). */
+  escalation?: ToolEscalationContext;
 }
 
 /** The Anthropic tool spec shape (a JSON-schema input_schema). */

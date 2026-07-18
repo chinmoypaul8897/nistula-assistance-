@@ -12,7 +12,7 @@
  */
 import type Anthropic from '@anthropic-ai/sdk';
 import type { Db } from '../db/client.js';
-import type { Conversation } from '../db/repos.js';
+import { getRecentMessages, type Conversation, type Message } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
 import { istCalendarDay } from '../lib/time.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
@@ -30,6 +30,7 @@ import type { DegradedTracker } from './tools/degraded.js';
 import type {
   EzeeDoorReader,
   ToolContext,
+  ToolEscalationContext,
   ToolRegistry,
   ToolRun,
   ToolTaskContext,
@@ -79,6 +80,17 @@ export interface TurnDeps {
     resolveDoor: EzeeDoorReader;
     assign: ToolTaskContext['assign'];
     notify: ToolTaskContext['notify'];
+  };
+  /**
+   * CH-14a. Absent ⇒ `escalate_to_human` has no context and refuses (the model
+   * then falls back to a referral phrase, which guardrail 2 turns into a
+   * deterministic ops ping). Grouped as one optional, like `tasks`. `assign`
+   * routes an escalation to the frontdesk lead; `notify` is staff/notifier's
+   * `notifyEscalation`.
+   */
+  escalation?: {
+    assign: ToolEscalationContext['assign'];
+    notify: ToolEscalationContext['notify'];
   };
 }
 
@@ -247,6 +259,28 @@ export async function runClaudeTurn(deps: TurnDeps, args: TurnArgs): Promise<Tur
             assign: deps.tasks.assign,
             notify: deps.tasks.notify,
             created: { count: 0 },
+          },
+        }),
+    // CH-14a: escalate_to_human's per-turn group. Shared across BOTH loops like
+    // the others (the `raised` latch caps the turn, not the loop). The night
+    // window is the SAME strings buildTurnContext read for `isNight`, so the tool
+    // and the leak-guard can never disagree on day/night within one turn.
+    ...(deps.escalation === undefined
+      ? {}
+      : {
+          escalation: {
+            db: deps.db,
+            conversationId,
+            guestId: args.conversation.guestId,
+            guestFirstName: args.guestName ?? null,
+            requestCursorId: args.oldestGuestMsgId ?? null,
+            nightStart: deps.nightStart,
+            nightEnd: deps.nightEnd,
+            now: dbNow,
+            assign: deps.escalation.assign,
+            notify: deps.escalation.notify,
+            recentContext: () => buildEscalationDetail(deps.db, conversationId),
+            raised: { count: 0 },
           },
         }),
   };
@@ -454,5 +488,21 @@ async function runToolLoop(
 /** An empty final draft (max_tokens cutoff, refusal) must never be dispatched. */
 function nonEmptyOrDeferral(text: string): string {
   return text.trim() === '' ? PHRASEBOOK.outsideKnowledge : text;
+}
+
+/** The escalation card's context slot (CH-14a): the last few real (guest/AI)
+ * lines flattened to ONE line — the human taking over needs the thread, not just
+ * the reason. Template params forbid newlines, and notifyEscalation caps it; this
+ * only bounds what gets STORED in tasks.detail (CH-14b's digest reads it too). */
+async function buildEscalationDetail(db: Db, conversationId: string): Promise<string> {
+  const recent = await getRecentMessages(db, conversationId, 8);
+  const line = (m: Message): string => {
+    const who = m.sender === 'guest' ? 'Guest' : 'Us';
+    const body = (m.body ?? '').replace(/\s+/g, ' ').trim();
+    return body === '' ? '' : `${who}: ${body}`;
+  };
+  const lines = recent.map(line).filter((l) => l !== '').slice(-5);
+  const joined = lines.join(' · ');
+  return joined === '' ? '(no recent messages)' : joined.slice(0, 500);
 }
 
