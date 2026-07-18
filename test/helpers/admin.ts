@@ -12,10 +12,25 @@ import type { LogCapture } from './wa.js';
 export const TEST_ADMIN_TOKEN = 'test-admin-bearer-token-0123456789';
 
 /** Builds an injectable app with the admin routes registered. */
-export async function buildAdminApp(db: Db, capture?: LogCapture, bearerToken?: string) {
+export async function buildAdminApp(
+  db: Db,
+  capture?: LogCapture,
+  bearerToken?: string,
+  coexistence?: {
+    findConversation: (phone: string) => Promise<{ conversationId: string } | null>;
+    apply: (input: {
+      conversationId: string;
+      echo: { waMessageId?: string; body: string | null; raw?: unknown };
+    }) => Promise<void>;
+  },
+) {
   const app = Fastify(
     capture === undefined ? {} : { loggerInstance: pino({ level: 'debug' }, capture.stream) },
   );
-  await app.register(adminRoutes, { db, bearerToken: bearerToken ?? TEST_ADMIN_TOKEN });
+  await app.register(adminRoutes, {
+    db,
+    bearerToken: bearerToken ?? TEST_ADMIN_TOKEN,
+    ...(coexistence === undefined ? {} : { coexistence }),
+  });
   return app;
 }

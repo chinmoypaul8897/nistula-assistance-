@@ -96,17 +96,35 @@ describe('directive order (§6.7)', () => {
     expect(d.kind).toBe('HUMAN_ACTIVE');
   });
 
-  it('the TTL wins when present — expired human_active_until resumes the AI', () => {
+  it('a PASSIVE echo takeover (status ai_active) is governed by its 2h TTL', () => {
     const future = new Date(NOW.getTime() + 60_000);
     const past = new Date(NOW.getTime() - 60_000);
+    // An echo pauses the AI while the TTL holds, then resumes when it expires.
     expect(
       decide([text('hello')], { conversation: { status: 'ai_active', humanActiveUntil: future } })
         .kind,
     ).toBe('HUMAN_ACTIVE');
     expect(
-      decide([text('hello')], { conversation: { status: 'human_active', humanActiveUntil: past } })
+      decide([text('hello')], { conversation: { status: 'ai_active', humanActiveUntil: past } })
         .kind,
     ).toBe('NORMAL');
+  });
+
+  it('🚨 an explicit AI-OFF hold (status human_active) survives an EXPIRED echo TTL', () => {
+    // The CH-14a review BLOCKER: status='human_active' is only ever set by AI OFF
+    // and means "held until AI ON". A later staff echo stamps a 2h TTL; once it
+    // expires the AI must STILL stay silent — the hold is indefinite, not a proxy
+    // for the mutable clock. (Guard by the CONTRACT, not the TTL.)
+    const past = new Date(NOW.getTime() - 60_000);
+    expect(
+      decide([text('hello')], { conversation: { status: 'human_active', humanActiveUntil: past } })
+        .kind,
+    ).toBe('HUMAN_ACTIVE');
+    // And still held with a null TTL (the bare AI OFF state).
+    expect(
+      decide([text('hello')], { conversation: { status: 'human_active', humanActiveUntil: null } })
+        .kind,
+    ).toBe('HUMAN_ACTIVE');
   });
 });
 

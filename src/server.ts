@@ -204,12 +204,19 @@ async function main(): Promise<void> {
         isStaffPhone({ members: config.staffRoster, opsNumbers: config.opsNumbers }, phone),
       enqueueCommand: jobs.enqueueStaffCommand,
     },
+    // CH-14a: the prod `smb_message_echoes` takeover path.
+    coexistence: jobs.coexistence,
   });
   // CH-09: admin routes mount ONLY when enabled — unmounted means Fastify's
   // default 404, indistinguishable from a route that never existed (§3.3 "no
   // public surface"). loadConfig guarantees a ≥16-char token when enabled.
   if (config.adminRoutesEnabled && config.adminBearerToken !== undefined) {
-    await app.register(adminRoutes, { db, bearerToken: config.adminBearerToken });
+    // CH-14a: the dev human-takeover sim shares the coexistence core.
+    await app.register(adminRoutes, {
+      db,
+      bearerToken: config.adminBearerToken,
+      coexistence: jobs.coexistence,
+    });
     app.log.info('admin routes enabled');
   }
   app.log.info(`config: ${configSummary(config)}`);

@@ -141,6 +141,38 @@ export async function cancelLiveTaskByRequestKey(
 }
 
 /**
+ * Cancel a conversation's LIVE escalation/night-queue tasks (CH-14a). Called
+ * when a human takes the thread over (an echo, the dev sim, or an `AI OFF`
+ * command): a human ON the thread IS the resolution of "get a human on this
+ * thread", so the escalation ladder must stop re-pinging (scenario 4 — Meera's
+ * takeover at 12:19 must cancel the 12:26 re-ping).
+ *
+ * 🚨 This is an EVENT-driven cancel, not the ladder polling `human_active_until`
+ * every tick. Polling a mutable TTL would be the skip-on-mutable-fact trap (the
+ * §recurring-class VERB axis): the TTL expires, and a still-open escalation would
+ * silently resume nudging. Cancelling on the takeover EVENT is terminal on a fact
+ * that happened. Only `escalation`/`night_queue` kinds — a housekeeping task is
+ * real work the takeover does not resolve. Guarded on the live statuses; returns
+ * the rows it changed (empty when there was nothing to stop).
+ */
+export async function cancelLiveEscalationsForConversation(
+  db: DbLike,
+  conversationId: string,
+): Promise<Task[]> {
+  return db
+    .update(tasks)
+    .set({ status: 'cancelled' })
+    .where(
+      and(
+        eq(tasks.conversationId, conversationId),
+        inArray(tasks.kind, ['escalation', 'night_queue']),
+        inArray(tasks.status, [...LIVE_TASK_STATUSES]),
+      ),
+    )
+    .returning();
+}
+
+/**
  * Re-anchor an OPEN task's SLA deadline (CH-13b round 2). The arrival
  * verify-task's deadline is check-in-derived, and a booking.modified can move
  * check-in — a frozen deadline would nudge against the OLD date (axis-2: a
@@ -374,13 +406,41 @@ export async function findOverdueTasks(db: DbLike, now: Date, limit = 20): Promi
     .limit(limit);
 }
 
-/** Claims a task for nudging. Guarded on `open` so two nudger ticks (or a
- * DONE landing mid-tick) can never double-ping a busy human. */
-export async function markNudged(db: DbLike, taskId: string): Promise<Task | null> {
+/** A rung the ladder may land a task on after firing (CH-14a). Never `done`
+ * (only a human closes) nor `cancelled` (only a resolution/takeover). */
+export type RungStatus = Extract<TaskStatus, 'open' | 'nudged'>;
+
+/**
+ * Advances a task by ONE SLA rung (CH-14a; supersedes CH-13a's markNudged).
+ *
+ * Guarded on BOTH `status='open'` AND the exact prior `nudge_count`, so:
+ *  - a rung fires at most once (after it, `nudge_count` no longer matches);
+ *  - a DONE or a takeover-cancel landing mid-tick (either flips status off
+ *    `open`) wins the race — this returns null and the caller writes no
+ *    evidence, exactly markNudged's old property, now count-keyed too.
+ *
+ * `newStatus` is the caller's contract, not ours: a FINAL rung passes `nudged`
+ * (the generic one-shot, and the escalation ladder's last rung — chased, leave
+ * it chased); an intermediate rung passes `open` so `findOverdueTasks` re-selects
+ * it for the next rung. We never infer it here — the rung table in sla.ts owns
+ * "how many rungs this kind has".
+ */
+export async function markRungFired(
+  db: DbLike,
+  taskId: string,
+  expectedCount: number,
+  newStatus: RungStatus,
+): Promise<Task | null> {
   const [row] = await db
     .update(tasks)
-    .set({ status: 'nudged' })
-    .where(and(eq(tasks.id, taskId), eq(tasks.status, 'open')))
+    .set({ status: newStatus, nudgeCount: expectedCount + 1 })
+    .where(
+      and(
+        eq(tasks.id, taskId),
+        eq(tasks.status, 'open'),
+        eq(tasks.nudgeCount, expectedCount),
+      ),
+    )
     .returning();
   return row ?? null;
 }

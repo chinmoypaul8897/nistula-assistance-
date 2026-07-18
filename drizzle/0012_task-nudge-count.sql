@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ADD COLUMN "nudge_count" integer DEFAULT 0 NOT NULL;

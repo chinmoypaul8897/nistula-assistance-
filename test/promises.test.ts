@@ -141,13 +141,19 @@ describe('evidence channels', () => {
     expect(scan.violations.length).toBeGreaterThan(0);
   });
 
-  it('the registry is EXACTLY these two, and get_booking is deliberately absent', () => {
+  it('the registry is EXACTLY these three, and get_booking is deliberately absent', () => {
     // get_booking is registered in NO class on purpose (CH-11 D2): C1's regex
     // packs `confirmed` in with `informed`, so registering it would license
     // "the team has been informed" off a mere booking lookup.
-    expect([...TOOL_CLAIMS.keys()].sort()).toEqual(['create_staff_task', 'remember_fact']);
+    expect([...TOOL_CLAIMS.keys()].sort()).toEqual([
+      'create_staff_task',
+      'escalate_to_human',
+      'remember_fact',
+    ]);
     expect([...(TOOL_CLAIMS.get('remember_fact') ?? [])]).toEqual(['C4']);
     expect([...(TOOL_CLAIMS.get('create_staff_task') ?? [])].sort()).toEqual(['C1', 'C2']);
+    // CH-14a: escalate_to_human licenses C3 and ONLY C3 (the referral, not dispatch).
+    expect([...(TOOL_CLAIMS.get('escalate_to_human') ?? [])]).toEqual(['C3']);
   });
 
   it('a memory save still never cross-licenses a staff claim, and vice versa', () => {
@@ -161,6 +167,39 @@ describe('evidence channels', () => {
       scanPromises("I'll remember that for next time.", { ...NO_EVIDENCE, toolRuns: [tasked] })
         .violations.length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe('🚨 C3 — escalate_to_human licenses the referral, a failure un-says it (CH-14a)', () => {
+  const referral = 'Of course — let me bring the team in. Someone will reply here shortly.';
+  const okRun: ToolRun = {
+    name: 'escalate_to_human',
+    input: {},
+    result: { ok: true, data: { queued_for: 'now' } },
+  };
+  const failRun: ToolRun = {
+    name: 'escalate_to_human',
+    input: {},
+    result: { ok: false, error: 'NOT_NOTIFIED', data: {} },
+  };
+
+  it('a SUCCESSFUL escalate covers C3 — the referral is handled, nothing else fires', () => {
+    const scan = scanPromises(referral, { ...NO_EVIDENCE, toolRuns: [okRun] });
+    expect(scan.referral).toBe(false);
+    expect(scan.violations).toEqual([]);
+  });
+
+  it('with no escalation the referral is UNhandled — the caller must escalate', () => {
+    expect(scanPromises(referral, NO_EVIDENCE).referral).toBe(true);
+  });
+
+  it('a FAILED escalate this turn VETOES C3 even against a stale ops_escalation row', () => {
+    // The stale row alone would (wrongly) cover the referral.
+    const stale = { ...NO_EVIDENCE, systemEvidence: classesFromContextKinds(['ops_escalation']) };
+    expect(scanPromises(referral, stale).referral).toBe(false);
+    // But THIS turn's failed escalate is evidence of absence and must outrank it,
+    // so the caller escalates rather than trusting a proxy (guard by the contract).
+    expect(scanPromises(referral, { ...stale, toolRuns: [failRun] }).referral).toBe(true);
   });
 });
 

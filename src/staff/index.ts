@@ -8,7 +8,7 @@ import type { Task } from '../db/tasks.js';
 import type { EzeeClient } from '../ezee/client.js';
 import type { AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
-import { notifyTask, type NotifyMode } from './notifier.js';
+import { notifyEscalation, notifyTask, type NotifyMode } from './notifier.js';
 import { assignFor, type Roster } from './roster.js';
 import { resolveDoor, type DoorResolution } from './villaRoute.js';
 import type { TaskKind } from '../db/tasks.js';
@@ -47,5 +47,24 @@ export function buildStaffTaskDeps(deps: StaffWiringDeps): StaffTaskDeps {
     assign: (kind, villa) => assignFor(deps.roster, kind, villa),
     notify: async (task, guestFirstName, mode) =>
       notifyTask({ db: deps.db, log: deps.log, wa: deps.wa }, task, guestFirstName, mode),
+  };
+}
+
+export interface StaffEscalationDeps {
+  assign: (kind: TaskKind, villa: string | null) => TaskAssignment | null;
+  notify: (
+    task: Task,
+    guestFirstName: string | null,
+    reasonLabel: string,
+  ) => Promise<{ delivered: boolean }>;
+}
+
+/** The two collaborators `escalate_to_human` needs (CH-14a). `assign('escalation')`
+ * routes to the frontdesk lead; `notify` is the escalation-card send. */
+export function buildEscalationDeps(deps: StaffWiringDeps): StaffEscalationDeps {
+  return {
+    assign: (kind, villa) => assignFor(deps.roster, kind, villa),
+    notify: async (task, guestFirstName, reasonLabel) =>
+      notifyEscalation({ db: deps.db, log: deps.log, wa: deps.wa }, task, guestFirstName, reasonLabel),
   };
 }

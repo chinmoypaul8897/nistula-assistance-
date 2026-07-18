@@ -11,15 +11,18 @@
  *     must either defer or lie, and it is the lie this whole chunk exists to
  *     make impossible.
  *
- * ─── The verb (the CH-12 lesson, second axis) ─────────────────────────────
- * Nudging is NOT terminal: a nudged task is still open work, and the row that
- * proves we nudged decays on its own after one guest turn. So there is no
- * skip-vs-defer trap here — but the reason there isn't is worth stating, since
- * the next person to add a rung (CH-14's 10-min/20-min escalation ladder) will
- * be one step from one. `markNudged` is guarded on `open`, so a task can be
- * nudged exactly once by this rung; a DONE landing mid-tick simply wins.
+ * ─── The verb, and CH-14a's second rung ───────────────────────────────────
+ * Generic tasks get ONE nudge. `escalation` tasks get a LADDER: re-ping the
+ * front desk at the deadline (10 min), then cc OPS ten minutes later (scenario
+ * 4). The rung a task is on is `tasks.nudge_count`, and each rung's advance is a
+ * guarded UPDATE keyed on the exact prior count (`markRungFired`) — so a rung
+ * fires at most once and a DONE or a human-takeover cancel landing mid-ladder
+ * (either flips status off `open`) wins the race cleanly. The count is a
+ * MONOTONIC CONTRACT, not a mutable proxy: a fired rung is a fact that cannot
+ * un-fire (the recurring-class VERB axis, the trap this comment used to warn
+ * the next rung-adder was one step from).
  */
-import { findOverdueTasks, markNudged, type Task } from '../db/tasks.js';
+import { findOverdueTasks, markRungFired, type Task, type TaskKind } from '../db/tasks.js';
 import type { Db } from '../db/client.js';
 import { insertMessage } from '../db/repos.js';
 import { sanitiseInline } from '../brain/prompt.js';
@@ -33,6 +36,9 @@ export interface SlaDeps {
   log: AlertLogger & { info?: (obj: Record<string, unknown>, msg?: string) => void };
   wa: Pick<WaClient, 'sendTemplated'>;
   roster: Roster;
+  /** OPS_NUMBERS (E.164) — the escalation ladder's rung-2 cc recipients. Absent
+   * ⇒ no extra cc (dev's standing state); the rung still fires to assignee+lead. */
+  opsNumbers?: readonly string[];
   /** Injected — ONE clock per tick (the CH-12 lesson: a suite that reads the
    * wall clock is lying, and `main` went red ten hours a night for it). */
   now: () => Date;
@@ -45,6 +51,34 @@ export const SLA_NUDGER_CRON = '*/5 * * * *';
 export const SLA_NUDGE_CONTEXT_KIND = 'sla_nudge';
 
 const NUDGE_SUMMARY_MAX = 120;
+const ESCALATION_DETAIL_MAX = 190;
+
+/**
+ * One rung: WHEN it fires (relative to the task's slaDeadline) and whether it
+ * cc's OPS. `afterMs` from slaDeadline, not from now, so the 10/20-minute
+ * scenario-4 clock is anchored to the same instant `findOverdueTasks` selects on.
+ */
+interface Rung {
+  afterMs: number;
+  ccOps: boolean;
+}
+
+/**
+ * The ladder per kind. Generic kinds keep the CH-13a one-shot (rung 0 at the
+ * deadline, then `nudged` and done). `escalation` adds a second rung 10 minutes
+ * later that cc's OPS. `night_queue` has NO rungs — nobody is on duty; CH-14b's
+ * morning digest converts it instead, so the nudger deliberately never touches it.
+ */
+const RUNGS: Record<TaskKind, Rung[]> = {
+  housekeeping: [{ afterMs: 0, ccOps: false }],
+  maintenance: [{ afterMs: 0, ccOps: false }],
+  frontdesk: [{ afterMs: 0, ccOps: false }],
+  escalation: [
+    { afterMs: 0, ccOps: false }, // rung 0 @ deadline (+10m): re-ping the front desk
+    { afterMs: 10 * 60_000, ccOps: true }, // rung 1 @ +20m: cc OPS
+  ],
+  night_queue: [],
+};
 
 export interface NudgeRun {
   considered: number;
@@ -60,31 +94,31 @@ export async function runSlaNudger(deps: SlaDeps): Promise<NudgeRun> {
   let nudged = 0;
   for (const task of overdue) {
     try {
-      // 🚨 SEND FIRST, FLIP ON DELIVERY — and this order is the VERB lesson,
-      // not a style choice.
-      //
-      // My first cut claimed the row (open→nudged) BEFORE sending, and on a
-      // failed send alerted ops and returned WITHOUT reverting. The flip is
-      // TERMINAL — `findOverdueTasks` selects only `open`, and nothing anywhere
-      // returns a task to `open` — so the row said "nudged" when nobody was
-      // nudged, the rung was permanently consumed, and block [5] rendered
-      // ", already chased once" into the prompt: a chase that never happened,
-      // told to the model as fact. A terminal verb on a MUTABLE, RETRYABLE fact
-      // (`retryable: true` is literally set on those send failures) is the
-      // 9th/11th instance's exact shape.
-      //
-      // Sending first is safe here because there is no concurrent nudger to
-      // race: STAFF_SLA_QUEUE is stately with a constant singletonKey, so at
-      // most one tick runs. The only race is a DONE landing mid-tick, and
-      // `markNudged`'s `WHERE status='open'` still wins that cleanly — we just
-      // do not write evidence for a task that closed underneath us.
-      //
-      // The residual, chosen deliberately: a crash between the send and the
-      // flip re-nudges next tick. Buzzing a housekeeper twice is an annoyance;
-      // never chasing again while telling the model we did is a lie.
-      if (!(await nudgeOne(deps, task))) continue;
-      const claimed = await markNudged(deps.db, task.id);
-      if (claimed === null) continue; // a DONE won the race — nothing to record
+      const rungs = RUNGS[task.kind];
+      const k = task.nudgeCount;
+      // Ladder exhausted (or a no-rung kind like night_queue): nothing to do.
+      if (k >= rungs.length) continue;
+      const rung = rungs[k] as Rung;
+      // This rung's turn has not come yet (an escalation past its 10-min deadline
+      // but not yet 20 min old): leave it `open` for a later tick. NOT terminal —
+      // DEFER, because the fact "20 minutes have passed" is still coming.
+      if (now.getTime() < task.slaDeadline.getTime() + rung.afterMs) continue;
+
+      // 🚨 SEND FIRST, ADVANCE ON DELIVERY — the VERB lesson, not a style choice.
+      // A first cut that advanced before sending, and on a failed send returned
+      // without reverting, consumed the rung permanently while nobody was nudged
+      // — a terminal advance on a mutable, retryable fact. Sending first is safe:
+      // STAFF_SLA_QUEUE is a stately singleton, so no concurrent tick races, and
+      // the only real race (a DONE / takeover-cancel mid-tick) is caught by
+      // `markRungFired`'s `WHERE status='open' AND nudge_count=k`. The residual,
+      // chosen: a crash between send and advance re-pings the same rung next tick
+      // — buzzing twice beats telling the model we chased when we did not.
+      if (!(await nudgeOne(deps, task, rung))) continue;
+      // FINAL rung ⇒ `nudged` (chased, leave it chased); an intermediate rung ⇒
+      // `open`, so findOverdueTasks re-selects it for the next rung.
+      const newStatus = k + 1 >= rungs.length ? 'nudged' : 'open';
+      const claimed = await markRungFired(deps.db, task.id, k, newStatus);
+      if (claimed === null) continue; // a DONE / takeover-cancel won — record nothing
       await writeNudgeEvidence(deps, task);
       nudged += 1;
     } catch (error) {
@@ -98,40 +132,56 @@ export async function runSlaNudger(deps: SlaDeps): Promise<NudgeRun> {
   return { considered: overdue.length, nudged };
 }
 
-/** Re-pings the assignee + ccs the lead. Returns whether a human got it — the
- * caller flips the row only then, so a failed nudge leaves the task open for
- * the next tick. */
-async function nudgeOne(deps: SlaDeps, task: Task): Promise<boolean> {
-  const params = {
-    shortId: task.shortId,
-    villa: task.villaLabel ?? 'villa not confirmed',
-    guestName: 'overdue',
-    summary: sanitiseInline(`STILL OPEN after ${task.slaMinutes} min — ${task.summary}`, NUDGE_SUMMARY_MAX),
-  };
-
-  // Re-ping the assignee, cc the frontdesk lead (§8 step 4). Both go through
-  // the window-aware chokepoint: a housekeeper quiet for a day is unreachable
-  // by free-form and needs the template.
+/** Re-pings the assignee + ccs the lead (+ OPS on a rung-2 escalation). Returns
+ * whether a human got it — the caller advances the rung only then, so a failed
+ * nudge leaves the task open on the same rung for the next tick. */
+async function nudgeOne(deps: SlaDeps, task: Task, rung: Rung): Promise<boolean> {
   const lead = frontdeskLead(deps.roster);
   const recipients = new Set<string>();
   if (task.assignedPhone !== null) recipients.add(task.assignedPhone);
   if (lead !== null) recipients.add(lead.phone);
+  // Rung 2 of an escalation cc's OPS — the scenario-4 "cc the owner at 20 min".
+  if (rung.ccOps) for (const ops of deps.opsNumbers ?? []) recipients.add(ops);
+
+  const stillOpen = sanitiseInline(
+    `STILL OPEN after ${task.slaMinutes} min — ${task.summary}`,
+    NUDGE_SUMMARY_MAX,
+  );
+  // 🚨 An escalation re-ping uses the ESCALATION card, not a task card: its
+  // summary may carry the guest's own words including a house ("the AC in
+  // Apartment 09 is weak"), which the task card's guest-facing `summary` slot
+  // would reject — and "Reply DONE" is the wrong instruction for a handover.
+  // The escalation card's slots are staff-read (house legal).
+  const key: 'escalation_card' | 'task_card' =
+    task.kind === 'escalation' ? 'escalation_card' : 'task_card';
+  const params: Record<string, string> =
+    key === 'escalation_card'
+      ? {
+          shortId: task.shortId,
+          guestName: 'a guest',
+          reason: stillOpen,
+          detail: sanitiseInline(task.detail ?? '(no context)', ESCALATION_DETAIL_MAX),
+        }
+      : {
+          shortId: task.shortId,
+          villa: task.villaLabel ?? 'villa not confirmed',
+          guestName: 'overdue',
+          summary: stillOpen,
+        };
 
   let delivered = false;
   for (const phone of recipients) {
-    const result = await deps.wa.sendTemplated(
-      phone,
-      { key: 'task_card', params },
-      { conversationId: null, sender: 'system' },
-    );
+    const result = await deps.wa.sendTemplated(phone, { key, params }, {
+      conversationId: null,
+      sender: 'system',
+    });
     if (result.ok) delivered = true;
   }
 
   if (!delivered) {
-    // NO evidence row, NO flip. The AI must not say "I've nudged housekeeping"
-    // when the nudge reached nobody — that is the same sentence as the promise
-    // this guardrail exists for, one rung further on (CH-12's blocker #5) — and
-    // the task stays `open` so the next tick tries again.
+    // NO evidence row, NO advance. The AI must not say "I've nudged the team"
+    // when the nudge reached nobody — the task stays `open` on this rung and the
+    // next tick tries again.
     await alertOps(deps.log, {
       kind: 'sla_nudge_undelivered',
       summary: 'An overdue task could not be re-pinged — nobody was reachable',
@@ -148,6 +198,7 @@ async function nudgeOne(deps: SlaDeps, task: Task): Promise<boolean> {
       shortId: task.shortId,
       kind: task.kind,
       slaMinutes: task.slaMinutes,
+      ccOps: rung.ccOps,
       villa: task.villaLabel,
     },
   });

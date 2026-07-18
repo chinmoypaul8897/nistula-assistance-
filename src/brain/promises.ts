@@ -188,11 +188,15 @@ const LEXICON: ReadonlyArray<{ cls: ClaimClass; re: RegExp }> = [
  * The lesson is the sentence itself: "cannot happen by construction" is a claim
  * about every door, and it is only ever as good as the doors you enumerated.
  *
- * TODO(CH-14): escalate_to_human → C3.
+ * escalate_to_human → C3 and ONLY C3 (CH-14a): bringing a person onto the thread
+ * is the referral, not dispatch — nobody is walking to a villa. Same reasoning as
+ * ops_escalation → C3 in CONTEXT_KIND_CLAIMS. A successful run makes "let me bring
+ * the team in" true; VETO_ON_FAILURE below makes a FAILED run un-say it.
  */
 export const TOOL_CLAIMS: ReadonlyMap<string, ReadonlySet<ClaimClass>> = new Map([
   ['remember_fact', new Set<ClaimClass>(['C4'])],
   ['create_staff_task', new Set<ClaimClass>(['C1', 'C2'])],
+  ['escalate_to_human', new Set<ClaimClass>(['C3'])],
 ]);
 
 /**
@@ -269,6 +273,15 @@ export const CONTEXT_KIND_CLAIMS: Readonly<Record<string, readonly ClaimClass[]>
  */
 const VETO_ON_FAILURE: ReadonlyMap<string, ReadonlySet<ClaimClass>> = new Map([
   ['create_staff_task', new Set<ClaimClass>(['C1', 'C2', 'C5'])],
+  // 🚨 CH-14a: a `NOT_NOTIFIED`/`UPSTREAM_DOWN` escalate_to_human THIS TURN is
+  // EVIDENCE OF ABSENCE that a person was reached — it must outrank a stale
+  // `ops_escalation` C3 row still inside the evidence window. Without this veto,
+  // guarding by "someone was escalated once" (proxy) instead of "THIS ask reached
+  // a human this turn" (contract) would let "bringing the team in" ship while the
+  // escalation reached nobody, and the worker's escalateToOps fallback would not
+  // fire (referral=false). `NEVER_TRIED` (REFUSED/INVALID) is exempt, so a
+  // per-turn cap replay or an unwired-context refusal never wrongly vetoes.
+  ['escalate_to_human', new Set<ClaimClass>(['C3'])],
 ]);
 
 /**

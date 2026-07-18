@@ -26,9 +26,10 @@ import {
   type WorkerDeps,
   type WorkerLogger,
 } from '../brain/worker.js';
+import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { getMirrorByReservationNo } from '../db/bookings.js';
-import { getMessageBody } from '../db/repos.js';
+import { findConversationForTakeover, getMessageBody } from '../db/repos.js';
 import type { EzeeClient } from '../ezee/client.js';
 import { createEzeePoller } from '../ezee/poller.js';
 import { bookingState, type GateContext } from '../lifecycle/gates.js';
@@ -42,13 +43,14 @@ import {
 import { runSender } from '../lifecycle/sender.js';
 import { istCalendarDay, nowIST } from '../lib/time.js';
 import { summarizeError } from '../lib/logger.js';
-import { buildStaffTaskDeps } from '../staff/index.js';
+import { buildEscalationDeps, buildStaffTaskDeps } from '../staff/index.js';
 import {
   cancelArrivalVerifyTask,
   maybeCreateArrivalVerifyTask,
   type ArrivalTaskDeps,
 } from '../staff/arrivalTasks.js';
 import { handleStaffCommand } from '../staff/commands.js';
+import { applyHumanTakeover } from '../staff/humanTakeover.js';
 import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
 import type { WaClient } from '../wa/client.js';
@@ -348,6 +350,16 @@ export interface Jobs {
   enqueueConversationProcess: (conversationId: string, startAfter?: Date) => Promise<void>;
   /** CH-13a: the webhook's staff-command wake (§8 step 3). */
   enqueueStaffCommand: (input: { phone: string; waMessageId: string }) => Promise<void>;
+  /** CH-14a: the coexistence takeover, bound to boss + db — server.ts hands this
+   * to BOTH the webhook (`smb_message_echoes`) and the dev admin sim route so the
+   * two paths share one implementation. */
+  coexistence: {
+    findConversation: (phone: string) => Promise<{ conversationId: string } | null>;
+    apply: (input: {
+      conversationId: string;
+      echo: { waMessageId?: string; body: string | null; raw?: unknown };
+    }) => Promise<void>;
+  };
 }
 
 /** Registers queues, workers and the sweeper schedule; returns the bound enqueue for the webhook. */
@@ -368,16 +380,14 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   // villa route dead in local dev, where that flag is BINDINGLY 0 — the
   // routing would silently fall back to the front desk on every task and look
   // like a design decision rather than a wiring bug.
-  const staffTasks =
+  const staffWiring =
     deps.staff === undefined
       ? undefined
-      : buildStaffTaskDeps({
-          db: deps.db,
-          log: deps.log,
-          wa: deps.wa,
-          roster: deps.staff.roster,
-          ezee: deps.ezee?.client,
-        });
+      : { db: deps.db, log: deps.log, wa: deps.wa, roster: deps.staff.roster, ezee: deps.ezee?.client };
+  const staffTasks = staffWiring === undefined ? undefined : buildStaffTaskDeps(staffWiring);
+  // CH-14a: escalate_to_human's collaborators. Same wiring source as tasks —
+  // unwired ⇒ the tool refuses and the model falls back to a referral phrase.
+  const escalationDeps = staffWiring === undefined ? undefined : buildEscalationDeps(staffWiring);
   const workerDeps: WorkerDeps = {
     db: deps.db,
     wa: deps.wa,
@@ -392,6 +402,8 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     // CH-13a: undefined ⇒ create_staff_task has no context and refuses, so the
     // assistant simply has no hands (its state before this chunk).
     tasks: staffTasks,
+    // CH-14a: undefined ⇒ escalate_to_human refuses, model falls back to referral.
+    escalation: escalationDeps,
     opsNumbers: deps.opsNumbers ?? [],
     rateWindow: deps.rateWindow ?? createRateWindow(),
     nightStart: deps.nightStart ?? '20:00',
@@ -598,6 +610,8 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
         log: deps.log,
         wa: deps.wa,
         roster,
+        // CH-14a rung 2: the escalation ladder cc's OPS at 20 minutes.
+        opsNumbers: roster.opsNumbers,
         // ONE clock per tick, injected — never read inside the loop.
         now: () => new Date(),
       });
@@ -613,7 +627,37 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     // A cron left by an earlier boot must not fire into a workerless queue.
     await deps.boss.unschedule(STAFF_SLA_QUEUE).catch(() => {});
   }
-  return { enqueueConversationProcess: enqueue, enqueueStaffCommand };
+
+  // ── CH-14a human takeover (coexistence) ─────────────────────────────────
+  // Cancel the queued (not-yet-run) debounce job for a paused conversation, so a
+  // takeover does not wake the worker for a store-only no-op. BEST-EFFORT: the
+  // HUMAN_ACTIVE store-only path is the real guarantee (a fired job replies
+  // nothing), so any failure is swallowed by applyHumanTakeover. Scoped to THIS
+  // conversation's singleton_key + state='created' — never a broad delete (the
+  // §CH-12 lesson: `DELETE FROM pgboss.job WHERE name LIKE 'booking.%'` destroys
+  // real events; this touches only the one conversation's own pending wake).
+  const cancelPending = async (conversationId: string): Promise<void> => {
+    const rows = await deps.db.execute<{ id: string }>(sql`
+      SELECT id FROM pgboss.job
+      WHERE name = ${CONVERSATION_PROCESS_QUEUE}
+        AND singleton_key = ${conversationId}
+        AND state = 'created'
+    `);
+    const ids = [...rows].map((r) => r.id);
+    if (ids.length > 0) await deps.boss.cancel(CONVERSATION_PROCESS_QUEUE, ids);
+  };
+  const takeoverDeps = {
+    db: deps.db,
+    log: deps.log,
+    now: () => new Date(),
+    cancelPending,
+  };
+  const coexistence: Jobs['coexistence'] = {
+    findConversation: (phone) => findConversationForTakeover(deps.db, phone),
+    apply: (input) => applyHumanTakeover(takeoverDeps, input),
+  };
+
+  return { enqueueConversationProcess: enqueue, enqueueStaffCommand, coexistence };
 }
 
 /** Cron registration helper (CH-03 step 1) — every business cron states its

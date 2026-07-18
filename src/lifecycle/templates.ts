@@ -72,17 +72,33 @@ export type TemplateKey = ScheduledKind | StaffTemplateKey;
  * breaks this is rejected at send time with a 132000-class error, so we refuse
  * it here instead — where a test can see it.
  */
-const staffParam = z
+// The FLOOR every param must clear — Meta's hard wire rules ONLY. Meta forbids
+// newlines, tabs and runs of 4+ spaces INSIDE a parameter value (the body may
+// contain them; a {{n}} substitution may not). A param that breaks this is
+// rejected at send time with a 132000-class error, so we refuse it here — where a
+// test can see it.
+//
+// 🚨 A card read ENTIRELY by STAFF (the escalation card) needs ONLY this floor.
+// Its slots carry the guest's own transcript words, which routinely contain a ₹
+// figure (the AI quoted a rate) or a URL (the guest pasted an OTA link) — and
+// NONE of it reaches a guest. Banning ₹/URL there only makes a legitimate handover
+// card undeliverable: CH-14a's review found a pricing-dispute escalation whose
+// detail carried the AI's own "₹12,000" quote failed schema.parse and the front
+// desk got nothing, on the single most common escalation path.
+const staffReadParam = z
   .string()
   .min(1)
   .max(200)
   .refine((v) => !/[\n\r\t]/.test(v), 'template params may not contain newlines or tabs')
-  .refine((v) => !/ {4,}/.test(v), 'template params may not contain 4+ consecutive spaces')
+  .refine((v) => !/ {4,}/.test(v), 'template params may not contain 4+ consecutive spaces');
+
+const staffParam = staffReadParam
   // THE MONEY RULE, made load-bearing rather than incidental. Nothing in the
   // lifecycle path passes bookings_mirror.amount today — but "no caller happens
   // to do it" is not a guarantee, and this is the one outbound with no model and
   // no §6.5 guardrail behind it. A guest name of "₹5,000" would otherwise render
-  // a rupee figure straight onto a guest's screen.
+  // a rupee figure straight onto a guest's screen. Used on slots that carry OUR
+  // verified facts (a resolved door, an id) — NOT a staff-read transcript slot.
   .refine((v) => !/₹|\b(?:INR|Rs\.?)\s*\d/i.test(v), 'template params may not contain a ₹ figure')
   .refine((v) => !/https?:\/\//i.test(v), 'template params may not carry a URL');
 
@@ -217,18 +233,19 @@ export const LIFECYCLE_TEMPLATES: Record<ScheduledKind, TemplateDef> = {
  * business-initiated exactly like a guest send, and Meta treats it identically
  * — so it needs an approved template or it fails with 131047.
  *
- * `task_card` is WIRED (CH-13a, staff/notifier.ts). The other three are still
- * defined-not-wired, by CH-14/16.
+ * `task_card` is WIRED (CH-13a, staff/notifier.ts); `escalation_card` is WIRED
+ * (CH-14a, staff/notifier.ts `notifyEscalation`). `digest`/`draft_card` remain
+ * defined-not-wired, by CH-14b/16.
  *
- * ⚠️ NOTE FOR CH-14/16, since CH-13a split the schemas and did not presume on
- * your slots: `escalation_card`, `digest` and `draft_card` still use the
- * GUEST-facing `param` for every field, which bans house names. That is
- * probably wrong for at least `escalation_card.detail` — it carries the guest's
- * own words to a human, and a guest who writes "the AC in Apartment 09 is weak"
- * would make the card unsendable, so the escalation would go undelivered and
- * guardrail 2 would then (correctly) refuse to tell the guest a human is
- * coming. Decide it slot by slot, as this file now does: `staffParam` where a
- * human is reading, `param` where the value is bound for a guest.
+ * CH-14a: the `escalation_card` is read ENTIRELY by a human on the front desk and
+ * reaches NO guest, so ALL its slots are `staffReadParam` (Meta's floor only). Its
+ * `reason`/`detail` carry the guest's OWN transcript words — a house ("the AC in
+ * Apartment 09 is weak"), a ₹ figure the AI quoted, a URL the guest pasted — every
+ * one of which the front desk needs and none of which may block delivery. The
+ * review's first cut used `staffParam` (house-legal but still ₹/URL-banned) and a
+ * pricing-dispute escalation carrying the AI's own rate quote failed schema.parse,
+ * so the card never landed. The money/URL bans exist to protect a GUEST screen;
+ * this card is not one.
  */
 export const STAFF_TEMPLATES: Record<StaffTemplateKey, TemplateDef> = {
   task_card: def({
@@ -264,7 +281,19 @@ export const STAFF_TEMPLATES: Record<StaffTemplateKey, TemplateDef> = {
     language: 'en',
     category: 'utility',
     order: ['shortId', 'guestName', 'reason', 'detail'],
-    schema: z.object({ shortId: param, guestName: param, reason: param, detail: param }),
+    // 🚨 The card is read ENTIRELY by a human on the front desk and reaches NO
+    // guest, so EVERY slot is staffReadParam (Meta's floor only). `reason` and
+    // `detail` carry the guest's own transcript words — a house, a ₹ figure the AI
+    // quoted, a URL the guest pasted — all of which the front desk needs and none
+    // of which may block delivery (CH-14a review DEFECT). `guestName` too: a guest
+    // WhatsApp name of "₹5000" must not jam the handover. The money/URL bans exist
+    // to protect a GUEST screen; this card is not one.
+    schema: z.object({
+      shortId: staffReadParam,
+      guestName: staffReadParam,
+      reason: staffReadParam,
+      detail: staffReadParam,
+    }),
     render: (p) =>
       `NISTULA ESCALATION #${p.shortId}\n${p.guestName} · ${p.reason}\n${p.detail}\nReply in the guest's thread to take over.`,
   }),

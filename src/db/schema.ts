@@ -518,6 +518,14 @@ export const tasks = pgTable(
     assignedPhone: text('assigned_phone'),
     slaMinutes: integer('sla_minutes').notNull(),
     slaDeadline: timestamp('sla_deadline', { withTimezone: true }).notNull(),
+    /** How many SLA rungs have fired (CH-14a). The DISCRIMINATOR the escalation
+     * ladder guards on: `escalation` tasks stay `open` between a 10-min frontdesk
+     * re-ping (count 0→1) and a 20-min cc-OPS rung (count 1→2), and each rung's
+     * guarded UPDATE keys on the exact prior count so it fires at most once. A
+     * monotonic COUNT, never a mutable proxy: a fired rung is a fact that cannot
+     * un-fire (the §recurring-class VERB rule). Generic kinds have one rung, so
+     * their count reaches 1 and they flip to `nudged` — unchanged from CH-13a. */
+    nudgeCount: integer('nudge_count').notNull().default(0),
     openedAt: timestamp('opened_at', { withTimezone: true }).defaultNow().notNull(),
     closedAt: timestamp('closed_at', { withTimezone: true }),
     /** E.164 of the staff member who typed DONE — not a name, so it survives a
