@@ -60,3 +60,38 @@ export function sanitiseTail(text: string, max = 200): string {
   const clean = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   return clean.length <= max ? clean : `…${clean.slice(-max)}`;
 }
+
+/**
+ * Marketing STOP / unsubscribe — a guest keyword (CH-15 step 3). INTENT-scoped,
+ * never a bare "stop" inside a sentence: "please stop, the AC is broken" is a
+ * COMPLAINT, not an unsubscribe (the CH-09 homograph lesson — a keyword that means
+ * ten other things is not a signal). Matches a whole-LINE stop/unsubscribe keyword
+ * (with an optional polite/qualifier tail), an explicit "stop these / stop
+ * sending …", or the Hinglish "band karo" / "mat bhejo".
+ */
+const STOP_RES: readonly RegExp[] = [
+  /^\s*(?:stop|unsubscribe|opt\s*out)\b[\s\p{P}]*(?:please|pls|now|these|all|marketing|messages?|sending|texts?)?[\s\p{P}]*$/imu,
+  /\bstop\s+(?:these|this|them|sending|messaging|texting|the\s+messages?|the\s+msgs?)\b/i,
+  /\bunsubscribe\b/i,
+  /\bband\s+kar(?:o|do|dijiye|dena)\b/i, // "stop it" (Hinglish)
+  /\bmat\s+bhej(?:o|na|iye|a)\b/i, // "don't send" (Hinglish)
+];
+
+/** True if the guest asked to stop marketing messages (unsubscribe). */
+export function matchesStop(text: string): boolean {
+  return STOP_RES.some((re) => re.test(text));
+}
+
+/**
+ * A clear affirmative — the post-stay consent invite says "Reply YES" (CH-15
+ * step 6). Only ACTED ON when scoped to a recent poststay (worker gate); the
+ * lexicon stays clear-signal-only, no bare "ok" (too common). Hinglish: haan /
+ * zaroor / bilkul.
+ */
+const AFFIRMATIVE_RE =
+  /\b(?:yes|yeah|yep|yup|sure|absolutely|of\s+course|please\s+do|go\s+ahead|sounds?\s+good|haan|zaroor|bilkul)\b/i;
+
+/** True if the guest's reply is a clear affirmative (YES to the consent invite). */
+export function isAffirmative(text: string): boolean {
+  return AFFIRMATIVE_RE.test(text);
+}
