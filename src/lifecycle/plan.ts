@@ -65,13 +65,20 @@ const NON_NAMES = new Set(['walk', 'guest', 'walkin', 'unknown', 'na', 'test']);
  * in guest") yields null, and the booking is skipped rather than addressed to
  * nobody.
  */
-export function firstNameOf(row: BookingMirror): string | null {
-  const raw = (row.guestName ?? '').replace(/[\p{C}]/gu, '').trim();
+export function firstNameFromName(name: string | null): string | null {
+  const raw = (name ?? '').replace(/[\p{C}]/gu, '').trim();
   const first = (raw.split(/\s+/)[0] ?? '').slice(0, 40);
   if (first.length === 0) return null;
   if (NON_NAMES.has(first.toLowerCase().replace(/[^a-z]/g, ''))) return null;
   const shouting = first === first.toUpperCase() && /[A-Z]/.test(first);
   return shouting ? first.charAt(0) + first.slice(1).toLowerCase() : first;
+}
+
+/** The guest's first name from eZee's own guest name (a booking-driven send).
+ * CH-15's lead follow-up has no booking, so it reuses firstNameFromName on the
+ * guests row directly. */
+export function firstNameOf(row: BookingMirror): string | null {
+  return firstNameFromName(row.guestName);
 }
 
 /**

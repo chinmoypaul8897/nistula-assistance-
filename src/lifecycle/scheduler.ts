@@ -14,6 +14,7 @@ import type { BookingMirror } from '../db/bookings.js';
 import { getMirrorByReservationNo } from '../db/bookings.js';
 import type { Db } from '../db/client.js';
 import { getOrCreateConversation, upsertGuestFromBooking } from '../db/repos.js';
+import { cancelPendingLeadFollowups } from '../db/consent.js';
 import { bookingsMirror, scheduledMessages } from '../db/schema.js';
 import { project, referenceBase } from '../brain/stayView.js';
 import { firstNameOf, planSends } from './plan.js';
@@ -264,6 +265,13 @@ export async function scheduleForBooking(
   // Give them a conversation now, so their reply to the confirmation threads into
   // the normal pipeline instead of arriving as an orphan (plan step 5).
   await getOrCreateConversation(deps.db, guest.id);
+
+  // CH-15 step 4 (conversion cleanup): this guest now holds a real, gated,
+  // upcoming booking — any pending lead follow-up nudging them to book is moot.
+  // Only 'pending' rows move; idempotent, so a modify/reconcile re-run is a no-op.
+  // (An OTA booking is source-gated before here, so a WhatsApp enquirer who books
+  // via an OTA keeps their lead row — opt-in-gated and soft, recorded as low-harm.)
+  await cancelPendingLeadFollowups(deps.db, guest.id);
 
   for (const s of sends) {
     await deps.db
