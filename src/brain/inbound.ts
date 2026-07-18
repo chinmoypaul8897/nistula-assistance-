@@ -60,3 +60,60 @@ export function sanitiseTail(text: string, max = 200): string {
   const clean = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   return clean.length <= max ? clean : `…${clean.slice(-max)}`;
 }
+
+/**
+ * Marketing STOP / unsubscribe — a guest keyword (CH-15 step 3). INTENT-scoped,
+ * never a bare "stop" inside a sentence: "please stop, the AC is broken" is a
+ * COMPLAINT, not an unsubscribe (the CH-09 homograph lesson — a keyword that means
+ * ten other things is not a signal). Matches a whole-LINE stop/unsubscribe/opt-out
+ * keyword, an explicit marketing-scoped "stop these / stop sending offers / stop
+ * your messages", "unsubscribe from …" / "opt out of …", or the Hinglish "band
+ * karo" / "mat bhejo".
+ *
+ * 🚨 A NEGATED stop is the OPPOSITE of an opt-out (pre-merge review DEFECT):
+ * "please don't stop sending me offers", "never stop sending these" are requests
+ * to KEEP receiving. STOP_NEGATED short-circuits them to false. And a bare channel
+ * verb ("stop messaging me here, just call me") is a channel switch, not an
+ * unsubscribe — so the sending/messaging branch REQUIRES a marketing object.
+ */
+const STOP_NEGATED =
+  /\b(?:do\s?n['’]?t|does\s?n['’]?t|please\s+do\s+not|please\s+don['’]?t|never)\s+stop\b/i;
+
+const STOP_RES: readonly RegExp[] = [
+  // The whole line is a stop / unsubscribe / opt-out keyword (+ optional tail).
+  /^\s*(?:stop|unsubscribe|opt[\s-]*out)\b[\s\p{P}]*(?:please|pls|now|these|all|marketing|messages?|sending|texts?|offers?)?[\s\p{P}]*$/imu,
+  // A marketing-scoped object after "stop": a deictic (these/this/them), a
+  // marketing noun, or "sending/messaging/texting <marketing object>". Bare
+  // "stop messaging me here" (no marketing object) deliberately does NOT match.
+  /\bstop\s+(?:these|this|them|marketing|offers?|spam|(?:sending|messaging|texting)\s+(?:me\s+)?(?:these|this|them|offers?|marketing|messages?|msgs?|texts?)|(?:your|the)\s+(?:marketing|messages?|texts?|offers?|msgs?)|the\s+messages?|the\s+msgs?)\b/i,
+  // "unsubscribe [from …]" / "opt out [of …]".
+  /\bunsubscribe\b|\bopt[\s-]*out(?:\s+of\b|\b)/i,
+  /\bband\s+kar(?:o|do|dijiye|dena)\b/i, // "stop it" (Hinglish)
+  /\bmat\s+bhej(?:o|na|iye|a)\b/i, // "don't send" (Hinglish)
+];
+
+/** True if the guest asked to stop marketing messages (unsubscribe). */
+export function matchesStop(text: string): boolean {
+  if (STOP_NEGATED.test(text)) return false;
+  return STOP_RES.some((re) => re.test(text));
+}
+
+/**
+ * A clear affirmative — the post-stay consent invite says "Reply YES" (CH-15
+ * step 6). CONTRACT-shaped (pre-merge review DEFECT): consent must be an actual
+ * YES, so the reply must LEAD with an affirmative AND carry no negator anywhere.
+ * Without that, "Absolutely not" / "Of course not" / "Not sure" — the natural
+ * ways to DECLINE the invite — matched as consent. Fail-closed: any co-occurring
+ * negation ("yes, no problem") yields false (a missed opt-in is far safer than a
+ * false one). Only ACTED ON when scoped to a recent poststay (worker gate).
+ */
+const AFFIRMATIVE_LEAD_RE =
+  /^\s*(?:yes|yeah|yep|yup|sure|absolutely|of\s+course|please\s+do|go\s+ahead|sounds?\s+good|haan|zaroor|bilkul)\b/im;
+const NEGATOR_RE =
+  /\b(?:no|not|never|nope|nah|nahi|dont|doesnt|didnt|wont|cant|wouldnt|couldnt|shouldnt|isnt|arent|wasnt)\b|\b(?:do|does|did|wo|ca|would|could|should|is|are|was)n['’]t\b/i;
+
+/** True if the guest's reply is a clear, unnegated affirmative (YES to the invite). */
+export function isAffirmative(text: string): boolean {
+  if (NEGATOR_RE.test(text)) return false;
+  return AFFIRMATIVE_LEAD_RE.test(text);
+}

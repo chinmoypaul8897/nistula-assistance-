@@ -14,6 +14,12 @@
  * CH-13's task events reuse).
  */
 import { updateGuestPrefs } from '../db/guestMemory.js';
+import {
+  cancelPendingMarketingRows,
+  captureInChatOptIn,
+  hasRecentPoststay,
+  setMarketingOptOut,
+} from '../db/consent.js';
 import { getGuestStays, linkStaysByPhone, recordReferenceAttempt } from '../db/stays.js';
 import {
   claimConversationTurn,
@@ -29,9 +35,11 @@ import { alertOps } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { decideDebounce, type DebounceWindows } from './debounce.js';
 import { isWindowOpen } from './draftGuards.js';
-import { guestTextOf } from './inbound.js';
+import { guestTextOf, isAffirmative } from './inbound.js';
 import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
 import { raiseMediaFrontdeskTask } from '../staff/mediaTask.js';
+import { LIFECYCLE_TEMPLATES, MARKETING_KINDS } from '../lifecycle/templates.js';
+import { isRefusal, leadQuoteFromToolRuns, scheduleLeadFollowup } from '../lifecycle/leadFollowup.js';
 import { decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
 import { detectLang, detectRegister } from './prefDetect.js';
 import { PHRASEBOOK } from './prompt.js';
@@ -40,6 +48,10 @@ import { createHitRecorder } from './telemetry.js';
 import { runClaudeTurn, type TurnDeps, type TurnLogger } from './turn.js';
 
 export type WorkerLogger = TurnLogger;
+
+/** CH-15 step 6: a "yes" only counts as consent within this window of the
+ * post-stay thank-you that asked for it. */
+const CONSENT_YES_WINDOW_DAYS = 7;
 
 export interface WorkerDeps extends TurnDeps {
   // wa gains sendText for the interim ops escalation (real escalate_to_human
@@ -213,6 +225,17 @@ export async function processConversation(
     });
     if (!res.claimed) return;
     claimed = true;
+    // CH-15 step 3: a marketing STOP opts the guest out and cancels every pending
+    // marketing row — ATOMIC with the confirmation line below, so a rollback
+    // undoes both and never leaves "you're unsubscribed" sent without the
+    // opt-out. FLAG-driven, so it fires even under COOL_OFF/HUMAN_ACTIVE where the
+    // MARKETING_STOP directive never wins (compliance is not gated on a human).
+    // The marketing FAMILY is enumerated from the template catalog (MARKETING_KINDS),
+    // never a hard-coded list — a leak has siblings (CH-13b).
+    if (directive.flags.containsStop) {
+      await setMarketingOptOut(tx, ctx.conversation.guestId);
+      await cancelPendingMarketingRows(tx, ctx.conversation.guestId, MARKETING_KINDS);
+    }
     // The once-only cool-off line: announce only when the claim REPORTS the
     // requested edge (a CH-14 human takeover racing in suppresses it safely).
     announced = !plan.announceOnTransition || res.status === plan.statusTransition?.to;
@@ -391,6 +414,100 @@ export async function processConversation(
       }
     } catch (error) {
       deps.log.warn({ conversationId, err: summarizeError(error) }, 'pref detection failed');
+    }
+
+    const guestBatchText = msgs
+      .map(guestTextOf)
+      .filter((t): t is string => t !== null)
+      .join('\n');
+
+    // Audit (pre-merge review): a STOP that routed to a MORE-URGENT directive
+    // (complaint/human-request) opted the guest out WITHOUT a confirmation line —
+    // the write happened (it is in the claim tx, flag-driven), but is otherwise
+    // invisible. Surface it so a durable opt-out is never silent.
+    if (directive.flags.containsStop && directive.kind !== 'MARKETING_STOP') {
+      deps.log.info(
+        { conversationId, guestId: ctx.conversation.guestId, directive: directive.kind },
+        'marketing opt-out applied without a confirmation line',
+      );
+    }
+
+    // CH-15 step 6: capture in-chat marketing consent. A clear affirmative within
+    // 7 days of the CONSENT-asking thank-you (nst_poststay_v2 — the ONLY place we
+    // ask "may we write to you?") is a YES. Deterministic and GUARDED
+    // (captureInChatOptIn never overrides an opt-out or an existing opt-in).
+    // GATED (pre-merge review) on the model actually running AND not a complaint:
+    // consent must be a genuine reply to the invite, never a stray "yes" in a
+    // store-only/takeover/complaint turn. Best-effort — a missed capture just
+    // means no marketing, the safe side.
+    try {
+      if (
+        turn !== null &&
+        !directive.flags.containsComplaint &&
+        isAffirmative(guestBatchText)
+      ) {
+        const since = new Date(
+          ctx.dbNow.getTime() - CONSENT_YES_WINDOW_DAYS * 24 * 3600_000,
+        );
+        if (
+          await hasRecentPoststay(
+            deps.db,
+            ctx.conversation.guestId,
+            since,
+            LIFECYCLE_TEMPLATES.poststay.name,
+          )
+        ) {
+          const captured = await captureInChatOptIn(
+            deps.db,
+            ctx.conversation.guestId,
+            ctx.dbNow,
+          );
+          if (captured) {
+            deps.log.info(
+              { conversationId, guestId: ctx.conversation.guestId },
+              'marketing opt-in captured',
+            );
+          }
+        }
+      }
+    } catch (error) {
+      deps.log.warn({ conversationId, err: summarizeError(error) }, 'consent capture failed');
+    }
+
+    // CH-15 step 1: a quote given THIS turn to a guest with no upcoming/active
+    // booking (and whose message is not a refusal) earns ONE lead follow-up in 3
+    // days. Marketing, so it only SENDS to an opted-in guest (gated at send time)
+    // — a fresh enquirer with no opt-in path gets nothing, by design (§8 step 6).
+    // Excludes prearrival/inhouse (they already hold a booking — a lead nudge
+    // would be wrong), needsHuman (a broken booking is not a sales lead), and a
+    // STOP turn (pre-merge review: never schedule a fresh marketing row for a
+    // guest we just opted out). Requires the model ran (toolRuns exist only then).
+    if (
+      turn !== null &&
+      !directive.flags.containsStop &&
+      stayContext.stage !== 'prearrival' &&
+      stayContext.stage !== 'inhouse' &&
+      !stayContext.needsHuman &&
+      !isRefusal(guestBatchText)
+    ) {
+      const quote = leadQuoteFromToolRuns(turn.toolRuns);
+      if (quote !== null) {
+        try {
+          const outcome = await scheduleLeadFollowup(
+            { db: deps.db, now: ctx.dbNow },
+            { guestId: ctx.conversation.guestId, quote },
+          );
+          deps.log.info(
+            { conversationId, guestId: ctx.conversation.guestId, outcome },
+            'lead follow-up',
+          );
+        } catch (error) {
+          deps.log.warn(
+            { conversationId, err: summarizeError(error) },
+            'lead follow-up scheduling failed',
+          );
+        }
+      }
     }
   }
 

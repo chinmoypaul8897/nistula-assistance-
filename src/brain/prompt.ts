@@ -47,6 +47,11 @@ export const PHRASEBOOK = {
   // §6.7 media fallback — a captionless photo/voice note/file the AI cannot
   // view ("mind typing it? I'll sort it right away" family, CH-07).
   mediaFallback: "That didn't quite reach me — mind typing it? I'll sort it right away.",
+  // CH-15 step 3: the one confirmation after a marketing STOP. Honest — service
+  // (bookings) continues; only marketing stops. Sent by the worker, not the
+  // model, so it is NOT in the prompt block below.
+  marketingStopConfirm:
+    'Done — you will not receive any more messages like this from us. We are still right here whenever you need anything for a stay.',
   // §6.6's approved line for "eZee lookup fails mid-stay" — the booking side's
   // equivalent of quoteApiDown (CH-11; §6.6 pairs it with a task, which is
   // CH-13's half — the LINE is this chunk's).

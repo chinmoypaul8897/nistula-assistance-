@@ -12,7 +12,7 @@
  * imports keep this module runtime-light (debounce.ts precedent).
  */
 import type { Conversation, Message } from '../db/repos.js';
-import { guestTextOf, locationTextOf, sanitiseTail } from './inbound.js';
+import { guestTextOf, locationTextOf, matchesStop, sanitiseTail } from './inbound.js';
 import type { Stage } from './stayView.js';
 import type { PolicyRule } from './telemetry.js';
 
@@ -119,6 +119,7 @@ export type DirectiveKind =
   | 'HUMAN_ACTIVE'
   | 'HUMAN_REQUEST'
   | 'COMPLAINT_SUSPECT'
+  | 'MARKETING_STOP'
   | 'MEDIA_FALLBACK'
   | 'NORMAL';
 
@@ -129,6 +130,11 @@ export interface PolicyFlags {
    * distressed guest reads differently from abuse (§3.3 "ops alerted"). */
   containsHumanRequest: boolean;
   containsComplaint: boolean;
+  /** Marketing STOP / unsubscribe (CH-15). The FLAG drives the worker's opt-out
+   * WRITE — which must fire even under COOL_OFF/HUMAN_ACTIVE, where the
+   * MARKETING_STOP directive never wins (compliance cannot be gated on a human).
+   * The directive only drives the confirmation line. */
+  containsStop: boolean;
   /** Batch carries media the model cannot view (mixed-batch situation note). */
   hasMedia: boolean;
 }
@@ -172,6 +178,7 @@ export function decidePolicy(input: PolicyInput): Directive {
     botQuestion: BOT_QUESTION.test(batchText),
     containsHumanRequest: HUMAN_REQUEST_RES.some((re) => re.test(stripped)),
     containsComplaint: COMPLAINT_RE.test(batchText),
+    containsStop: matchesStop(batchText),
     hasMedia: input.messages.some((m) => m.type !== 'text' && m.type !== 'location'),
   };
   // The WHOLE batch rides the ops card (audit fix: a burst of "what's the
@@ -192,6 +199,11 @@ function decideKind(
   if (isHumanActive(input.conversation, input.now)) return 'HUMAN_ACTIVE';
   if (flags.containsHumanRequest) return 'HUMAN_REQUEST';
   if (flags.containsComplaint) return 'COMPLAINT_SUSPECT';
+  // Marketing STOP AFTER human-request/complaint: a "stop, and get me a human"
+  // or "stop, the AC is broken" is handled by the more urgent route (the opt-out
+  // still fires — it is FLAG-driven in the worker, not directive-driven), while a
+  // pure "STOP" (nothing more urgent matched) gets the confirmation line here.
+  if (flags.containsStop) return 'MARKETING_STOP';
   // Media-only: nothing typed anywhere (no body, no caption) and no location —
   // a captioned photo or a shared pin flows to the model instead (§6.7).
   if (batchText === '' && !hasLocation) return 'MEDIA_FALLBACK';
@@ -258,7 +270,7 @@ export type EscalationReason =
 
 /** Phrasebook KEY, not text — policy.ts stays a leaf that never imports
  * prompt.ts (CH-06 cycle lesson); the worker resolves key → PHRASEBOOK. */
-export type FixedLine = 'coolOff' | 'humanRequest' | 'mediaFallback';
+export type FixedLine = 'coolOff' | 'humanRequest' | 'mediaFallback' | 'marketingStopConfirm';
 
 export interface TurnPlan {
   modelRuns: boolean;
@@ -324,6 +336,17 @@ export function settlePlanFor(directive: Directive, status: Conversation['status
         statusTransition: restore,
         escalate: 'media',
         telemetry: 'media_fallback',
+      };
+    case 'MARKETING_STOP':
+      // The confirmation line only. The opt-out WRITE (marketing_opt_in=false +
+      // opt_out_marketing + cancel pending marketing rows) is FLAG-driven in the
+      // worker's claim tx — it fires even under COOL_OFF/HUMAN_ACTIVE, where this
+      // directive never wins. No model, no escalation; service continues.
+      return {
+        ...STORE_ONLY,
+        send: 'marketingStopConfirm',
+        statusTransition: restore,
+        telemetry: 'marketing_stop',
       };
     case 'HUMAN_ACTIVE':
       // §6.7 line 1: store only; never touch status during a takeover (CH-14).

@@ -31,7 +31,12 @@ export type GuardrailRule =
   | 'length_format'
   | 'leak_scan';
 
-export type PolicyRule = 'human_request' | 'complaint_suspect' | 'cool_off' | 'media_fallback';
+export type PolicyRule =
+  | 'human_request'
+  | 'complaint_suspect'
+  | 'cool_off'
+  | 'media_fallback'
+  | 'marketing_stop';
 
 export type HitAction =
   | 'regenerated'

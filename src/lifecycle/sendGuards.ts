@@ -48,6 +48,10 @@ const GUEST_QUIET_END = '08:00';
 /** §2.3: "fewer than 2 win-backs sent in the trailing 365 days". */
 const WINBACK_CAP = 2;
 const WINBACK_WINDOW_DAYS = 365;
+/** CH-15 §8 step 5: "max 1 lead follow-up per guest per 30d". Exported so the
+ * schedule-time cap (leadFollowup.ts) and this send-time cap agree on one number. */
+export const LEAD_FOLLOWUP_CAP = 1;
+export const LEAD_FOLLOWUP_WINDOW_DAYS = 30;
 /** A deferred row waits this long before the sender looks at it again. Without
  * it, an undeliverable row (window shut) is permanently the OLDEST row, so it
  * permanently occupies the batch — 25 of them starve every newer message for
@@ -228,32 +232,68 @@ export async function retryAfterFailedSend(db: Db, row: ScheduledRow, reason: st
     .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'sent')));
 }
 
-/** Marketing may only go to a guest who asked for it (§4, CH-15's consent). */
-async function marketingBlock(db: Db, row: ScheduledRow, kind: ScheduledKind): Promise<string | null> {
+/** How many of `kind` were SENT to this guest in the trailing `days`. `updated_at`
+ * is the sent-time proxy — there is no sent_at column; the send-intent claim flips
+ * status→sent and stamps updated_at in the SAME statement. The window is measured
+ * off the injected `now`, not Date.now(), so the caps are deterministic under a
+ * test clock (the wall-clock-in-a-guard flake this repo keeps being bitten by). */
+async function sentCountSince(
+  db: Db,
+  guestId: string,
+  kind: ScheduledKind,
+  days: number,
+  now: Date,
+): Promise<number> {
+  const since = new Date(now.getTime() - days * 24 * 3600_000);
+  const [{ count } = { count: 0 }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(scheduledMessages)
+    .where(
+      and(
+        eq(scheduledMessages.guestId, guestId),
+        eq(scheduledMessages.kind, kind),
+        eq(scheduledMessages.status, 'sent'),
+        gte(scheduledMessages.updatedAt, since),
+      ),
+    );
+  return count;
+}
+
+/** Marketing may only go to a guest who asked for it and never after they said
+ * STOP (§4, §3.3, CH-15's consent). Caps are per-kind, per-guest, per-window. */
+async function marketingBlock(
+  db: Db,
+  row: ScheduledRow,
+  kind: ScheduledKind,
+  now: Date,
+): Promise<string | null> {
   if (LIFECYCLE_TEMPLATES[kind].category !== 'marketing') return null;
 
   const [guest] = await db.select().from(guests).where(eq(guests.id, row.guestId));
   if (guest === undefined) return 'guest_missing';
+  // Belt-and-braces with the opt-in check below: an explicit STOP clears opt-in
+  // AND sets opt_out_marketing, so either guard alone blocks — but a durable
+  // withdrawal deserves its own tripwire, and it guards a future path that might
+  // set opt-in without honouring a prior opt-out.
+  if (guest.optOutMarketing) return 'opted_out';
   // WHY consent is checked HERE and not when the row was scheduled: it is
   // captured by CH-15's post-stay thank-you, ~74 days AFTER the booking was
   // scheduled. Gating at schedule time would mean marketing_opt_in is always
   // false at that moment, and the win-back could never fire for anyone, ever.
   if (!guest.marketingOptIn) return 'no_marketing_opt_in';
 
-  if (kind === 'winback') {
-    const since = new Date(Date.now() - WINBACK_WINDOW_DAYS * 24 * 3600_000);
-    const [{ count } = { count: 0 }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(scheduledMessages)
-      .where(
-        and(
-          eq(scheduledMessages.guestId, row.guestId),
-          eq(scheduledMessages.kind, 'winback'),
-          eq(scheduledMessages.status, 'sent'),
-          gte(scheduledMessages.updatedAt, since),
-        ),
-      );
-    if (count >= WINBACK_CAP) return 'winback_cap_reached';
+  if (
+    kind === 'winback' &&
+    (await sentCountSince(db, row.guestId, 'winback', WINBACK_WINDOW_DAYS, now)) >= WINBACK_CAP
+  ) {
+    return 'winback_cap_reached';
+  }
+  if (
+    kind === 'lead_followup' &&
+    (await sentCountSince(db, row.guestId, 'lead_followup', LEAD_FOLLOWUP_WINDOW_DAYS, now)) >=
+      LEAD_FOLLOWUP_CAP
+  ) {
+    return 'lead_followup_cap_reached';
   }
   return null;
 }
@@ -327,7 +367,7 @@ export async function blockedBy(
     return { outcome: 'deferred', reason: 'quiet_hours' };
   }
 
-  const marketing = await marketingBlock(deps.db, row, row.kind);
+  const marketing = await marketingBlock(deps.db, row, row.kind, now);
   if (marketing !== null) return { outcome: 'skipped', reason: marketing };
 
   return null;
