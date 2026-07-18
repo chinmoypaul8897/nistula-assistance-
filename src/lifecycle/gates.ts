@@ -205,3 +205,33 @@ export function checkGates(row: BookingMirror, ctx: GateContext): GateResult {
   if (!hasPhone(row)) return { ok: false, reason: 'no_phone' };
   return { ok: true };
 }
+
+/**
+ * The TASK gate (CH-13b, D9) — deliberately a DIFFERENT predicate from
+ * `checkGates`, and the difference is the whole point.
+ *
+ *   checkGates    answers "may we WhatsApp this person?" — so it is SOURCE-gated
+ *                 (OQ-20: an Airbnb/Booking guest never messaged us and we hold
+ *                 no consent), and PHONE-gated (there is no message without a
+ *                 number).
+ *   passesTaskGate answers "is this a real, upcoming booking a HUMAN should
+ *                 prepare for?" — a staff task is INTERNAL, reaches no guest, so
+ *                 neither source nor phone is relevant. An Airbnb guest's room
+ *                 still needs cleaning and their past issue still needs checking,
+ *                 even though we will never message them.
+ *
+ * Reusing `checkGates` here would be the recurring failure class verbatim — a
+ * predicate answering a question its caller did not ask. So this shares only the
+ * three predicates the two questions genuinely AGREE on (epoch neutralises
+ * history, date drops a stay already over, status demands a live booking) and
+ * omits `passesSource`/`hasPhone` on purpose.
+ */
+export function passesTaskGate(
+  row: BookingMirror,
+  ctx: Pick<GateContext, 'epoch' | 'today'>,
+): GateResult {
+  if (!passesEpoch(row, ctx.epoch)) return { ok: false, reason: 'before_epoch' };
+  if (!passesStatus(row)) return { ok: false, reason: 'status_not_live' };
+  if (!passesDate(row, ctx.today)) return { ok: false, reason: 'stay_in_past' };
+  return { ok: true };
+}

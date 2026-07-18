@@ -22,6 +22,7 @@ import { tasks } from './schema.js';
 
 export type Task = typeof tasks.$inferSelect;
 export type TaskKind = Task['kind'];
+export type TaskOrigin = Task['origin'];
 export type TaskStatus = Task['status'];
 
 /**
@@ -85,6 +86,13 @@ export interface NewTask {
   assignedPhone: string | null;
   /** The retry key (see schema). Null ⇒ no guest message asked for this. */
   requestKey: string | null;
+  /** `guest` (they asked) vs `system` (we raised it for them). Default guest. */
+  origin?: TaskOrigin;
+  /** Overrides the kind-derived SLA deadline. CH-13b's arrival verify-task
+   * anchors this to CHECK-IN, not now+10min — a task for a guest 8 days out
+   * must not go "overdue" and buzz the front desk today. Omit ⇒ now + the
+   * per-kind SLA (the in-stay contract). */
+  slaDeadline?: Date;
   /** Injected, never `new Date()` here — one clock per tick (the CH-12 lesson:
    * a suite that reads the wall clock lies at 02:00). */
   now: Date;
@@ -112,6 +120,48 @@ export async function findTaskByRequestKey(db: DbLike, requestKey: string): Prom
 }
 
 /**
+ * Cancel a LIVE task by its request key (CH-13b round 4). Used when the thing
+ * that spawned it is revoked — a booking.cancelled must kill its arrival
+ * verify-task, or the nudger later buzzes staff to prepare a room for a guest
+ * who is no longer arriving (the lifecycle scheduler revokes its messages on
+ * cancel; the task must mirror that). Guarded on the live statuses so a `done`
+ * task (the work really happened) or an already-cancelled one is untouched;
+ * returns the row it changed, or null.
+ */
+export async function cancelLiveTaskByRequestKey(
+  db: DbLike,
+  requestKey: string,
+): Promise<Task | null> {
+  const [row] = await db
+    .update(tasks)
+    .set({ status: 'cancelled' })
+    .where(and(eq(tasks.requestKey, requestKey), inArray(tasks.status, [...LIVE_TASK_STATUSES])))
+    .returning();
+  return row ?? null;
+}
+
+/**
+ * Re-anchor an OPEN task's SLA deadline (CH-13b round 2). The arrival
+ * verify-task's deadline is check-in-derived, and a booking.modified can move
+ * check-in — a frozen deadline would nudge against the OLD date (axis-2: a
+ * terminal state keyed on a MUTABLE fact). Guarded on `open` so a done or nudged
+ * task is never disturbed; returns the row it changed, or null if it was not
+ * open. `nudged` is deliberately excluded — once chased, leave it chased.
+ */
+export async function updateOpenTaskDeadline(
+  db: DbLike,
+  taskId: string,
+  slaDeadline: Date,
+): Promise<Task | null> {
+  const [row] = await db
+    .update(tasks)
+    .set({ slaDeadline })
+    .where(and(eq(tasks.id, taskId), eq(tasks.status, 'open')))
+    .returning();
+  return row ?? null;
+}
+
+/**
  * Inserts an open task with a fresh short id.
  *
  * Retries on the SHORT-ID unique — a collision is ~1-in-a-billion per attempt,
@@ -133,7 +183,7 @@ export async function findTaskByRequestKey(db: DbLike, requestKey: string): Prom
  */
 export async function insertTask(db: DbLike, input: NewTask): Promise<Task> {
   const slaMinutes = SLA_MINUTES[input.kind];
-  const slaDeadline = new Date(input.now.getTime() + slaMinutes * 60_000);
+  const slaDeadline = input.slaDeadline ?? new Date(input.now.getTime() + slaMinutes * 60_000);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       const [row] = await db
@@ -146,6 +196,7 @@ export async function insertTask(db: DbLike, input: NewTask): Promise<Task> {
           kind: input.kind,
           shortId: generateShortId(),
           requestKey: input.requestKey,
+          origin: input.origin ?? 'guest',
           summary: input.summary,
           detail: input.detail,
           assignedPhone: input.assignedPhone,
@@ -178,7 +229,21 @@ function isShortIdCollision(error: unknown): boolean {
   );
 }
 
-/** Open/nudged tasks on a conversation — the §6.4 3-open cap reads this. */
+/**
+ * The GUEST's open/nudged requests on a conversation — the §6.4 3-open cap and
+ * the near-duplicate/append gate read this.
+ *
+ * 🚨 origin='guest' ONLY (CH-13b round 3), the third sibling of round 1's block
+ * [5] guard. A `system` task (the media follow-up carries a conversationId) is
+ * NOT one of the guest's requests: counting it would refuse a real request on a
+ * phantom cap slot, and — worse — the append gate would fold a genuine
+ * frontdesk ask INTO the system task, which then closes silently (round 2's
+ * origin guard suppresses its close line and evidence). The cap is "how many
+ * things has the GUEST asked for", so it counts only what the guest asked for.
+ * Its siblings differ by contract and stay unfiltered: getLiveTasksForPhone
+ * (a staff member SHOULD see their system tasks) and findOverdueTasks (a system
+ * task DOES get nudged near check-in).
+ */
 export async function getLiveTasksForConversation(
   db: DbLike,
   conversationId: string,
@@ -189,6 +254,7 @@ export async function getLiveTasksForConversation(
     .where(
       and(
         eq(tasks.conversationId, conversationId),
+        eq(tasks.origin, 'guest'),
         inArray(tasks.status, [...LIVE_TASK_STATUSES]),
       ),
     )
@@ -200,7 +266,18 @@ export async function getLiveTasksForGuest(db: DbLike, guestId: string): Promise
   return db
     .select()
     .from(tasks)
-    .where(and(eq(tasks.guestId, guestId), inArray(tasks.status, [...LIVE_TASK_STATUSES])))
+    .where(
+      and(
+        eq(tasks.guestId, guestId),
+        // 🚨 CH-13b: block [5] is the GUEST's open requests. A `system` task
+        // (arrival verify, media follow-up) is real staff work the guest never
+        // asked for — surfacing it would let the model repeat internal ops
+        // wording, or re-raise a past complaint, back to the guest (round-1
+        // review). It stays staff-side.
+        eq(tasks.origin, 'guest'),
+        inArray(tasks.status, [...LIVE_TASK_STATUSES]),
+      ),
+    )
     .orderBy(desc(tasks.openedAt));
 }
 

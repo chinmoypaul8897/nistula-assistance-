@@ -31,6 +31,7 @@ import { decideDebounce, type DebounceWindows } from './debounce.js';
 import { isWindowOpen } from './draftGuards.js';
 import { guestTextOf } from './inbound.js';
 import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
+import { raiseMediaFrontdeskTask } from '../staff/mediaTask.js';
 import { decidePolicy, settlePlanFor, type RateWindow } from './policy.js';
 import { detectLang, detectRegister } from './prefDetect.js';
 import { PHRASEBOOK } from './prompt.js';
@@ -241,7 +242,25 @@ export async function processConversation(
     // policy plan's reason wins over the guardrails' (a complaint that also
     // deferred a price still pings ops exactly once).
     const reason = plan.escalate ?? turn?.escalate ?? null;
-    if (reason !== null) await escalateToOps(deps, conversationId, reason, directive.guestTextTail, stayContext);
+    if (reason === 'media' && deps.tasks !== undefined) {
+      // CH-13b: a captionless-media turn becomes a TRACKED frontdesk task, not a
+      // fire-and-forget ops ping (§6.7). ONLY 'media' is re-routed — every other
+      // reason (complaint, human_request, leak, booking_undescribable) genuinely
+      // pages ops. Fail-closed: an empty roster ⇒ the card lands nowhere ⇒
+      // notify_failed + ops alert, the same signal the ping gave. Unwired
+      // contexts (deps.tasks undefined) keep the ops-ping fallback below.
+      await raiseMediaFrontdeskTask(
+        { db: deps.db, assign: deps.tasks.assign, notify: deps.tasks.notify, now: ctx.dbNow },
+        {
+          conversationId,
+          guestId: ctx.conversation.guestId,
+          guestFirstName: ctx.guestName ?? null,
+          sourceMessageId: newest.id,
+        },
+      );
+    } else if (reason !== null) {
+      await escalateToOps(deps, conversationId, reason, directive.guestTextTail, stayContext);
+    }
     // CH-11: a booking claim rides its OWN channel. The slot above is
     // single-valued, so a complaint in the same turn would silently swallow it —
     // and a booking a human must see is precisely the event to surface. Fired

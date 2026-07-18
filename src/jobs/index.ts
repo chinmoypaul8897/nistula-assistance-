@@ -27,10 +27,11 @@ import {
   type WorkerLogger,
 } from '../brain/worker.js';
 import type { Db } from '../db/client.js';
+import { getMirrorByReservationNo } from '../db/bookings.js';
 import { getMessageBody } from '../db/repos.js';
 import type { EzeeClient } from '../ezee/client.js';
 import { createEzeePoller } from '../ezee/poller.js';
-import type { GateContext } from '../lifecycle/gates.js';
+import { bookingState, type GateContext } from '../lifecycle/gates.js';
 import { runReconcile } from '../lifecycle/reconcile.js';
 import {
   handleBookingEvent,
@@ -42,6 +43,11 @@ import { runSender } from '../lifecycle/sender.js';
 import { istCalendarDay, nowIST } from '../lib/time.js';
 import { summarizeError } from '../lib/logger.js';
 import { buildStaffTaskDeps } from '../staff/index.js';
+import {
+  cancelArrivalVerifyTask,
+  maybeCreateArrivalVerifyTask,
+  type ArrivalTaskDeps,
+} from '../staff/arrivalTasks.js';
 import { handleStaffCommand } from '../staff/commands.js';
 import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
@@ -66,6 +72,45 @@ export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', 
   modified: BOOKING_MODIFIED_QUEUE,
   cancelled: BOOKING_CANCELLED_QUEUE,
 };
+
+/**
+ * One booking.* job's whole effect, in ONE place so it is testable end to end
+ * (D9: one queue = one consumer). The lifecycle scheduling and CH-13b's arrival
+ * verify-task are INDEPENDENT: the task is RAISED for a live booking (create OR
+ * modify — a hold that later confirms arrives as a MODIFY, and would otherwise
+ * miss its task while its lifecycle scheduled) when staff is wired, and REVOKED
+ * when the booking goes TERMINAL.
+ *
+ * 🚨 Revocation is guarded by the terminal CONTRACT (bookingState), NOT the
+ * event enum (round 5). Round 4 keyed it on kind==='cancelled' — but a no_show
+ * is equally terminal and reaches us as a booking.MODIFIED (a status diff), so
+ * an enum guard left a no-show's verify-task lingering. bookingState==='terminal'
+ * is exactly {cancelled, no_show} — the two states where the guest is not
+ * coming — while checked_in/checked_out stay 'ok' (a stay that HAPPENED; its
+ * task is closed by a human DONE, not auto-revoked).
+ */
+export async function processBookingJob(
+  scheduler: SchedulerDeps,
+  arrival: ArrivalTaskDeps | null,
+  kind: BookingEventKind,
+  reservationNo: string,
+): Promise<void> {
+  await handleBookingEvent(scheduler, kind, reservationNo);
+  // Revoke on EITHER signal of "the guest is not coming": a cancel EVENT (always
+  // terminal, robust to a racy mirror read), OR a mirror row that is terminal —
+  // which catches a no_show, terminal but delivered as a booking.MODIFIED. The
+  // enum alone (round 4) missed no_show; the contract alone would miss a cancel
+  // whose tombstone we cannot re-read. Together they are complete.
+  const row = await getMirrorByReservationNo(scheduler.db, reservationNo);
+  const terminal = kind === 'cancelled' || (row !== null && bookingState(row) === 'terminal');
+  if (terminal) {
+    // scheduler.db, not arrival — cleanup must run even if the roster was
+    // unwired since the task was raised.
+    await cancelArrivalVerifyTask(scheduler.db, reservationNo);
+  } else if (arrival !== null) {
+    await maybeCreateArrivalVerifyTask(arrival, reservationNo);
+  }
+}
 
 let bossInstance: PgBoss | null = null;
 let bossUrl: string | null = null;
@@ -448,10 +493,29 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
       fromSweep,
     });
 
+    // CH-13b's arrival auto-task rides the SAME booking consumer (D9: one queue,
+    // one consumer — a second boss.work on this queue would split the jobs). It
+    // is INDEPENDENT of the lifecycle result on purpose: a source-gated Airbnb
+    // booking gets no message but its room still needs preparing, so the task
+    // gate (epoch/date/status, no source) is asked separately.
+    const arrivalTaskDeps = (): ArrivalTaskDeps | null => {
+      if (deps.staff === undefined) return null;
+      const now = nowIST();
+      return {
+        db: deps.db,
+        log: deps.log,
+        roster: deps.staff.roster,
+        wa: deps.wa,
+        epoch: gates.epoch,
+        today: istCalendarDay(now),
+        now,
+      };
+    };
+
     for (const [kind, queue] of Object.entries(BOOKING_EVENT_QUEUES) as [BookingEventKind, string][]) {
       await deps.boss.work<{ reservationNo: string }>(queue, workOptions, async (jobs) => {
         for (const job of jobs) {
-          await handleBookingEvent(schedulerDeps(), kind, job.data.reservationNo);
+          await processBookingJob(schedulerDeps(), arrivalTaskDeps(), kind, job.data.reservationNo);
         }
       });
     }

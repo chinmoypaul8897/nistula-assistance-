@@ -159,6 +159,29 @@ describe('DONE — the close', () => {
     expect(sent.find((s) => s.to === ANITA)?.body).toContain(task.shortId);
   });
 
+  it('🚨 CH-13b · DONE on a SYSTEM task closes it SILENTLY — no guest line, no task_done row', async () => {
+    // The round-2 BLOCKER: a media system-task carries the guest's conversationId,
+    // so the null guard let DONE send the guest \"That is done — guest sent media
+    // the assistant could not read…\" (internal wording + a false claim). Guarded
+    // now by ORIGIN, not conversationId.
+    const task = await seedTask({
+      origin: 'system',
+      summary: 'guest sent media the assistant could not read — please follow up',
+    });
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });
+
+    // Closed, staff acknowledged — the staff side is untouched.
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('done');
+    expect(sent.find((s) => s.to === ANITA)?.body).toContain(task.shortId);
+    // The guest heard NOTHING, and NO task_done evidence row was written (it
+    // would license a referent-free \"that's sorted\" to a guest who asked nothing).
+    expect(sent.find((s) => s.to === GUEST)).toBeUndefined();
+    const systemRows = await db.execute(
+      sql`SELECT 1 FROM messages WHERE conversation_id = ${conversationId} AND sender = 'system'`,
+    );
+    expect([...systemRows]).toHaveLength(0);
+  });
+
   it('writes the task_done evidence row that licenses the AI’s next reply', async () => {
     const task = await seedTask();
     await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });
@@ -273,6 +296,22 @@ describe('unknown staff text', () => {
 describe('the SLA nudger', () => {
   const slaDeps = (now: Date) => ({ db, log, wa, roster: ROSTER, now: () => now });
   const LATE = new Date('2026-07-17T10:31:00Z'); // 31 min after NOW; housekeeping SLA is 30
+
+  it('🚨 CH-13b · an escalation-kind task nudges at its 10-min SLA (the groundwork)', async () => {
+    // CH-13b's escalation-SLA "groundwork" is the escalation:10 constant (shipped
+    // CH-13a) + the kind-blind nudger: an escalation task overdue at 10 min is
+    // nudged like any other. The 10/20-min re-ping LADDER is CH-14; this proves
+    // the first rung is wired.
+    const task = await seedTask({ kind: 'escalation', assignedPhone: MEERA });
+    const tenMin = new Date(NOW.getTime() + 11 * 60_000); // 11 > the 10-min SLA
+    expect(await runSlaNudger(slaDeps(tenMin))).toEqual({ considered: 1, nudged: 1 });
+    expect((await findTaskByShortId(db, task.shortId))?.status).toBe('nudged');
+    // And it is NOT yet overdue at 9 minutes — the deadline is real.
+    const nine = new Date(NOW.getTime() + 9 * 60_000);
+    const fresh = await seedTask({ kind: 'escalation', assignedPhone: MEERA });
+    expect((await runSlaNudger(slaDeps(nine))).nudged).toBe(0);
+    expect((await findTaskByShortId(db, fresh.shortId))?.status).toBe('open');
+  });
 
   it('nudges an overdue task, re-pings the assignee and ccs the lead', async () => {
     const task = await seedTask();

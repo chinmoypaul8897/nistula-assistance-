@@ -479,3 +479,24 @@ describe('🚨 CH-13a · a failed APPEND must not kill the live task (real worke
     expect(closed?.status).toBe('done');
   });
 });
+
+describe('🚨 CH-13b · a captionless media turn becomes a frontdesk TASK, not an ops ping', () => {
+  it('raises a frontdesk task on the guest conversation and sends the fallback line', async () => {
+    const { conversation } = await seedInHouseGuest();
+    await openStaffWindows();
+    await touchPhoneWindow(db, GUEST, new Date());
+    // A photo with no caption ⇒ batchText '' ⇒ MEDIA_FALLBACK (policy path, no
+    // model turn). rig()'s converse is never called here.
+    await seedGuestMessage(db, conversation.id, null, 20, 'image');
+
+    await processConversation(rig({}).deps, conversation.id);
+
+    // The NEW behaviour: a tracked frontdesk task, routed to the frontdesk lead.
+    const tasks = [...(await db.execute(sql`SELECT kind, assigned_phone, status FROM tasks`))];
+    expect(tasks).toEqual([{ kind: 'frontdesk', assigned_phone: MEERA, status: 'open' }]);
+
+    // The guest still gets the §6.7 line.
+    const out = await outbound(conversation.id);
+    expect(out.some((m) => m.body.includes('mind typing it'))).toBe(true);
+  });
+});

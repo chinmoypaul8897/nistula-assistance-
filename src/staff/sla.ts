@@ -163,7 +163,11 @@ async function nudgeOne(deps: SlaDeps, task: Task): Promise<boolean> {
  * nudged. Same shape as ops_escalation, and for the same reason.
  */
 async function writeNudgeEvidence(deps: SlaDeps, task: Task): Promise<void> {
-  if (task.conversationId === null) return;
+  // ORIGIN, not just conversationId (CH-13b round 2): a nudged `system` task
+  // (the media follow-up carries a real conversationId) must not write an
+  // sla_nudge row on the guest's thread — the guest never asked, so "I've
+  // nudged housekeeping" about it would be a referent-free claim to them.
+  if (task.conversationId === null || task.origin !== 'guest') return;
   try {
     await insertMessage(deps.db, {
       conversationId: task.conversationId,
