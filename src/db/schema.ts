@@ -561,3 +561,67 @@ export const phoneWindows = pgTable('phone_windows', {
   lastInboundAt: timestamp('last_inbound_at', { withTimezone: true }).notNull(),
   ...timestamps,
 });
+
+/** §4 drafts reply_type vocabulary (CH-16). These are the CH-11 stage words
+ * mapped to conversation types (lead→presales, prearrival→arrival, inhouse→
+ * instay, postguest→poststay) — the EXACT strings that are `AUTO_SEND_TYPES`
+ * values, so an env unlock and a stored draft's type compare identically. */
+export const draftReplyTypeEnum = pgEnum('draft_reply_type', [
+  'presales',
+  'arrival',
+  'instay',
+  'poststay',
+]);
+
+/** pending → the ops human decides (approved | edited | rejected), or the 30-min
+ * sweep resolves it to `expired`. All four exits are TERMINAL: a draft is a
+ * single decision, never rescheduled. That is the §recurring-class VERB rule —
+ * a row may only be SKIPPED (terminally resolved) on a fact that cannot come
+ * back, and a human's OK/EDIT/NO and a passed deadline are each immutable. */
+export const draftStatusEnum = pgEnum('draft_status', [
+  'pending',
+  'approved',
+  'edited',
+  'rejected',
+  'expired',
+]);
+
+/**
+ * Draft-mode approval queue (§4, CH-16 — the trust gate). In draft mode the
+ * worker commits the AI's proposed reply HERE instead of sending it, ATOMICALLY
+ * with the turn claim (the send-intent reasoning: a crash must never lose the
+ * guest's turn), and notifies an ops number. `OK`/`EDIT`/`NO` from an ops number
+ * resolves it; a 30-minute sweep expires the rest. The full `proposed_body` lives
+ * here (not truncated like the card preview) and is what `OK` sends verbatim.
+ */
+export const drafts = pgTable(
+  'drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id),
+    /** 6-char base32, unique — the id an approver types back as `OK <id>`. */
+    shortId: text('short_id').notNull().unique(),
+    replyType: draftReplyTypeEnum('reply_type').notNull(),
+    /** The AI's reply, already through the §6.5 guardrail pipeline. What `OK`
+     * sends verbatim; the card shows a sanitised preview of it. */
+    proposedBody: text('proposed_body').notNull(),
+    /** One line of why for the approver's context (stage, tools used) — never a
+     * guest surface, so no OQ-15/money screen applies. */
+    contextNote: text('context_note'),
+    status: draftStatusEnum('status').notNull().default('pending'),
+    /** The human's words on `EDIT` — sent instead of proposed_body, and kept as
+     * gold data for the §1 quality-bar unlock decision. Null otherwise. */
+    finalBody: text('final_body'),
+    /** E.164 of the ops member who decided — not a name, so it survives a roster
+     * edit and stays matchable normalised-vs-normalised (§3.3, like closed_by). */
+    decidedBy: text('decided_by'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    // The 5-minutely expiry sweep and the weekly report both scan by status/age.
+    index('drafts_status_created_at_idx').on(table.status, table.createdAt),
+  ],
+);
