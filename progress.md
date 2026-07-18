@@ -1659,6 +1659,34 @@ roster + Paul's 2nd number; NOT run, NOT claimed.** The mechanics are covered by
 REAL path: `runMorningDigest` against real Postgres, the night_queue→escalation guarded UPDATE, the
 overnight counts, the block-[4] night rule.)*
 
+**🚨 PRE-MERGE ADVERSARIAL REVIEW — YELLOW, fixed to GREEN.** The standing 7-lens review (27 agents)
+confirmed THREE DEFECTs, all fixed before merge; none shipped a wrong guest message, but each guarded
+a real staff/ops failure:
+1. **The digest summary cap counted CODE POINTS (190) while the `staffReadParam` slot counts UTF-16
+   UNITS (.max 200)** — an emoji-heavy overnight summary could exceed 200 units and the real
+   `schema.parse` would reject it, silently killing the OPS digest. Fixed: a surrogate-safe
+   `capUtf16` bounds the summary by UTF-16 units. (The digest test mocked `sendTemplated`, so it never
+   ran the real schema — a `renderTemplate('digest', …)` test with a house + ₹ + emoji summary now
+   guards it AND the load-bearing param→staffReadParam swap.)
+2. **`STAFF_DIGEST_QUEUE` had `retryLimit:0`** — a transient DB blip at 10:00 would orphan every
+   overnight `night_queue` escalation for ~24h (the digest is their SOLE converter; the SLA ladder
+   never chases `night_queue`). Fixed: `retryLimit:3` with backoff, AND the conversion now runs FIRST
+   so a throw on a later read leaves the tasks already woken (the ladder carries them — self-heal).
+3. **The digest assigned woken escalations with `frontdeskLead()` alone**, dropping `assignFor`'s
+   OPS[0] fallback the day `escalate_to_human` path uses — a valid lead-less-but-OPS roster left the
+   escalation assigned to nobody and the ladder stuck on rung 0 forever. Fixed: `assignFor('escalation',
+   null)` — the same ladder as the day path. Also dropped the ops-irrelevant "Reply TASKS" line.
+
+Every confirmed finding was reproduced against the code; 2 verify agents died on connection errors
+(25/27). The verdict's RED-worthy items were all cheap and fixed; re-verified green.
+
+**Fixed in passing — a PRE-EXISTING CH-13b wall-clock flake** that reddened the gate this afternoon
+(NOT a CH-14b regression): `test/staff-arrival-tasks.test.ts`'s "before the epoch" test set the epoch
+to a FIXED `NOW+1day` (2026-07-18T09:50Z) while the booking's `created_at` is the REAL DB clock — so
+it passed all morning and flipped to red once the real time crossed 15:20 IST. Pinned with a fixed
+far-future epoch (after any real `created_at`). The exact "green at 6 p.m., red at night" wall-clock
+class the repo warns about.
+
 **Built (plan §8 CH-14 steps 3 + 5):**
 - **The morning digest** (`src/staff/digest.ts` `runMorningDigest`; `STAFF_DIGEST_QUEUE` + a 10:00-IST
   cron in `jobs/index.ts`, wired under the staff branch). At 10:00 it: (1) **WAKES every overnight
@@ -1716,6 +1744,15 @@ overnight counts, the block-[4] night rule.)*
 2. **A night escalation does not capture the villa** (escalate_to_human routes to the front desk, not
    a villa), so the digest names the item by its summary + time, not "B3" as product-picture S5's
    ideal shows. A future enrichment (derive the in-house guest's door) — recorded, not built.
+3. **OQ-26 residual — S5's "no 23:05 staff ping" is only PARTLY delivered (→ planning/CH-17).** The
+   review confirmed (MINOR) that a night COMPLAINT still pings OPS at 23:05 via the deterministic
+   `escalateToOps` (COMPLAINT_SUSPECT), which is night-BLIND — so S5's "no 23:05 ping" holds only for
+   the MODEL-escalate path (escalate_to_human → night_queue, no ping), not the deterministic complaint
+   path. Making `escalateToOps` night-aware (queue at night instead of paging) is the OQ-26 territory
+   (CH-14a Paul-confirmed defer of deterministic-escalation handling), beyond CH-14b's steps 3/5.
+   Recorded sharply.
+4. **Deferred review MINORs:** a woken escalation card shows "a guest" (guestFirstName=null; the
+   digest would need a per-task guest lookup) — cosmetic; the digest timestamp is HH:mm without a date.
 
 **How to verify:**
 - `docker compose up -d postgres` → `pnpm check` (green on the EXIT CODE).
