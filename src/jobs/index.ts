@@ -60,6 +60,7 @@ import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
 import { runMorningDigest, DIGEST_CRON } from '../staff/digest.js';
 import { runWatchdog, WATCHDOG_CRON } from '../ops/watchdog.js';
+import { runDailyRollup, ROLLUP_CRON } from '../ops/rollup.js';
 import type { WaClient } from '../wa/client.js';
 
 export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
@@ -762,6 +763,23 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   });
   await scheduleCron(deps.boss, OPS_WATCHDOG_QUEUE, WATCHDOG_CRON, 'Asia/Kolkata', {
     singletonKey: 'watchdog',
+  });
+
+  // ── CH-17 daily rollup ──────────────────────────────────────────────────
+  // Unconditional (only needs OPS_NUMBERS, not the roster). Empty ops list ⇒
+  // fail-quiet, like the digest. `now` re-derived per run so a long-lived
+  // process's day boundary cannot rot.
+  await deps.boss.work(OPS_ROLLUP_QUEUE, workOptions, async () => {
+    await runDailyRollup({
+      db: deps.db,
+      log: deps.log,
+      wa: deps.wa,
+      opsNumbers: deps.opsNumbers ?? [],
+      now: () => new Date(),
+    });
+  });
+  await scheduleCron(deps.boss, OPS_ROLLUP_QUEUE, ROLLUP_CRON, 'Asia/Kolkata', {
+    singletonKey: 'ops_rollup',
   });
 
   // ── CH-14a human takeover (coexistence) ─────────────────────────────────

@@ -176,6 +176,55 @@ export async function lastMessageAt(db: Db, direction: 'in' | 'out'): Promise<Da
   return row?.at != null ? new Date(row.at) : null;
 }
 
+/** Messages in a direction since `since` — CH-17's daily rollup (msgs in/out). */
+export async function countMessagesSince(
+  db: Db,
+  direction: 'in' | 'out',
+  since: Date,
+): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(messages)
+    .where(and(eq(messages.direction, direction), gte(messages.createdAt, since)));
+  return row?.n ?? 0;
+}
+
+/** Distinct conversations that saw a message since `since` — the rollup's
+ * "conversations today" (threads with activity, not first-contact rows). */
+export async function countActiveConversationsSince(db: Db, since: Date): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(distinct ${messages.conversationId})::int` })
+    .from(messages)
+    .where(and(gte(messages.createdAt, since), sql`${messages.conversationId} is not null`));
+  return row?.n ?? 0;
+}
+
+export interface DailyCost {
+  totalInr: number;
+  byKind: Record<string, number>;
+}
+
+/** Sum of cost_events INR for one IST day, and the per-kind breakdown — the
+ * rollup's cost line + the durable raw_events payload. `day` is istCalendarDay. */
+export async function sumCostForDay(db: Db, day: string): Promise<DailyCost> {
+  const rows = await db
+    .select({
+      kind: costEvents.kind,
+      inr: sql<string>`coalesce(sum(${costEvents.inrEstimate}), 0)::text`,
+    })
+    .from(costEvents)
+    .where(eq(costEvents.day, day))
+    .groupBy(costEvents.kind);
+  const byKind: Record<string, number> = {};
+  let totalInr = 0;
+  for (const r of rows) {
+    const v = Number(r.inr);
+    byKind[r.kind] = v;
+    totalInr += v;
+  }
+  return { totalInr, byKind };
+}
+
 export interface GuardrailRuleCount {
   rule: string;
   count: number;
