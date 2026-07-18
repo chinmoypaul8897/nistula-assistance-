@@ -465,6 +465,35 @@ describe('create_staff_task — GATES 3 and 4, duplicates and the cap (real Post
     expect(result).toMatchObject({ ok: false, error: 'REFUSED' });
     expect((result as { message: string }).message).toMatch(/bring the team in/i);
   });
+
+  it('🚨 CH-13b round 3 — a SYSTEM task neither fills the cap NOR absorbs a guest request', async () => {
+    // A media follow-up (system, same conversation) + 2 REAL guest tasks = 3 live
+    // rows, but only 2 of the GUEST's own requests. The cap counts the guest's
+    // requests, so a 3rd is allowed and gets its own card — never folded into the
+    // system task, which would then close silently under round 2's origin guard
+    // (no close line, no honest-confirm evidence). This is the create-side sibling
+    // of round 1's block [5] guard.
+    const sys = await seedTask({
+      origin: 'system',
+      kind: 'frontdesk',
+      summary: 'guest sent media — follow up',
+      requestKey: null,
+    });
+    await seedTask({ kind: 'housekeeping', summary: 'towels' });
+    await seedTask({ kind: 'maintenance', summary: 'the tap drips' });
+    const h = harness();
+    // Same KIND as the system task, and at 3 live rows — the exact shape that,
+    // origin-blind, appended onto the system task at the cap.
+    const result = await run(h.ctx, { kind: 'frontdesk', summary: 'please book a 6am taxi' });
+    expect(result).toMatchObject({ ok: true });
+
+    const all = await rows();
+    expect(all).toHaveLength(4); // a NEW task, not absorbed into the three
+    const taxi = all.find((t) => t.summary.includes('taxi'));
+    expect(taxi?.origin).toBe('guest');
+    // The system task was untouched — the guest's request did NOT fold into it.
+    expect(all.find((t) => t.id === sys.id)?.detail).toBeNull();
+  });
 });
 
 describe('create_staff_task — the per-turn latch', () => {

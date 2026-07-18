@@ -208,7 +208,21 @@ function isShortIdCollision(error: unknown): boolean {
   );
 }
 
-/** Open/nudged tasks on a conversation — the §6.4 3-open cap reads this. */
+/**
+ * The GUEST's open/nudged requests on a conversation — the §6.4 3-open cap and
+ * the near-duplicate/append gate read this.
+ *
+ * 🚨 origin='guest' ONLY (CH-13b round 3), the third sibling of round 1's block
+ * [5] guard. A `system` task (the media follow-up carries a conversationId) is
+ * NOT one of the guest's requests: counting it would refuse a real request on a
+ * phantom cap slot, and — worse — the append gate would fold a genuine
+ * frontdesk ask INTO the system task, which then closes silently (round 2's
+ * origin guard suppresses its close line and evidence). The cap is "how many
+ * things has the GUEST asked for", so it counts only what the guest asked for.
+ * Its siblings differ by contract and stay unfiltered: getLiveTasksForPhone
+ * (a staff member SHOULD see their system tasks) and findOverdueTasks (a system
+ * task DOES get nudged near check-in).
+ */
 export async function getLiveTasksForConversation(
   db: DbLike,
   conversationId: string,
@@ -219,6 +233,7 @@ export async function getLiveTasksForConversation(
     .where(
       and(
         eq(tasks.conversationId, conversationId),
+        eq(tasks.origin, 'guest'),
         inArray(tasks.status, [...LIVE_TASK_STATUSES]),
       ),
     )
