@@ -10,7 +10,12 @@ import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { maybeCreateArrivalVerifyTask, type ArrivalTaskDeps } from '../src/staff/arrivalTasks.js';
+import {
+  arrivalTaskDeadline,
+  maybeCreateArrivalVerifyTask,
+  type ArrivalTaskDeps,
+} from '../src/staff/arrivalTasks.js';
+import { getLiveTasksForGuest, getLiveTasksForPhone } from '../src/db/tasks.js';
 import { upsertMirrorRow, type MirrorRowInput } from '../src/db/bookings.js';
 import { insertGuestFactGuarded } from '../src/db/guestMemory.js';
 import type { Db } from '../src/db/client.js';
@@ -240,5 +245,55 @@ describe('🚨 CH-13b · idempotency and fail-closed delivery', () => {
     // is notify_failed and licenses no claim — exactly the CH-13a contract.
     expect(task?.assigned_phone).toBeNull();
     expect(task?.status).toBe('notify_failed');
+  });
+});
+
+describe('🚨 CH-13b review fixes — the leak, the SLA, the facts limit', () => {
+  it('🚨 a system arrival task does NOT surface in the guest block [5] — but DOES on the staff TASKS list', async () => {
+    const { guestId } = await seedReturningGuest();
+    expect((await maybeCreateArrivalVerifyTask(deps(), '980')).created).toBe(true);
+    // Block [5] renders getLiveTasksForGuest — the guest's OWN requests. A
+    // system task the guest never asked for must not appear (else the model
+    // could re-raise a resolved complaint or echo internal ops wording).
+    expect(await getLiveTasksForGuest(db, guestId)).toHaveLength(0);
+    // But the front desk still sees it on THEIR list.
+    expect(await getLiveTasksForPhone(db, MEERA)).toHaveLength(1);
+  });
+
+  it('🚨 the SLA deadline is anchored to CHECK-IN, not now + 10 min (no false overdue buzz)', async () => {
+    await seedReturningGuest(['AC weak'], { checkIn: '2026-07-25' }); // 8 days out
+    await maybeCreateArrivalVerifyTask(deps(), '980');
+    const [row] = [
+      ...(await db.execute(sql`SELECT sla_deadline FROM tasks`)),
+    ] as { sla_deadline: string | Date }[];
+    const deadline = new Date(row.sla_deadline);
+    // ~1 day before check-in (2026-07-24), NOT NOW+10min (2026-07-17 10:00).
+    expect(deadline.getTime()).toBeGreaterThan(new Date('2026-07-23T00:00:00Z').getTime());
+    expect(deadline.getTime()).toBeLessThan(new Date('2026-07-25T00:00:00Z').getTime());
+    // And the pure helper: a stay arriving today ⇒ due now (verify now).
+    const now = new Date('2026-07-17T10:00:00Z');
+    expect(arrivalTaskDeadline('2026-07-17', now).getTime()).toBeLessThanOrEqual(now.getTime());
+  });
+
+  it('🚨 finds a past_issue that sits BELOW the 15 newest facts', async () => {
+    const guest = await upsertGuestByPhone(db, GUEST, 'Rahul');
+    // The past_issue first (oldest), then 16 newer preferences push it past the
+    // block-[5] limit of 15.
+    await insertGuestFactGuarded(db, { guestId: guest.id, kind: 'past_issue', content: 'lift was noisy', sourceMessageId: null });
+    for (let i = 0; i < 16; i += 1) {
+      await insertGuestFactGuarded(db, { guestId: guest.id, kind: 'preference', content: `pref number ${i}`, sourceMessageId: null });
+    }
+    await upsertMirrorRow(db, mirrorInput());
+    expect((await maybeCreateArrivalVerifyTask(deps(), '980')).created).toBe(true);
+    expect((await rows())[0]?.summary).toContain('lift was noisy');
+  });
+
+  it('a single LONG past_issue fact overflows into detail, not lost to truncation', async () => {
+    const long = 'the air conditioning in the master bedroom rattled loudly all night and dripped onto the floor near the wardrobe every evening of the stay';
+    await seedReturningGuest([long]);
+    await maybeCreateArrivalVerifyTask(deps(), '980');
+    const [row] = await rows();
+    expect(row?.summary.length).toBeLessThanOrEqual(120);
+    expect(row?.detail).toContain('dripped onto the floor'); // the tail survives
   });
 });

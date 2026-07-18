@@ -12,7 +12,7 @@
  * `notifyTask` records the hole + pages ops — the exact signal the old ops ping
  * gave, now with a task row behind it.
  */
-import { insertTask, type Task, type TaskKind } from '../db/tasks.js';
+import { findTaskByRequestKey, insertTask, type Task, type TaskKind } from '../db/tasks.js';
 import type { Db } from '../db/client.js';
 import type { ToolTaskContext } from '../brain/tools/registry.js';
 
@@ -48,23 +48,36 @@ export async function raiseMediaFrontdeskTask(
   ctx: MediaTaskContext,
 ): Promise<{ task: Task; delivered: boolean }> {
   const kind: TaskKind = 'frontdesk';
+  const requestKey = `media:${ctx.conversationId}:${ctx.sourceMessageId}`;
   const assignment = deps.assign(kind, null);
-  const task = await insertTask(deps.db, {
-    conversationId: ctx.conversationId,
-    guestId: ctx.guestId,
-    bookingId: null,
-    // No house: a media sender may be a lead with no booking, and this is a
-    // frontdesk task regardless. Null renders the "villa not confirmed" label.
-    villaLabel: null,
-    kind,
-    summary: MEDIA_TASK_SUMMARY,
-    detail: null,
-    assignedPhone: assignment?.phone ?? null,
-    // Deterministic: one task per media turn, idempotent across a pg-boss
-    // redelivery of the same batch.
-    requestKey: `media:${ctx.conversationId}:${ctx.sourceMessageId}`,
-    now: deps.now,
-  });
+  let task: Task;
+  try {
+    task = await insertTask(deps.db, {
+      conversationId: ctx.conversationId,
+      guestId: ctx.guestId,
+      bookingId: null,
+      // No house: a media sender may be a lead with no booking, and this is a
+      // frontdesk task regardless. Null renders the "villa not confirmed" label.
+      villaLabel: null,
+      kind,
+      // The guest did not "ask" for this — it must stay out of block [5].
+      origin: 'system',
+      summary: MEDIA_TASK_SUMMARY,
+      detail: null,
+      assignedPhone: assignment?.phone ?? null,
+      // Deterministic: one task per media turn, idempotent across a pg-boss
+      // redelivery of the same batch.
+      requestKey,
+      now: deps.now,
+    });
+  } catch (error) {
+    // 🚨 This runs in the GUEST TURN (the worker's escalate path). A unique
+    // collision — a redelivered batch — must NEVER throw here: it would crash a
+    // real turn. It means the task already exists; return it, re-card nobody.
+    const existing = await findTaskByRequestKey(deps.db, requestKey);
+    if (existing !== null) return { task: existing, delivered: existing.status !== 'notify_failed' };
+    throw error;
+  }
   const { delivered } = await deps.notify(task, ctx.guestFirstName, 'raise');
   return { task, delivered };
 }

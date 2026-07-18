@@ -12,6 +12,7 @@ import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import { getOrCreateConversation, upsertGuestByPhone } from '../src/db/repos.js';
 import { assignFor, type Roster } from '../src/staff/roster.js';
+import { getLiveTasksForGuest } from '../src/db/tasks.js';
 import { notifyTask } from '../src/staff/notifier.js';
 
 const TEST_URL =
@@ -93,11 +94,14 @@ describe('raiseMediaFrontdeskTask', () => {
     expect(task.conversationId).toBe(conversationId);
   });
 
-  it('is idempotent per media turn — a redelivery collides on the request key', async () => {
+  it('🚨 is idempotent WITHOUT throwing — this runs in the guest turn', async () => {
     const { deps: d } = deps();
-    await raiseMediaFrontdeskTask(d, ctx());
-    // Same source message id ⇒ same request key ⇒ the insert unique blocks it.
-    await expect(raiseMediaFrontdeskTask(d, ctx())).rejects.toThrow();
+    const first = await raiseMediaFrontdeskTask(d, ctx());
+    // Same source message id ⇒ same request key. A redelivery must NOT throw
+    // (it is on the worker's escalate path — a throw crashes a real turn); it
+    // returns the EXISTING task and re-cards nobody.
+    const second = await raiseMediaFrontdeskTask(d, ctx());
+    expect(second.task.id).toBe(first.task.id);
     expect(await rows()).toHaveLength(1);
   });
 
@@ -109,5 +113,13 @@ describe('raiseMediaFrontdeskTask', () => {
     const [row] = await rows();
     expect(row?.assigned_phone).toBeNull();
     expect(row?.status).toBe('notify_failed');
+  });
+  it('🚨 does NOT surface in the guest block [5], even though it has a conversationId', async () => {
+    // The media task carries a conversationId (unlike the arrival task), so the
+    // discriminator that keeps it out of the guest's own requests must be
+    // `origin`, not conversationId.
+    const { deps: d } = deps();
+    await raiseMediaFrontdeskTask(d, ctx());
+    expect(await getLiveTasksForGuest(db, guestId)).toHaveLength(0);
   });
 });

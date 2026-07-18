@@ -68,6 +68,25 @@ export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', 
   cancelled: BOOKING_CANCELLED_QUEUE,
 };
 
+/**
+ * One booking.* job's whole effect, in ONE place so it is testable end to end
+ * (D9: one queue = one consumer). The lifecycle scheduling and CH-13b's arrival
+ * verify-task are INDEPENDENT: the task runs on create OR modify (a hold that
+ * later confirms arrives as a MODIFY, and would otherwise miss its task while
+ * its lifecycle scheduled), never on cancel, and only when staff is wired.
+ */
+export async function processBookingJob(
+  scheduler: SchedulerDeps,
+  arrival: ArrivalTaskDeps | null,
+  kind: BookingEventKind,
+  reservationNo: string,
+): Promise<void> {
+  await handleBookingEvent(scheduler, kind, reservationNo);
+  if (kind !== 'cancelled' && arrival !== null) {
+    await maybeCreateArrivalVerifyTask(arrival, reservationNo);
+  }
+}
+
 let bossInstance: PgBoss | null = null;
 let bossUrl: string | null = null;
 
@@ -471,15 +490,7 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     for (const [kind, queue] of Object.entries(BOOKING_EVENT_QUEUES) as [BookingEventKind, string][]) {
       await deps.boss.work<{ reservationNo: string }>(queue, workOptions, async (jobs) => {
         for (const job of jobs) {
-          await handleBookingEvent(schedulerDeps(), kind, job.data.reservationNo);
-          // Only on CREATE: a modify/cancel does not re-open the pre-arrival
-          // verify question, and the deterministic request_key makes a
-          // redelivered create idempotent anyway. A throw here retries the whole
-          // job — both halves are idempotent, so at-least-once is safe.
-          if (kind === 'created') {
-            const ad = arrivalTaskDeps();
-            if (ad !== null) await maybeCreateArrivalVerifyTask(ad, job.data.reservationNo);
-          }
+          await processBookingJob(schedulerDeps(), arrivalTaskDeps(), kind, job.data.reservationNo);
         }
       });
     }

@@ -21,7 +21,13 @@ import {
   BOOKING_EVENT_QUEUES,
   LIFECYCLE_RECONCILE_QUEUE,
   LIFECYCLE_SEND_QUEUE,
+  processBookingJob,
 } from '../src/jobs/index.js';
+import type { ArrivalTaskDeps } from '../src/staff/arrivalTasks.js';
+import { getLiveTasksForPhone } from '../src/db/tasks.js';
+import { insertGuestFactGuarded } from '../src/db/guestMemory.js';
+import { upsertGuestByPhone } from '../src/db/repos.js';
+import type { Roster } from '../src/staff/roster.js';
 import {
   handleBookingEvent,
   scheduleForBooking,
@@ -43,6 +49,28 @@ let boss: PgBoss;
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const deps = (): SchedulerDeps => ({ db, log, gates: GATES });
 
+const FRONTDESK = '+917700900511';
+const ROSTER: Roster = {
+  members: [{ name: 'Meera', phone: FRONTDESK, role: 'frontdesk', villas: [] }],
+  opsNumbers: [],
+};
+const arrivalDeps = (): ArrivalTaskDeps => ({
+  db,
+  log,
+  roster: ROSTER,
+  wa: {
+    sendTemplated: vi.fn(async () => ({
+      ok: true as const,
+      messageId: 'wamid.x',
+      usedTemplate: false,
+      retryable: false,
+    })),
+  } as never,
+  epoch: GATES.epoch,
+  today: GATES.today,
+  now: new Date('2026-07-14T10:00:00Z'),
+});
+
 beforeAll(async () => {
   client = postgres(TEST_URL, { max: 5, onnotice: () => {} });
   db = drizzle(client, { schema }) as unknown as Db;
@@ -59,7 +87,7 @@ beforeEach(async () => {
   await boss.deleteAllJobs(BOOKING_CREATED_QUEUE);
   await boss.deleteAllJobs(BOOKING_CANCELLED_QUEUE);
   await db.execute(
-    sql`TRUNCATE scheduled_messages, guest_stays, bookings_mirror, messages, conversations, guests CASCADE`,
+    sql`TRUNCATE tasks, guest_facts, scheduled_messages, guest_stays, bookings_mirror, messages, conversations, guests CASCADE`,
   );
   await db.insert(schema.bookingsMirror).values({
     ezeeReservationNo: '953',
@@ -135,5 +163,36 @@ describe('the lifecycle queues exist with the right guards', () => {
       // The next tick IS the retry — a retrying sender would double-send.
       expect(q?.retryLimit).toBe(0);
     }
+  });
+});
+
+describe('🚨 CH-13b · the arrival task rides processBookingJob on create AND modify (round-1 fix)', () => {
+  beforeEach(async () => {
+    // 953 (seeded above) belongs to a RETURNING guest carrying a past_issue.
+    const guest = await upsertGuestByPhone(db, '+917700900501', 'Rahul Mehta');
+    await insertGuestFactGuarded(db, {
+      guestId: guest.id,
+      kind: 'past_issue',
+      content: 'AC weak in the master last time',
+      sourceMessageId: null,
+    });
+  });
+
+  it('a booking.MODIFIED raises the verify-task — the hold→confirm case the created-only guard missed', async () => {
+    // The exact gap: a hold confirms and emits MODIFIED, not created. Through
+    // the SHARED processBookingJob (what registerJobs mounts), the task fires.
+    await processBookingJob(deps(), arrivalDeps(), 'modified', '953');
+    expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(1);
+  });
+
+  it('a booking.CANCELLED raises NO verify-task', async () => {
+    await processBookingJob(deps(), arrivalDeps(), 'cancelled', '953');
+    expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(0);
+  });
+
+  it('create then modify raises ONE task, not two (idempotent request key)', async () => {
+    await processBookingJob(deps(), arrivalDeps(), 'created', '953');
+    await processBookingJob(deps(), arrivalDeps(), 'modified', '953');
+    expect(await getLiveTasksForPhone(db, FRONTDESK)).toHaveLength(1);
   });
 });

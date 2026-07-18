@@ -11,11 +11,13 @@
  *     lifecycle gate is SOURCE-gated — an Airbnb guest never messaged us — but a
  *     staff task reaches no guest, so their room still needs preparing (D9).
  *
- *  2. It is IDEMPOTENT on a deterministic `request_key`. `booking.created` is
- *     redeliverable (pg-boss at-least-once) and a later `booking.modified` on
- *     the same reservation re-enters the handler, so a null key — the CH-13a
- *     forward note — would raise a second card each time. Keyed on the
- *     reservation, a repeat collides on the unique index instead.
+ *  2. It runs on CREATE **and MODIFY** — a hold arrives 'unknown' (gate-skipped)
+ *     and only its later confirm emits booking.modified, so a created-only guard
+ *     would miss exactly the bookings that become real via a modify. It is
+ *     therefore IDEMPOTENT on a deterministic `request_key`: the repeat calls
+ *     (redelivery, or create-then-modify) collide on the unique index instead of
+ *     raising a second card. A null key — the CH-13a forward note — gave no such
+ *     protection, so that note is overridden.
  *
  *  3. The card carries the villa TYPE, never a house. A booking pre-arrival has
  *     no room assigned (`RoomID:""`), and this is a frontdesk task anyway, so
@@ -23,7 +25,7 @@
  *     (OQ-19: eZee's later pick is not the guest's chosen house).
  */
 import { getMirrorByReservationNo } from '../db/bookings.js';
-import { getActiveGuestFacts, getGuestByPhone } from '../db/guestMemory.js';
+import { FACTS_PER_GUEST_CAP, getActiveGuestFacts, getGuestByPhone } from '../db/guestMemory.js';
 import { findTaskByRequestKey, insertTask, type Task } from '../db/tasks.js';
 import type { Db } from '../db/client.js';
 import type { AlertLogger } from '../ops/alerts.js';
@@ -72,9 +74,13 @@ export async function maybeCreateArrivalVerifyTask(
   const guest = await getGuestByPhone(deps.db, row.guestPhone);
   if (guest === null) return skip(deps, reservationNo, 'guest_not_known');
 
-  const pastIssues = (await getActiveGuestFacts(deps.db, guest.id)).filter(
-    (f) => f.kind === 'past_issue',
-  );
+  // Fetch ALL of the guest's facts, not the block-[5] top 15 — a frequent
+  // returner's real past_issue can sit below the 15 newest preferences, and
+  // missing it silently is exactly the guest this feature is FOR (round-1
+  // review). FACTS_PER_GUEST_CAP is the hard ceiling, so this is bounded.
+  const pastIssues = (
+    await getActiveGuestFacts(deps.db, guest.id, FACTS_PER_GUEST_CAP)
+  ).filter((f) => f.kind === 'past_issue');
   if (pastIssues.length === 0) return skip(deps, reservationNo, 'no_past_issue');
 
   const requestKey = `autotask:${row.ezeeReservationNo}:arrival_verify`;
@@ -82,14 +88,15 @@ export async function maybeCreateArrivalVerifyTask(
     return skip(deps, reservationNo, 'already_created');
   }
 
-  const summary = sanitiseInline(
-    `verify before arrival: ${pastIssues.map((f) => f.content).join('; ')}`,
-    SUMMARY_MAX,
-  );
-  // Overflow past the 120-char card summary is preserved in detail, so nothing a
-  // guest flagged is lost to truncation.
+  const fullText = `verify before arrival: ${pastIssues.map((f) => f.content).join('; ')}`;
+  const summary = sanitiseInline(fullText, SUMMARY_MAX);
+  // Detail preserves the FULL text whenever the card summary cannot carry it —
+  // whether because there are several facts OR one long one (round-1 review: a
+  // single fact >120 chars was silently truncated with no overflow).
   const detail =
-    pastIssues.length > 1 ? pastIssues.map((f) => `• ${f.content}`).join('\n') : null;
+    pastIssues.length > 1 || fullText.length > SUMMARY_MAX
+      ? pastIssues.map((f) => `• ${f.content}`).join('\n')
+      : null;
   const assignment = assignFor(deps.roster, 'frontdesk', null);
 
   let task: Task;
@@ -102,6 +109,15 @@ export async function maybeCreateArrivalVerifyTask(
       // the "villa not confirmed" label, which for a frontdesk task is fine.
       villaLabel: row.roomTypeName,
       kind: 'frontdesk',
+      // A guest never asked for this — it must NOT surface in their block [5].
+      origin: 'system',
+      // The SLA is anchored to CHECK-IN, not now+10min: a "verify before
+      // arrival" task for a guest 8 days out must not go overdue and buzz the
+      // front desk today. It becomes due ~a day before they arrive — which is
+      // also when a human should actually check (round-1 review: the false
+      // 10-min overdue buzz). checkIn is non-null here (passesTaskGate's date
+      // gate rejects a null check-in).
+      slaDeadline: arrivalTaskDeadline(row.checkIn, deps.now),
       summary,
       detail,
       assignedPhone: assignment?.phone ?? null,
@@ -130,6 +146,23 @@ export async function maybeCreateArrivalVerifyTask(
 function skip(deps: ArrivalTaskDeps, reservationNo: string, reason: string): ArrivalTaskOutcome {
   deps.log.info?.({ reservationNo, reason }, '[arrival-task] no task');
   return { created: false, reason };
+}
+
+/**
+ * When a "verify before arrival" task becomes DUE: ~1 day before check-in, so
+ * the front desk is reminded near the arrival, never 10 minutes after the
+ * booking lands. A stay arriving today (a last-minute re-booking) yields a
+ * deadline in the past ⇒ due on the next nudger tick, which is correct — verify
+ * now. checkIn is 'YYYY-MM-DD' (IST); this is the ONE place we turn it into an
+ * instant, and only for a deadline, never for a date comparison.
+ */
+export function arrivalTaskDeadline(checkIn: string | null, now: Date): Date {
+  // Non-null in the real path (passesTaskGate's date gate rejects a null
+  // check-in); the guard keeps this total for a defensive caller.
+  if (checkIn === null) return now;
+  const checkInInstant = new Date(`${checkIn}T00:00:00+05:30`);
+  if (Number.isNaN(checkInInstant.getTime())) return now; // unparseable ⇒ due now
+  return new Date(checkInInstant.getTime() - 24 * 60 * 60 * 1000);
 }
 
 function firstNameOf(name: string | null): string | null {

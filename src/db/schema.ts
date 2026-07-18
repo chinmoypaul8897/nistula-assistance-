@@ -418,6 +418,11 @@ export const taskKindEnum = pgEnum('task_kind', [
   'night_queue',
 ]);
 
+/** Who a task is FOR-the-guest-to-see (CH-13b). `guest` = they requested it;
+ * `system` = we raised it for them (arrival verify, media follow-up) — real
+ * staff work, never a guest request, so it stays out of block [5]. */
+export const taskOriginEnum = pgEnum('task_origin', ['guest', 'system']);
+
 /**
  * §4 lists open/nudged/done/cancelled. `notify_failed` is a CH-13a ADDITION
  * (recorded): a card that never reached a human is neither `open` (nobody is
@@ -502,6 +507,14 @@ export const tasks = pgTable(
     summary: text('summary').notNull(),
     detail: text('detail'),
     status: taskStatusEnum('status').notNull().default('open'),
+    /** WHO this task is FOR the guest to see. `guest` = they asked for it
+     * (create_staff_task) and it renders in block [5] as one of their open
+     * requests. `system` = we raised it FOR them without a request (CH-13b's
+     * arrival verify-task, the media follow-up) — it is real staff work but
+     * NEVER the guest's request, so block [5] must not surface it and the model
+     * must not repeat its internal wording back to the guest. Default `guest`,
+     * so every existing CH-13a task is correctly guest-origin. */
+    origin: taskOriginEnum('origin').notNull().default('guest'),
     assignedPhone: text('assigned_phone'),
     slaMinutes: integer('sla_minutes').notNull(),
     slaDeadline: timestamp('sla_deadline', { withTimezone: true }).notNull(),

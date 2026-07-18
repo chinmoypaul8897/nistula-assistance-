@@ -22,6 +22,7 @@ import { tasks } from './schema.js';
 
 export type Task = typeof tasks.$inferSelect;
 export type TaskKind = Task['kind'];
+export type TaskOrigin = Task['origin'];
 export type TaskStatus = Task['status'];
 
 /**
@@ -85,6 +86,13 @@ export interface NewTask {
   assignedPhone: string | null;
   /** The retry key (see schema). Null ⇒ no guest message asked for this. */
   requestKey: string | null;
+  /** `guest` (they asked) vs `system` (we raised it for them). Default guest. */
+  origin?: TaskOrigin;
+  /** Overrides the kind-derived SLA deadline. CH-13b's arrival verify-task
+   * anchors this to CHECK-IN, not now+10min — a task for a guest 8 days out
+   * must not go "overdue" and buzz the front desk today. Omit ⇒ now + the
+   * per-kind SLA (the in-stay contract). */
+  slaDeadline?: Date;
   /** Injected, never `new Date()` here — one clock per tick (the CH-12 lesson:
    * a suite that reads the wall clock lies at 02:00). */
   now: Date;
@@ -133,7 +141,7 @@ export async function findTaskByRequestKey(db: DbLike, requestKey: string): Prom
  */
 export async function insertTask(db: DbLike, input: NewTask): Promise<Task> {
   const slaMinutes = SLA_MINUTES[input.kind];
-  const slaDeadline = new Date(input.now.getTime() + slaMinutes * 60_000);
+  const slaDeadline = input.slaDeadline ?? new Date(input.now.getTime() + slaMinutes * 60_000);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       const [row] = await db
@@ -146,6 +154,7 @@ export async function insertTask(db: DbLike, input: NewTask): Promise<Task> {
           kind: input.kind,
           shortId: generateShortId(),
           requestKey: input.requestKey,
+          origin: input.origin ?? 'guest',
           summary: input.summary,
           detail: input.detail,
           assignedPhone: input.assignedPhone,
@@ -200,7 +209,18 @@ export async function getLiveTasksForGuest(db: DbLike, guestId: string): Promise
   return db
     .select()
     .from(tasks)
-    .where(and(eq(tasks.guestId, guestId), inArray(tasks.status, [...LIVE_TASK_STATUSES])))
+    .where(
+      and(
+        eq(tasks.guestId, guestId),
+        // 🚨 CH-13b: block [5] is the GUEST's open requests. A `system` task
+        // (arrival verify, media follow-up) is real staff work the guest never
+        // asked for — surfacing it would let the model repeat internal ops
+        // wording, or re-raise a past complaint, back to the guest (round-1
+        // review). It stays staff-side.
+        eq(tasks.origin, 'guest'),
+        inArray(tasks.status, [...LIVE_TASK_STATUSES]),
+      ),
+    )
     .orderBy(desc(tasks.openedAt));
 }
 
