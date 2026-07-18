@@ -885,3 +885,43 @@ SELECT count(*) FROM tasks WHERE status = 'notify_failed';   -- cards that reach
 ```
 A rising `notify_failed` count means the roster's windows are shut or the roster is wrong — the
 guests were never promised anything, but nobody is doing the work either.
+
+## Lead follow-up + consent (CH-15)
+
+### What runs
+- **Lead follow-up.** When the AI quotes a price to a guest who holds no upcoming booking and does
+  not refuse, the worker schedules ONE `lead_followup` (a `booking_id = NULL` `scheduled_messages`
+  row) for **3 days later, 11:00 IST**. It is a **marketing** template (`nst_lead_followup_v1`), so it
+  only actually SENDS to a guest who has opted in — a brand-new enquirer with no opt-in path gets
+  nothing (by design; see `docs/open-questions.md`). Caps: **max 1 per guest per 30 days**, enforced
+  at both schedule time and send time.
+- **STOP (opt-out).** A guest message that is a clear `stop` / `unsubscribe` / `band karo` sets
+  `guests.opt_out_marketing = true` + `marketing_opt_in = false`, cancels every PENDING marketing row
+  (win-back + lead follow-up), and replies once. **It fires even during a human takeover** — the
+  opt-out write is not gated on the AI being active. Utility lifecycle (confirmation → pre-arrival →
+  welcome → post-stay) is unaffected: those are service, not marketing.
+- **YES (opt-in).** The post-stay thank-you (`nst_poststay_v2`) asks "May we write to you when the
+  season turns? Reply YES." A clear affirmative within **7 days** of that thank-you sets
+  `marketing_opt_in = true, source = 'in_chat'`. It never overrides a prior STOP.
+- **Conversion cleanup.** When a guest's direct booking lands in eZee, their pending lead follow-ups
+  are cancelled (`skip_reason = 'converted'`).
+
+### Reading the state
+```sql
+-- marketing consent per guest
+SELECT phone, marketing_opt_in, marketing_opt_in_source, opt_out_marketing FROM guests
+  WHERE marketing_opt_in OR opt_out_marketing;
+-- lead follow-ups and why any were skipped
+SELECT kind, status, skip_reason, send_at FROM scheduled_messages
+  WHERE kind = 'lead_followup' ORDER BY created_at DESC;
+```
+`skip_reason` values to expect on a lead: `no_marketing_opt_in` (the common one — no consent),
+`opted_out`, `lead_followup_cap_reached`, `stale` (sat >36h past its due moment), `converted`
+(they booked).
+
+### The consent rules that matter
+- **No marketing without opt-in, ever.** Both `winback` and `lead_followup` are blocked at send time
+  unless `marketing_opt_in` is true and `opt_out_marketing` is false.
+- **STOP is durable.** `opt_out_marketing` is only ever cleared by hand (a human), never by code.
+- The dev test number cannot prove the closed-window send path (a "template" is free-form in
+  `simulate` mode); the STOP confirmation lands because the guest just messaged (window open).
