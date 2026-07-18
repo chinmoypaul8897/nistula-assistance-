@@ -234,6 +234,40 @@ describe('🚨 staffParam vs param — two audiences, two contracts (CH-13a)', (
   });
 });
 
+describe('🚨 escalation_card is ENTIRELY staff-read — the money/URL bans must NOT block it (CH-14a review)', () => {
+  const esc = (over: Partial<Record<string, string>> = {}) => ({
+    shortId: 'A3F2K9',
+    guestName: 'Rahul',
+    reason: 'A question outside what the assistant can answer',
+    detail: 'Guest: is the AC in Apartment 09 fixed · Us: one moment',
+    ...over,
+  });
+
+  it('delivers a detail carrying the AI’s own ₹ quote — the review’s dominant failure path', () => {
+    // A pricing dispute is the most common escalation; the transcript detail
+    // carries "...Us: that is ₹12,000 per night...". Before the fix this failed
+    // schema.parse and the front desk got nothing.
+    const card = renderTemplate('escalation_card', esc({ detail: 'Us: that is ₹12,000 per night · Guest: too much' }));
+    expect(card).toContain('₹12,000');
+  });
+
+  it('delivers a detail carrying a guest-pasted URL', () => {
+    const card = renderTemplate('escalation_card', esc({ detail: 'Guest: this listing https://airbnb.com/x is cheaper' }));
+    expect(card).toContain('https://airbnb.com/x');
+  });
+
+  it('delivers a house name in reason/detail, and a ₹/URL guest name — all staff-read', () => {
+    expect(renderTemplate('escalation_card', esc({ detail: 'Guest: the AC in Apartment 09 is weak' }))).toContain('Apartment 09');
+    expect(() => renderTemplate('escalation_card', esc({ guestName: '₹5000' }))).not.toThrow();
+    expect(() => renderTemplate('escalation_card', esc({ reason: 'STILL OPEN after 10 min — Rs. 500 refund' }))).not.toThrow();
+  });
+
+  it('STILL rejects Meta’s hard wire breakers (newlines) in any slot', () => {
+    // The floor every param clears — a {{n}} substitution may not contain a newline.
+    expect(() => renderTemplate('escalation_card', esc({ detail: 'line one\nline two' }))).toThrow(/newlines/);
+  });
+});
+
 describe('templateComponents — the Graph payload', () => {
   it('emits one body component with params in declared order', () => {
     const d = LIFECYCLE_TEMPLATES.welcome;

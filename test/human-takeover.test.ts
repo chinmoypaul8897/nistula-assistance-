@@ -12,6 +12,7 @@ import {
   findConversationForTakeover,
   getOrCreateConversation,
   insertMessage,
+  setTakeoverState,
   upsertGuestByPhone,
   type Conversation,
 } from '../src/db/repos.js';
@@ -114,6 +115,27 @@ describe('applyHumanTakeover — the shared core', () => {
     const [task] = await db.select().from(schema.tasks);
     expect(task?.status).toBe('cancelled');
     expect(cancelPending).toHaveBeenCalledWith(conversationId);
+  });
+
+  it('🚨 an AI-OFF hold survives a later staff echo + its TTL expiring (review BLOCKER)', async () => {
+    // The interaction the review caught: AI OFF sets status='human_active', TTL
+    // null (indefinite); the staff member's own reply is an echo that stamps a 2h
+    // TTL; 2h later the AI must STILL be held. Before the fix, isHumanActive read
+    // the (now-expired) TTL first and resumed the AI on a thread staff locked.
+    await setTakeoverState(db, conversationId, 'human_active', null); // AI OFF
+    await applyHumanTakeover(takeoverDeps(), {
+      conversationId,
+      echo: { waMessageId: 'wamid.echo9', body: 'Front desk here, looking into it.' },
+    });
+    const c = await conv();
+    const msg = [
+      { id: 'x', conversationId, type: 'text' as const, body: 'still there?', createdAt: NOW },
+    ] as unknown as Parameters<typeof decidePolicy>[0]['messages'];
+    // Well past the 2h echo TTL — the explicit hold must still silence the AI.
+    const wayLater = new Date(NOW.getTime() + HUMAN_ACTIVE_TTL_MS + 3_600_000);
+    expect(
+      decidePolicy({ messages: msg, conversation: c, now: wayLater, overLimit: false }).kind,
+    ).toBe('HUMAN_ACTIVE');
   });
 
   it('pauses the AI: decidePolicy routes HUMAN_ACTIVE while the TTL holds, then resumes', async () => {

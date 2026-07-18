@@ -21,6 +21,7 @@ import {
   cancelLiveEscalationsForConversation,
   findTaskByShortId,
   insertTask,
+  markRungFired,
   type Task,
   type TaskKind,
 } from '../src/db/tasks.js';
@@ -185,5 +186,28 @@ describe('other kinds are unchanged by the ladder', () => {
     const row = await findTaskByShortId(db, task.shortId);
     expect(row?.nudgeCount).toBe(0);
     expect(row?.status).toBe('open');
+  });
+});
+
+describe('markRungFired — the concurrency guard directly (not via findOverdueTasks)', () => {
+  // The review noted the mid-ladder tests pass because findOverdueTasks filters
+  // done/cancelled rows BEFORE the guard is reached. This exercises the guard
+  // itself: the real race is a DONE/cancel committing AFTER the row was selected
+  // but BEFORE markRungFired's UPDATE.
+  it('refuses to advance a rung on a task that is no longer open (won the race)', async () => {
+    const task = await seed('escalation');
+    // Simulate the resolution landing between selection and the guarded UPDATE.
+    await closeTaskByShortId(db, task.shortId, LEAD, at(1));
+    const advanced = await markRungFired(db, task.id, 0, 'open');
+    expect(advanced).toBeNull(); // status !== 'open' -> no rung fired, no evidence
+    expect((await findTaskByShortId(db, task.shortId))?.nudgeCount).toBe(0);
+  });
+
+  it('refuses to advance when the prior nudge_count does not match (a rung already fired)', async () => {
+    const task = await seed('escalation');
+    expect(await markRungFired(db, task.id, 0, 'open')).not.toBeNull(); // rung 0 -> count 1
+    // A stale caller still thinking count is 0 must not fire twice.
+    expect(await markRungFired(db, task.id, 0, 'open')).toBeNull();
+    expect((await findTaskByShortId(db, task.shortId))?.nudgeCount).toBe(1);
   });
 });

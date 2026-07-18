@@ -198,17 +198,31 @@ function decideKind(
   return 'NORMAL';
 }
 
-/** §6.7 line 1. The TTL wins when present (CH-14's resume reads it); the
- * status column alone counts only while no TTL is set. Dormant until CH-14
- * writes either — but correct now so CH-14 never reopens this file. */
+/**
+ * §6.7 line 1: is a human holding this thread (⇒ the AI stays SILENT)?
+ *
+ * 🚨 GUARD BY THE CONTRACT, NOT THE MUTABLE TTL CLOCK (CH-14a review BLOCKER).
+ * This was TTL-first — it returned `ttl > now` whenever a TTL was set and only
+ * consulted the status when the TTL was null. That silently downgraded an
+ * INDEFINITE hold: `AI OFF` sets status='human_active', TTL=null (held "until you
+ * send AI ON"); the staff member's own next reply is an echo that stamps a 2h TTL
+ * WITHOUT touching status (humanTakeover.setHumanActiveUntil), and 2h later the
+ * expired TTL won and the AI resumed a thread staff explicitly locked. status=
+ * 'human_active' is written ONLY by `AI OFF` and means "held until AI ON", so it
+ * must win regardless of any echo TTL. A PASSIVE echo takeover leaves status
+ * ai_active and is correctly governed by its own 2h TTL. This now matches the two
+ * sibling predicates that already had it right: lifecycle/sender.ts and the DONE
+ * close-line guard in staff/commands.ts.
+ */
 function isHumanActive(
   conversation: Pick<Conversation, 'status' | 'humanActiveUntil'>,
   now: Date,
 ): boolean {
-  if (conversation.humanActiveUntil !== null) {
-    return conversation.humanActiveUntil.getTime() > now.getTime();
-  }
-  return conversation.status === 'human_active';
+  if (conversation.status === 'human_active') return true;
+  return (
+    conversation.humanActiveUntil !== null &&
+    conversation.humanActiveUntil.getTime() > now.getTime()
+  );
 }
 
 // --- directive settlement (what the worker executes) ---------------------------
