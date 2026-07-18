@@ -128,23 +128,58 @@ describe('night_queue wakes into a live escalation at 10:00 (S5)', () => {
     // The already-converted escalation is still open, but not re-woken.
     expect(carded.find((c) => c.key === 'escalation_card')).toBeUndefined();
   });
+
+  it('🚨 a lead-less-but-ops roster falls back to OPS (same ladder as the day path)', async () => {
+    // Review DEFECT: the digest used frontdeskLead alone, dropping assignFor's OPS
+    // fallback — so a valid [housekeeping]+OPS roster left the woken escalation
+    // assigned to nobody, stuck on the SLA ladder forever.
+    const noLead: Roster = {
+      members: [{ name: 'Anita', phone: '+917700900937', role: 'housekeeping', villas: [] }],
+      opsNumbers: [OWNER],
+    };
+    const night = await seed('night_queue', { slaDeadline: NOW });
+    await runMorningDigest(deps({ roster: noLead, opsNumbers: [OWNER] }));
+    expect((await findTaskByShortId(db, night.shortId))?.assignedPhone).toBe(OWNER);
+    expect(carded.find((c) => c.key === 'escalation_card')?.to).toBe(OWNER);
+  });
+
+  it('resets nudge_count on conversion so the ladder starts at rung 0', async () => {
+    const night = await seed('night_queue', { slaDeadline: NOW });
+    await db.update(schema.tasks).set({ nudgeCount: 5 }).where(sql`id = ${night.id}`);
+    await runMorningDigest(deps());
+    expect((await findTaskByShortId(db, night.shortId))?.nudgeCount).toBe(0);
+  });
 });
 
 describe('the digest to OPS', () => {
   it('sends a one-line summary naming the overnight item + counts', async () => {
-    await seed('night_queue', { slaDeadline: NOW });
+    // A newline in the guest's words must be STRIPPED (Meta bans it in a param).
+    await seed('night_queue', { slaDeadline: NOW, summary: 'AC weak\nplease hurry' });
     await seed('housekeeping'); // an open day task
     await seedGuardrailHit(new Date(NOW.getTime() - 2 * 3600 * 1000)); // 2h ago (in window)
 
     const run = await runMorningDigest(deps());
-    expect(run.sent).toBe(true);
+    expect(run).toMatchObject({ converted: 1, openEscalations: 1, openTasks: 1, guardrailHits: 1, sent: true });
     const digest = carded.find((c) => c.key === 'digest');
     expect(digest?.to).toBe(OWNER);
     expect(digest?.params.summary).toContain('raised overnight now live');
     expect(digest?.params.summary).toContain('23:05'); // the item's time
+    expect(digest?.params.summary).toContain('1 escalation(s)'); // the counts
+    expect(digest?.params.summary).toContain('1 task(s)');
     expect(digest?.params.summary).toContain('1 guardrail'); // the overnight hit
-    // Meta bans a newline in a param — the summary is one line.
+    // The newline in the guest's words was stripped — the summary is one line.
     expect(digest?.params.summary).not.toContain('\n');
+    expect(digest?.params.summary).toContain('AC weak');
+  });
+
+  it('🚨 an emoji-heavy summary stays inside the template’s 200 UTF-16-unit limit', async () => {
+    // Review DEFECT: the code cap counted CODE POINTS while staffReadParam counts
+    // UTF-16 UNITS, so an astral-char-heavy summary could exceed 200 and the real
+    // schema would reject it — silently killing the digest.
+    await seed('night_queue', { slaDeadline: NOW, summary: `AC ${'🔥'.repeat(80)}` });
+    await runMorningDigest(deps());
+    const summary = carded.find((c) => c.key === 'digest')?.params.summary ?? '';
+    expect(summary.length).toBeLessThanOrEqual(200); // .length IS UTF-16 units
   });
 
   it('counts guardrail hits only inside the overnight window', async () => {

@@ -268,6 +268,24 @@ describe('🚨 escalation_card is ENTIRELY staff-read — the money/URL bans mus
   });
 });
 
+describe('🚨 digest is staff-read too — a house/₹/emoji summary must render (CH-14b review)', () => {
+  // The only digest test mocks sendTemplated and never runs def.schema.parse, so
+  // this drives the REAL schema — the load-bearing param->staffReadParam swap.
+  it('renders a summary naming a house, a ₹ figure, and emoji', () => {
+    const out = renderTemplate('digest', {
+      day: 'Sunday 20 December',
+      summary: '1 raised overnight now live (the AC in Apartment 09 is weak · 23:05); ₹12,000 disputed 🔥',
+    });
+    expect(out).toContain('Apartment 09');
+    expect(out).toContain('₹12,000');
+    expect(out).toContain('🔥');
+  });
+
+  it('STILL rejects a newline in the summary param (Meta wire rule)', () => {
+    expect(() => renderTemplate('digest', { day: 'Sunday', summary: 'line one\nline two' })).toThrow(/newlines/);
+  });
+});
+
 describe('templateComponents — the Graph payload', () => {
   it('emits one body component with params in declared order', () => {
     const d = LIFECYCLE_TEMPLATES.welcome;

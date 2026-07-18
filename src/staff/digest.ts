@@ -22,15 +22,18 @@ import { countGuardrailHitsSince } from '../db/repos.js';
 import { sanitiseInline } from '../brain/prompt.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
-import { frontdeskLead, type Roster } from './roster.js';
+import { assignFor, type Roster } from './roster.js';
 import { notifyEscalation } from './notifier.js';
 
 /** §2.3: the morning digest fires at 10:00 IST (NIGHT_END). */
 export const DIGEST_CRON = '0 10 * * *';
 
-/** Meta caps a template param at 200 chars; keep the one-line summary inside it. */
-const SUMMARY_MAX = 190;
-const ITEM_LABEL_MAX = 60;
+/** The digest `summary` slot is staffReadParam `.max(200)`, which counts UTF-16
+ * CODE UNITS. capUtf16 (below) enforces this bound surrogate-safe — a plain
+ * code-point cap could still present a string zod rejects (review DEFECT: an
+ * emoji-heavy summary would silently kill the digest). 190 leaves a margin. */
+const SUMMARY_MAX_UNITS = 190;
+const ITEM_LABEL_MAX = 40;
 
 /** The card reason for a night escalation that just woke at 10:00. */
 const WOKE_REASON = 'Raised overnight — the front desk is now in';
@@ -56,19 +59,26 @@ export interface DigestRun {
   sent: boolean;
 }
 
-/** One 10:00 tick. Never throws: a cron's next run is its retry. */
+/**
+ * One 10:00 tick. May throw on a DB error — deliberately: STAFF_DIGEST_QUEUE has
+ * a retryLimit, so a transient failure retries within minutes rather than losing
+ * the whole overnight queue for ~24h (the digest is the SOLE converter of
+ * night_queue tasks; the SLA ladder never chases them). The CONVERSION runs
+ * FIRST, so a throw on a later read leaves the tasks already woken and the ladder
+ * carries them (review DEFECT — self-heal, not a 24h orphan).
+ */
 export async function runMorningDigest(deps: DigestDeps): Promise<DigestRun> {
   const now = deps.now();
-  const lead = frontdeskLead(deps.roster);
+  // The SAME assignment ladder the DAY escalate_to_human path uses — role →
+  // frontdesk lead → OPS[0]. `frontdeskLead` alone dropped the OPS fallback, so a
+  // lead-less-but-ops roster left the woken escalation assigned to nobody and the
+  // SLA ladder stuck on rung 0 forever (review DEFECT).
+  const assignment = assignFor(deps.roster, 'escalation', null);
 
-  // Pre-existing DAY escalations, read BEFORE the conversion so the two are
-  // distinguishable in the summary.
-  const preExisting = await getLiveTasksByKinds(deps.db, ['escalation']);
-
-  // WAKE the overnight queue: night_queue → escalation, assigned to the day front
-  // desk, SLA clock started fresh (rung 0 fires ~10 min later via the CH-14a ladder).
+  // WAKE FIRST: the conversion is the first DB write, so a throw on a later read
+  // leaves night_queue rows already converted (the ladder then chases them).
   const converted = await convertNightQueueTasks(deps.db, {
-    assignedPhone: lead?.phone ?? null,
+    assignedPhone: assignment?.phone ?? null,
     slaDeadline: new Date(now.getTime() + SLA_MINUTES.escalation * 60_000),
   });
 
@@ -78,19 +88,21 @@ export async function runMorningDigest(deps: DigestDeps): Promise<DigestRun> {
     await notifyEscalation({ db: deps.db, log: deps.log, wa: deps.wa }, task, null, WOKE_REASON);
   }
 
+  // All open escalations (now INCLUDING the just-woken ones) + open tasks.
+  const openEscalations = await getLiveTasksByKinds(deps.db, ['escalation']);
   const openTasks = await getLiveTasksByKinds(deps.db, ['housekeeping', 'maintenance', 'frontdesk']);
   const guardrailHits = await countGuardrailHitsSince(deps.db, mostRecentNightStart(now, deps.nightStart));
 
   const run: DigestRun = {
     converted: converted.length,
-    openEscalations: preExisting.length + converted.length,
+    openEscalations: openEscalations.length,
     openTasks: openTasks.length,
     guardrailHits,
     sent: false,
   };
 
   // Fail-quiet on a genuinely quiet night — no daily empty ping.
-  if (converted.length === 0 && preExisting.length === 0 && openTasks.length === 0 && guardrailHits === 0) {
+  if (run.converted === 0 && run.openEscalations === 0 && run.openTasks === 0 && run.guardrailHits === 0) {
     deps.log.info?.({}, 'morning digest — nothing overnight, no digest sent');
     return run;
   }
@@ -110,14 +122,29 @@ function buildSummary(run: DigestRun, firstConverted: Task | undefined): string 
   const parts: string[] = [];
   if (run.converted > 0 && firstConverted !== undefined) {
     const at = formatISTClock(firstConverted.openedAt);
+    // sanitiseInline strips control/zero-width/bidi chars (it does NOT strip
+    // emoji) and code-point-caps the label; capUtf16 below bounds the WHOLE
+    // summary by UTF-16 units so the staffReadParam .max(200) can never reject it.
     const label = sanitiseInline(firstConverted.summary, ITEM_LABEL_MAX);
     const more = run.converted > 1 ? ` +${run.converted - 1} more` : '';
     parts.push(`${run.converted} raised overnight now live (${label} · ${at})${more}`);
   }
   parts.push(`${run.openEscalations} escalation(s) + ${run.openTasks} task(s) open`);
   if (run.guardrailHits > 0) parts.push(`${run.guardrailHits} guardrail hit(s) overnight`);
-  parts.push('Reply TASKS to see your work');
-  return sanitiseInline(parts.join('; '), SUMMARY_MAX);
+  return capUtf16(parts.join('; '), SUMMARY_MAX_UNITS);
+}
+
+/** Trim to <= maxUnits UTF-16 CODE UNITS without splitting a surrogate pair.
+ * A Meta template param (the digest slot is staffReadParam `.max(200)`) is
+ * measured in UTF-16 units, so a code-point cap alone could still produce a
+ * string zod rejects — an emoji-heavy summary would then silently kill the
+ * OPS digest (review DEFECT). */
+function capUtf16(s: string, maxUnits: number): string {
+  if (s.length <= maxUnits) return s;
+  let end = maxUnits;
+  const code = s.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1; // don't cut a surrogate pair
+  return s.slice(0, end);
 }
 
 async function sendToOps(deps: DigestDeps, day: string, summary: string): Promise<boolean> {

@@ -257,11 +257,19 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     expireInSeconds: 420,
   });
   // CH-14b: the 10:00 morning digest — stately + a constant singletonKey so a
-  // run that overran cannot double-convert or double-send. retryLimit 0: a
-  // failed run waits for tomorrow (the conversion is idempotent, so no harm).
+  // run that overran cannot double-convert or double-send.
+  //
+  // 🚨 retryLimit > 0, NOT 0 (review DEFECT): the digest is the SOLE converter of
+  // night_queue tasks (the SLA ladder never chases them — RUNGS.night_queue is
+  // empty), so a transient DB blip at 10:00 with no retry would orphan every
+  // overnight escalation for ~24h. A few backed-off retries shrink that window to
+  // minutes; the conversion is idempotent AND runs first, so a retry re-runs it
+  // safely (or finds the work already done and the ladder carrying it).
   await boss.createQueue(STAFF_DIGEST_QUEUE, {
     policy: 'stately',
-    retryLimit: 0,
+    retryLimit: 3,
+    retryDelay: 60,
+    retryBackoff: true,
     // The whole overnight queue: convert + one card each + the OPS sends.
     expireInSeconds: 420,
   });
