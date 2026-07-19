@@ -47,6 +47,13 @@ export async function touchPhoneWindow(db: DbLike, phone: string, at: Date): Pro
     });
 }
 
+/** DELETE_GUEST hook — a guest's number lands here too (touchPhoneWindow runs on
+ * every inbound, not only staff/ops), so erasure must reach it. Phone-keyed, and
+ * DbLike so it composes inside the single erasure transaction (db/erasure.ts). */
+export async function deletePhoneWindow(db: DbLike, phone: string): Promise<void> {
+  await db.delete(phoneWindows).where(eq(phoneWindows.phone, phone));
+}
+
 export type WindowState = { open: boolean; source: 'conversation' | 'phone_window' | 'none' };
 
 /**

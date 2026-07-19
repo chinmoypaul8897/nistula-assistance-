@@ -19,7 +19,8 @@ import { createEzeeClient } from './ezee/client.js';
 import { getBoss, registerJobs, stopBoss } from './jobs/index.js';
 import { createLogger } from './lib/logger.js';
 import { istCalendarDay, nowIST } from './lib/time.js';
-import { adminRoutes } from './ops/admin.js';
+import { adminRoutes, type AdminRouteOptions } from './ops/admin.js';
+import type { Db } from './db/client.js';
 import { configureOpsAlerts } from './ops/alerts.js';
 import { configureCostMeter, seedCostMeter } from './ops/costMeter.js';
 import { configureHealth, probeHealth } from './ops/health.js';
@@ -31,6 +32,31 @@ import { waWebhookRoutes } from './wa/webhook.js';
 // churn across Node versions; the path is stable relative to src/ and dist/.
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
+
+/**
+ * Registers the admin routes ONLY when enabled with a token — the §3.3 rule
+ * that a disabled admin surface is Fastify's default 404, indistinguishable
+ * from a route that never existed. Extracted from main() so the gate is
+ * unit-testable without a full boot (CH-18a-1). Returns whether it registered.
+ */
+export async function maybeRegisterAdminRoutes(
+  app: ReturnType<typeof buildServer>,
+  opts: {
+    enabled: boolean;
+    bearerToken: string | undefined;
+    db: Db;
+    coexistence: AdminRouteOptions['coexistence'];
+  },
+): Promise<boolean> {
+  if (!opts.enabled || opts.bearerToken === undefined) return false;
+  await app.register(adminRoutes, {
+    db: opts.db,
+    bearerToken: opts.bearerToken,
+    coexistence: opts.coexistence,
+  });
+  app.log.info('admin routes enabled');
+  return true;
+}
 
 /** Builds the app without listening — tests inject requests against this (optionally capturing logs). */
 export function buildServer(logStream?: { write: (msg: string) => void }) {
@@ -241,18 +267,14 @@ async function main(): Promise<void> {
     // CH-14a: the prod `smb_message_echoes` takeover path.
     coexistence: jobs.coexistence,
   });
-  // CH-09: admin routes mount ONLY when enabled — unmounted means Fastify's
-  // default 404, indistinguishable from a route that never existed (§3.3 "no
-  // public surface"). loadConfig guarantees a ≥16-char token when enabled.
-  if (config.adminRoutesEnabled && config.adminBearerToken !== undefined) {
-    // CH-14a: the dev human-takeover sim shares the coexistence core.
-    await app.register(adminRoutes, {
-      db,
-      bearerToken: config.adminBearerToken,
-      coexistence: jobs.coexistence,
-    });
-    app.log.info('admin routes enabled');
-  }
+  // CH-09: admin routes mount ONLY when enabled (§3.3). CH-14a's dev
+  // human-takeover sim shares the coexistence core.
+  await maybeRegisterAdminRoutes(app, {
+    enabled: config.adminRoutesEnabled,
+    bearerToken: config.adminBearerToken,
+    db,
+    coexistence: jobs.coexistence,
+  });
   app.log.info(`config: ${configSummary(config)}`);
   // Log the kb version so a kb change is visible against the cache/cost logs.
   app.log.info(

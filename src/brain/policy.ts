@@ -18,6 +18,8 @@ import type { PolicyRule } from './telemetry.js';
 
 // §3.3: per phone, 20 messages / 5 min — module constants, not env (CH-03 D4
 // precedent: the literals ARE the spec; promotion to env is a planning call).
+// CH-18a-1 review confirmed these FINAL (no change); the cool-off copy
+// (prompt.ts PHRASEBOOK.coolOff) stays the Paul-approved 2026-07-12 wording.
 export const RATE_LIMIT = { maxMessages: 20, windowMs: 5 * 60_000 } as const;
 
 export interface RateWindow {

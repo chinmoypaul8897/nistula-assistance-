@@ -83,12 +83,17 @@ const planAgeHours = (c: TruthContext): number =>
  * safe. The poststay's is `check_out +1d`, and check_out is MUTABLE, so a
  * backwards amendment re-plans its instant into the past and AGES it: a typo
  * corrected too late costs the thank-you for ever.
- * TODO(CH-18a): re-anchor poststay's bound on row.createdAt (its own instant is
- * not a safe clock). NOT by deferring — poststay is deliberately outside
- * PRE_STAY_KINDS, so it has no stay_over backstop, and a permanently-deferring
- * row is permanently the OLDEST (sender.ts orders by send_at, limit 10): a
- * handful would own every batch for ever and starve every new guest's
- * confirmation. Gated on OQ-22 — no `modified` row has ever been observed. */
+ * TODO(CH-18c): re-anchor poststay's staleness so a backwards check_out
+ * amendment cannot age it past the grace and SKIP it terminally. NOT by
+ * deferring — poststay is deliberately outside PRE_STAY_KINDS, so it has no
+ * stay_over backstop, and a permanently-deferring row is permanently the OLDEST
+ * (sender.ts orders by send_at, limit 10): a handful would own every batch for
+ * ever and starve every new guest's confirmation. ⚠️ CAUTION for the slice:
+ * `row.createdAt` is NOT the anchor — it is ~booking time (~76d before send_at),
+ * so a grace window measured from it would skip EVERY thank-you; the honest
+ * anchor is the FRESH mirror check_out read at send time. Deferred to a
+ * dedicated slice (Paul, 2026-07-19); gated on OQ-22 — no `modified` row has
+ * ever reached the live feed. Re-pointed CH-17 → CH-18a → CH-18c. */
 const staleByPlanAge = (c: TruthContext, hours = STALE_AFTER_HOURS): Truth =>
   planAgeHours(c) > hours ? skip('stale') : null;
 

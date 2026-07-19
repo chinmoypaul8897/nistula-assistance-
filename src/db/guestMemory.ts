@@ -9,7 +9,7 @@
  * no JS Date ever rides a raw sql fragment (postgres.js serialization trap).
  */
 import { and, desc, eq, sql } from 'drizzle-orm';
-import type { Db } from './client.js';
+import type { Db, DbLike } from './client.js';
 import { guestFacts, guests } from './schema.js';
 import type { Guest } from './repos.js';
 
@@ -142,9 +142,10 @@ export async function getAllGuestFacts(db: Db, guestId: string): Promise<GuestFa
     .orderBy(desc(guestFacts.createdAt));
 }
 
-/** TODO(CH-18): the DELETE_GUEST erasure flow calls this (facts hold guest
- * words — they must go with the guest, like conversations.summary). */
-export async function deleteGuestFacts(db: Db, guestId: string): Promise<void> {
+/** The DELETE_GUEST erasure flow calls this (facts hold guest words — they must
+ * go with the guest, like conversations.summary). DbLike so it composes inside
+ * the single erasure transaction (db/erasure.ts). */
+export async function deleteGuestFacts(db: DbLike, guestId: string): Promise<void> {
   await db.delete(guestFacts).where(eq(guestFacts.guestId, guestId));
 }
 
