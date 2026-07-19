@@ -16,8 +16,15 @@ import { writeFile } from 'node:fs/promises';
  * the encrypted bytes. Resolves ONLY when BOTH processes exit 0 — a pg_dump that
  * fails mid-stream would otherwise yield a non-empty but TRUNCATED (useless)
  * encrypted blob, and a corrupt backup that looks fine is worse than none.
+ *
+ * `spawnFn` is injected only so the pipe's error paths can be driven in a unit
+ * test without the real binaries — production always uses node's `spawn`.
  */
-export function pgDumpAgePipe(databaseUrl: string, recipient: string): Promise<Uint8Array> {
+export function pgDumpAgePipe(
+  databaseUrl: string,
+  recipient: string,
+  spawnFn: typeof spawn = spawn,
+): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     const errs: string[] = [];
@@ -38,10 +45,18 @@ export function pgDumpAgePipe(databaseUrl: string, recipient: string): Promise<U
       resolve(new Uint8Array(Buffer.concat(chunks)));
     };
 
-    const dump = spawn('pg_dump', ['-Fc', databaseUrl], { stdio: ['ignore', 'pipe', 'pipe'] });
-    const age = spawn('age', ['-r', recipient], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const dump = spawnFn('pg_dump', ['-Fc', databaseUrl], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const age = spawnFn('age', ['-r', recipient], { stdio: ['pipe', 'pipe', 'pipe'] });
     dump.on('error', (e) => fail(`pg_dump spawn: ${e.message}`));
     age.on('error', (e) => fail(`age spawn: ${e.message}`));
+    // A premature `age` (malformed recipient, OOM-kill) closes age.stdin while
+    // pg_dump is still streaming; the forwarding write then raises EPIPE as an
+    // 'error' ON THE STREAM (distinct from the ChildProcess 'error' above). With
+    // no listener node escalates it to an uncaughtException that kills the whole
+    // service — so route stream errors into fail(), keeping the module's
+    // "never throws — a failure is a clean rejected reason" cron contract.
+    dump.stdout.on('error', (e) => fail(`pg_dump stdout: ${e.message}`));
+    age.stdin.on('error', (e) => fail(`age stdin: ${e.message}`));
     dump.stderr.on('data', (c: Buffer) => errs.push(String(c)));
     age.stderr.on('data', (c: Buffer) => errs.push(String(c)));
     age.stdout.on('data', (c: Buffer) => chunks.push(c));

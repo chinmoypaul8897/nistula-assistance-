@@ -843,7 +843,7 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     const backup = deps.backup;
     const s3 = createS3Client(backup.s3);
     await deps.boss.work(OPS_BACKUP_QUEUE, workOptions, async () => {
-      await runBackup({
+      const r = await runBackup({
         ageRecipient: backup.ageRecipient,
         retentionDays: backup.retentionDays,
         log: deps.log,
@@ -851,10 +851,20 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
         s3,
         now: () => new Date(),
       });
+      // runBackup never throws (it alerts + returns a reason); re-throw here so
+      // the queue's retryLimit/retryDelay actually fires — otherwise a transient
+      // S3 blip silently loses the night. The ops alert is already deduped, so
+      // the extra throw only drives the retry.
+      if (!r.ok) throw new Error(`backup failed: ${r.reason ?? 'unknown'}`);
     });
     await scheduleCron(deps.boss, OPS_BACKUP_QUEUE, '30 2 * * *', 'Asia/Kolkata', {
       singletonKey: 'ops_backup',
     });
+  } else {
+    // A cron registered by an earlier BACKUP_ENABLED=1 boot in this SAME database
+    // must stop firing into a workerless queue (the sibling guard the poller,
+    // lifecycle and staff blocks all carry).
+    await deps.boss.unschedule(OPS_BACKUP_QUEUE).catch(() => {});
   }
 
   // ── CH-14a human takeover (coexistence) ─────────────────────────────────
