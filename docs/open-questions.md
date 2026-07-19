@@ -545,8 +545,19 @@ costs the least consequential of the five bodies, which is why it did not block 
 deliberately outside `PRE_STAY_KINDS`, so it has **no `stay_over` backstop**, and the sender selects
 `ORDER BY send_at LIMIT 10`: a permanently-deferring row is permanently the OLDEST, so a handful
 would own every batch for ever and **starve every new guest's confirmation** — harming every guest
-to save one thank-you. The bound must be **re-anchored on `row.createdAt`** (genuinely immutable),
-not removed. `TODO(CH-17)` in `sendGuards.ts` carries this.
+to save one thank-you.
+
+**🚨 CORRECTION (CH-18c, 2026-07-19) — the earlier "re-anchor on `row.createdAt`" is WRONG and must
+not be built:** `createdAt` is ~BOOKING time (~76 days before `send_at`), so a 7-day grace measured
+from it would skip **EVERY** thank-you. The honest anchor is the **FRESH mirror `check_out` read at
+send time**. But that still leaves the VERB unresolved — it may not `SKIP` on the mutable `check_out`
+(the eleventh-instance trap) and it may not `DEFER` (starves the batch, above). **CH-18c examined this
+and deliberately did NOT build it:** the trigger is unreachable today (no `Modify` on the feed, above),
+so the current plan-age-on-`send_at` rule is correct in practice, and building a defensive fix now
+would guess the verb against an unobserved trigger — the exact way this codebase manufactures its
+signature failure class. It stays an **open engineering + business question for the planning chat**
+(the answer to "do you amend bookings in eZee?" decides whether it is even reachable). The refined
+note lives in `sendGuards.ts`; it is NOT re-pointed to a numbered slice.
 
 ### OQ-24 — 🚨 Does VOIDING a booking in eZee reach us? (CANCEL does. Void may not.)
 **Status:** 🔴 **Observed 2026-07-16, and it is NOT a test-only concern.**
