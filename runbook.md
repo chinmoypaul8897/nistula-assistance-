@@ -1,7 +1,34 @@
 # runbook.md — Nistula Assistance · Operations
 
-> Stub (CH-00). Each chunk adds its operational walkthroughs; CH-18a completes
-> this into the 2-am-proof version.
+> The live operations doc for the running service — the thing to open at 2 am.
+> Task-oriented sections come first (index, secret rotation, digests & alerts,
+> incidents, the staff command sheet, backups & keep-alive, the go-live
+> cutover); the per-chunk operational log that follows carries the detailed
+> "how each subsystem behaves and how to read its state" reference.
+
+## Operations at a glance
+
+Symptom → where to go. Alert kinds are the `kind` strings ops receives; the full
+catalogue is under [Reading the digests & alerts](#reading-the-digests--alerts).
+
+| You see / need | Go to |
+|---|---|
+| Sends failing **401 / OAuthException**, or `wa_token_expired` | [Secret rotation](#secret-rotation) (WA_ACCESS_TOKEN) |
+| Rotate any secret or push an env change to Railway | [Secret rotation](#secret-rotation) |
+| `channel_quiet` alert / the line has gone silent | [Incidents → Webhook silent](#webhook-silent--no-inbound-reaching-us) |
+| `ezee_auth_failed` / `ezee_poll_failing`, mirror not updating | [Incidents → eZee down](#ezee-down--the-mirror-stops-updating) |
+| `website_degraded` / the AI stopped quoting prices | [Incidents → Degraded mode](#degraded-mode--the-website-rate-api-is-soft-down) |
+| `cost_soft_alarm` / `cost_kill_switch`, spend running hot | [Incidents → Cost spike](#cost-spike--spend-running-hot) |
+| WhatsApp quality rating green→yellow→red / limit tier drop | [Incidents → Number quality drop](#number-quality-drop--whatsapp-manager-rating-falls) |
+| `backup_failed` / `backup_no_recipient`, or restore a backup | [Backups & keep-alive](#backups--keep-alive) |
+| `coexistence_link_at_risk` / `coexistence_keepalive_reminder` | [Backups & keep-alive → keep-alive](#coexistence-keep-alive) |
+| What to send staff: `DONE` / `TASKS` / `AI ON/OFF` | [Staff command sheet](#staff-command-sheet) |
+| Reading the 10:00 / 23:30 / Sunday reports, or any alert kind | [Reading the digests & alerts](#reading-the-digests--alerts) |
+| Real-number cutover / going live | [Go-live cutover checklist](#go-live-cutover-checklist) |
+| `task_notify_failed` — a task card reached nobody | [Staff tasks (CH-13a)](#staff-tasks-ch-13a) |
+| Ops draft approval (`OK` / `EDIT` / `NO`) | [Draft mode (CH-16)](#draft-mode-ch-16) |
+| A booking is not appearing in the mirror | [eZee mirror (CH-10)](#ezee-mirror-ch-10) · [reconcile (CH-11)](#booking-awareness-ch-11) |
+| Lifecycle not sending / `lifecycle_no_phone` | [Lifecycle engine (CH-12)](#lifecycle-engine-ch-12) |
 
 ## Run locally
 
@@ -35,6 +62,430 @@ connection strings must use TLS (§3.3 — `sslmode=require`).
   `drizzle/` (committed). Never edit applied migration files.
 - Applied automatically at boot (`src/db/migrate.ts`), idempotently. To apply
   manually without booting: `pnpm drizzle-kit migrate`.
+
+## Secret rotation
+
+**The canonical procedure is one command: `node scripts/railway-sync-secrets.mjs`.**
+Edit the value in local `.env`, then run it. It reads `.env`, pushes each named
+secret to the linked Railway service, verifies what Railway now stores against
+local, and prints variable **NAMES + a status word only** — `set` / `SKIP` /
+`VERIFIED` / `MISMATCH` / `SET FAILED` — **never a value**.
+
+**🚨 Node, never a PowerShell pipe.** PowerShell 5.1 (and .NET's
+`Process.StandardInput`) prepend a UTF-8 BOM to piped stdin, so the stored value
+is silently 3 bytes longer than what you typed — the CH-10 trap that corrupted a
+secret and made eZee reject a correct AuthCode with a misleading error. The
+script uses `execFileSync` (no shell), so the value rides in argv as one token
+with **no BOM** and no shell interpolation.
+
+```bash
+railway link                              # once — select the production service
+node scripts/railway-sync-secrets.mjs     # sync the default secret set (below)
+node scripts/railway-sync-secrets.mjs WA_ACCESS_TOKEN   # or just the one you rotated
+```
+
+Preconditions: a service is linked. The flags target Railway CLI v3+
+(`railway variables --set KEY=VALUE --skip-deploys`, `railway variables --json`)
+— confirm once against your installed CLI. `--skip-deploys` means **the set does
+NOT redeploy**; the running container keeps the OLD value until you redeploy
+(`railway up` from the chunk branch, or a push to `main`). Rotate → sync →
+redeploy → verify the alert clears.
+
+**Default secret set** (run with no args): `WA_ACCESS_TOKEN`, `WA_APP_SECRET`,
+`WA_VERIFY_TOKEN`, `EZEE_AUTH_CODE`, `ANTHROPIC_API_KEY`, `ADMIN_BEARER_TOKEN`,
+`BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_AGE_RECIPIENT`.
+Pass explicit names to sync a subset. This supersedes the throwaway-script note
+under "Railway variables" (CH-02) below — the folded-in rule is: this script IS
+the rotation procedure, and the CLI must never be run bare (`railway variables`
+without `--json` echoes raw values).
+
+**Per-secret notes:**
+
+- **`WA_ACCESS_TOKEN`** — a **System User permanent** token (dashboard test
+  tokens die in 24h). Rotate on a send failing **401 / OAuthException (Meta code
+  190)**, which surfaces as the `wa_token_expired` alert (log-only — a dead
+  token cannot send its own alert; watch the logs/healthchecks). Generate a new
+  one: **Business settings → System users → the user → Generate token**, scopes
+  `whatsapp_business_messaging` + `whatsapp_business_management`.
+- **`WA_APP_SECRET`** — verifies the inbound webhook signature
+  (`X-Hub-Signature-256`). A wrong value **silently drops every inbound webhook**
+  (the channel goes quiet — see Incidents: webhook silent), so rotate it only in
+  a maintenance window and re-verify an inbound immediately. New value:
+  **developers.facebook.com → App → App settings → Basic → App secret**.
+- **`WA_VERIFY_TOKEN`** — used only during webhook (re)configuration handshakes.
+  Rotating it means re-saving the webhook in the Meta dashboard with the new
+  value (see the CH-02 dashboard steps below).
+- **`EZEE_AUTH_CODE`** — the eZee connectivity AuthCode. A bad/rotated value →
+  `ezee_auth_failed` and a stale mirror. (Secrets incident is closed — Paul chose
+  NOT to rotate; worth rotating only if it is ever leaked.)
+- **`ANTHROPIC_API_KEY`** — the model key; a dead key surfaces as `model_failed`
+  (the guest gets a defer, never a made-up answer). Rotate at console.anthropic.com.
+- **`ADMIN_BEARER_TOKEN`** — ≥16 chars, and only meaningful with
+  `ADMIN_ROUTES_ENABLED=1` (kept **disabled** in production). Failed bearer
+  attempts alert `admin_auth_failed`.
+- **`BACKUP_S3_ACCESS_KEY_ID` / `BACKUP_S3_SECRET_ACCESS_KEY`** — the R2/B2
+  credentials for off-site backups (see Backups & keep-alive). A bad pair fails
+  the nightly backup (`backup_failed`). Rotate at the storage provider.
+- **`BACKUP_AGE_RECIPIENT`** — the age **PUBLIC** key (encryption only; no
+  private key ever on the box). Not strictly a secret, but it is synced with the
+  set. If it changes, **old backups still need the OLD private key to decrypt** —
+  never lose the private key Paul holds offline.
+
+## Reading the digests & alerts
+
+**The three scheduled reports** (all `Asia/Kolkata`; delivered to `OPS_NUMBERS`
+via the `nst_digest` template, and each stored in `raw_events`):
+
+| Report | When | Source | What it carries |
+|---|---|---|---|
+| Morning digest | **10:00 IST daily** | `src/staff/digest.ts` (`0 10 * * *`) | overnight escalation queue + open tasks — the "what happened while you slept" board. |
+| Daily rollup | **23:30 IST daily** | `src/ops/rollup.ts` (`30 23 * * *`) | one line: spend, msgs in/out, conversations, escalations, guardrail hits, plus a `raw_events(daily_rollup)` breakdown. Fail-quiet on an empty day. |
+| Draft-quality report | **Sunday 18:00 IST** | `src/staff/qualityReport.ts` (`0 18 * * 0`) | per-type approval/edit/expiry rates + the week's guardrail hits — the data that unlocks a draft type (see the draft-mode unlock ritual under CH-16). |
+
+If a report reaches nobody (dev's standing state, `OPS_NUMBERS` unset), it says so
+with `digest_undelivered` / `rollup_undelivered` / `quality_report_undelivered` —
+harmless there, a real problem in production.
+
+**The alert catalogue — every `alertOps({kind})` the system can raise.** Delivery
+is once-per-30-min-per-kind to `OPS_NUMBERS` (in-memory dedupe; a deploy resets
+it — errs toward more delivery), and the log line **always** fires first (dev's
+only channel). **`wa_token_expired` is LOG-ONLY by design** — a dead token would
+fail its own WhatsApp send with the same 401. ⭐ = new in CH-18a-2.
+
+eZee mirror (`src/ezee/poller.ts`):
+
+| kind | Meaning / what to do |
+|---|---|
+| `ezee_auth_failed` | Creds rotated/disabled at eZee — fix `EZEE_*`, do not wait for a retry. Fires once until recovery. |
+| `ezee_poll_failing` | 5 consecutive failed cycles (fetch/ACK/tx). The next cron tick is the retry; investigate if it persists. |
+| `ezee_partial_cancel_suspect` | A cancel touched fewer rooms than the booking has — verify in the eZee UI, resolve by hand (never auto-cancelled). |
+| `ezee_cancel_conflict` | A live payload arrived for a row already cancelled — status kept cancelled; check the eZee UI for which is true. |
+| `ezee_unknown_status` | A status outside the mapping, or an unconfirmed hold — mirrored `unknown`, excluded from lifecycle. |
+| `ezee_multi_tran_reservation` | Multi-room booking — typed columns carry the first room; `raw` has all. Informational. |
+| `ezee_unackable_reservation` | Payload with no UniqueID — will redeliver every poll until eZee support resolves it. |
+
+WhatsApp send (`src/wa/*`):
+
+| kind | Meaning / what to do |
+|---|---|
+| `wa_token_expired` | **LOG-ONLY.** The WA token is dead (401 / code 190) — rotate per Secret rotation. |
+| `wa_send_failed` | A Graph send failed (non-token). Check the message row's error code/title. |
+| `wa_status_failed` | An inbound delivery-status webhook could not be applied — usually benign; investigate if repeated. |
+| `wa_template_invalid` | Template params Meta would reject (newlines, 4+ spaces, empty) — a copy/data bug in the template body. |
+| `window_closed_blocked` | A free-form send was refused because the 24h window is shut (guest/staff/ops). Expected; the only reach into a shut window is an approved template. |
+
+Lifecycle (`src/lifecycle/*`):
+
+| kind | Meaning / what to do |
+|---|---|
+| `lifecycle_no_phone` | A real booking we cannot reach (OTA masked the number) — a human must pick it up. |
+| `lifecycle_undescribable` | Passed the gates but `stayView` will not describe it (multi-room, sibling rows, missing dates) — we say nothing rather than guess. |
+| `lifecycle_send_failed` | A due lifecycle message failed to send — check the `scheduled_messages` row. |
+| `lifecycle_send_deferred` | A send was deferred (shut window while simulating) — rows stay `pending` and go out when the guest writes. |
+| `lifecycle_revoked` | A previously-scheduled message was revoked because the booking changed under it. |
+
+Staff, tasks & drafts (`src/staff/*`):
+
+| kind | Meaning / what to do |
+|---|---|
+| `task_notify_failed` | A task card reached **nobody** — the guest was promised nothing, but nobody is doing the work. Roster window shut or roster wrong. |
+| `task_append_notify_failed` | A follow-up to a LIVE task did not reach its assignee — the original stands; the added request needs a manual push. |
+| `escalation_notify_failed` | An escalation card to the roster failed to deliver. |
+| `task_booking_dead_at_ezee` | A task's booking read back CANCELLED/VOIDED at eZee (fresh BKG-03) — the AI refuses to route a dead booking; ops verifies. |
+| `task_unmapped_room_id` | eZee returned a RoomID we cannot map to a canonical villa — routed on the villa TYPE to the front desk. |
+| `task_sla_breached` | An open task passed its SLA deadline. |
+| `sla_nudge_undelivered` | The SLA re-ping to the assignee failed to deliver. |
+| `digest_undelivered` | The 10:00 morning digest reached no ops number. |
+| `draft_notify_failed` | A draft card to an ops number failed to deliver. |
+| `draft_send_no_conversation` | An approved (`OK`) draft had no conversation to send into — investigate the draft row. |
+| `draft_send_failed` | Sending an approved/edited draft to the guest failed. |
+| `draft_expired` | A draft was not decided within 30 min — the guest got nothing; count rolls up in the morning digest. |
+| `quality_report_undelivered` | The Sunday quality report reached no ops number. |
+
+Brain & model (`src/brain/*`):
+
+| kind | Meaning / what to do |
+|---|---|
+| `cost_soft_alarm` | Day spend hit **2× `COST_ALERT_INR_PER_DAY`** — keep serving, but look (see Incidents: cost spike). |
+| `cost_kill_switch` | Day spend hit **4×** — the AI STOPPED calling Anthropic. Guests get a hold line; auto-resumes at IST midnight. |
+| `model_failed` | The model call hard-failed after retries — nothing sent, pg-boss/sweeper recovers; never a made-up answer. |
+| `tool_loop_exhausted` | The tool loop hit its round cap without resolving — the turn deferred. |
+| `summariser_failed` | A nightly/on-demand summary failed — the cursor is untouched, the next pass retries. Nothing guest-facing depends on it. |
+| `conversation_cursor_dangling` | A conversation's processed-cursor points past its messages — a data-integrity check; investigate. |
+| `guest_thread_escalation` | Informational: a guest thread was escalated to ops (human request / complaint). |
+| `ops_escalation_undelivered` | An escalation card to a quiet ops number was refused — **the AI then did NOT tell the guest the team was informed** (honest). Watch this: a quiet ops number stops receiving escalations. |
+| `rate_limit_cooloff` | A conversation tripped the flood cool-off (21 msgs / 5 min or the 60-turn daily cap) — store-only until it clears. |
+| `website_degraded` / `website_recovered` | The website rate API flipped degraded / recovered (see Incidents: degraded mode). |
+| `villa_map_drift` | The website returned a villa mapping that drifted from ours — a KB/website mismatch worth a look. |
+
+Ops & platform (`src/ops/*`):
+
+| kind | Meaning / what to do |
+|---|---|
+| `watchdog_unhealthy` | The 5-min internal probe failed (detail names db/boss/poller/sender). |
+| `channel_quiet` | No traffic either way for 30 min in business hours — verify the Meta webhook subscription (see Incidents: webhook silent). |
+| `rollup_undelivered` | The 23:30 rollup reached no ops number (dev's standing state; harmless). |
+| `admin_auth_failed` | A failed bearer on `/admin/*` (count + ip). On a service where admin is disabled/unused, treat as a probe. |
+| ⭐ `coexistence_keepalive_reminder` | PRE-cutover weekly nudge: send one message from the business line to keep it warm (Meta drops the API link after ~14 days app-offline). |
+| ⭐ `coexistence_link_at_risk` | POST-cutover: no guest inbound or staff echo in `COEXISTENCE_KEEPALIVE_MAX_DAYS` — send one message before Meta drops the link. |
+| ⭐ `backup_no_recipient` | The nightly backup **REFUSED** because `BACKUP_AGE_RECIPIENT` is unset — no plaintext dump is ever produced. Set the age public key. |
+| ⭐ `backup_failed` | The nightly backup failed (empty dump, pg_dump/age error, or S3 error) — see Backups & keep-alive. |
+
+## Incidents
+
+Each card is **observe → diagnose → act → recovers when**. Read `/health` first
+on almost all of them: `curl -s $BASE/health | jq` returns
+`{ok, version, uptime, db, boss, pollerAgeMs, senderAgeMs, degraded}` and **stays
+200 while the process serves** (liveness), so a `200` with `degraded:true` or a
+stale age is the signal, not the status code.
+
+### Webhook silent — no inbound reaching us
+- **Observe:** `channel_quiet` alert (30 min, no traffic either way, business
+  hours); guests report no replies; `messages` table shows no new inbound.
+- **Diagnose:** confirm where the pipe breaks. (1) Service up and receiver
+  reachable? `curl "$BASE/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=x"`
+  → **403** (reachable, token check works). (2) `railway logs` — any
+  `POST /webhooks/whatsapp` at all? **No POST = Meta is not delivering**
+  (upstream), not our code. (3) A Graph `GET /v23.0/me` returning
+  `{"error":...,"code":200}` = Meta app/account restricted (fix in the dashboard).
+  (4) `WA_APP_SECRET` was rotated wrong → every inbound fails signature and is
+  dropped silently.
+- **Act:** if no POSTs arrive, re-check `GET /{WABA_ID}/subscribed_apps` for the
+  `messages` field + app link and re-`POST` it (the CH-02 fix); if code-200,
+  clear the flag in the Meta dashboard; if a bad app secret, re-sync the correct
+  value and redeploy.
+- **Recovers when:** an inbound reaches `messages` again; `channel_quiet` stops
+  re-firing. (Full detail: "Incident: test line goes silent" under CH-04 below.)
+
+### eZee down — the mirror stops updating
+- **Observe:** `ezee_auth_failed` (creds) or `ezee_poll_failing` (5 bad cycles);
+  `bookings_mirror.synced_at` stops advancing; `/health` `pollerAgeMs` climbs.
+- **Diagnose:** `ezee_auth_failed` = creds rotated/disabled at eZee (fix `EZEE_*`).
+  `ezee_poll_failing` = fetch/ACK/tx failures — eZee is flaky and BATCHED, so a
+  few empty polls are normal; five *failed* cycles is the threshold.
+- **Act:** for auth, rotate/repair the vars (Secret rotation) and redeploy; for
+  poll failures, the **next cron tick is the retry** — no manual kick needed.
+- **Recovers when:** a poll succeeds; the mirror advances. **Nothing guest-facing
+  breaks meanwhile** — the hourly `lifecycle.reconcile` re-reads the mirror as
+  truth, so a stale mirror only *delays* new bookings' lifecycle, it does not lose
+  them. Un-ACKed data stays queued at eZee and redelivers safely.
+
+### Degraded mode — the website rate API is soft-down
+- **Observe:** `website_degraded` alert; `/health` `degraded:true`; the AI stops
+  quoting prices and defers ("let me bring the team in") instead.
+- **Diagnose:** this is a **self-clearing SOFT state, not an outage** — it flips
+  after **3 consecutive** upstream failures (429/502/network) and the box keeps
+  serving everything else. `src/brain/tools/degraded.ts` holds it as a
+  boot-constructed in-memory singleton.
+- **Act:** usually **nothing** — it auto-clears. If it stays degraded, check the
+  website's own health and `WEBSITE_BASE_URL`. Do not restart to clear it (a
+  restart resets the counter but hides a real upstream problem).
+- **Recovers when:** the **first answered response** (any status, including
+  UNAVAILABLE/INVALID — reachability is what matters) clears it and fires
+  `website_recovered`; quoting resumes.
+
+### Cost spike — spend running hot
+- **Observe:** `cost_soft_alarm` at **2×** `COST_ALERT_INR_PER_DAY` (default
+  1000), `cost_kill_switch` at **4×**.
+- **Diagnose:** the per-IST-day INR total (`src/ops/costMeter.ts`, seeded from
+  `cost_events` at boot). At 4× the AI **STOPS calling Anthropic** — guests get an
+  honest hold line + a human is escalated. Read today's drivers:
+  ```sql
+  SELECT kind, sum(inr_estimate)::numeric(12,2) AS inr, sum(quantity) AS qty
+    FROM cost_events WHERE day = to_char(now() AT TIME ZONE 'Asia/Kolkata','YYYY-MM-DD')
+    GROUP BY kind ORDER BY inr DESC;
+  ```
+- **Act:** decide real load vs a bug. **It auto-resumes at IST midnight** (the day
+  key rolls to 0) — there is **no prod admin reset** (Railway runs admin routes
+  off). A **restart does NOT un-trip** a genuine same-day overrun (it re-seeds ≥4×
+  and re-trips). To resume same-day you must *fix the cause* or raise
+  `COST_ALERT_INR_PER_DAY` and redeploy. (Full logic under CH-17 below.)
+- **Recovers when:** IST midnight, or the budget is raised and redeployed.
+
+### Number quality drop — WhatsApp Manager rating falls
+- **Observe:** **MANUAL — we subscribe NO quality webhook, so nothing alerts on
+  this.** The only signal is WhatsApp Manager: quality rating **green → yellow →
+  red**, or the messaging-limit tier dropping.
+- **Diagnose:** driven by user blocks/reports and Meta's own template-quality
+  scoring — typically marketing volume (win-back / lead follow-up) or unwanted
+  sends. This is exactly why `LIFECYCLE_SOURCES` is direct-only (OQ-20) and
+  marketing is opt-in-only (CH-15).
+- **Act (v1 = watch by hand):** check WhatsApp Manager after any send-volume
+  change or template launch. If quality slips: pause marketing templates, confirm
+  opt-in is being honoured, and reduce business-initiated volume. Escalate to Paul
+  — a red rating throttles or blocks sending for the whole number.
+- **Recovers when:** the rating recovers over the following days once the
+  offending pattern stops. (Subscribing the quality webhook is post-v1.)
+
+## Staff command sheet
+
+This block is **self-contained and copy-pasteable** — send it to a staff member
+as-is. It reflects `src/staff/commands.ts` verbatim.
+
+```
+Nistula line — how to reply
+
+DONE <id>       Mark a task finished, e.g.  DONE A3F2K9
+                (a # is fine: DONE #A3F2K9). The guest is told it's sorted.
+TASKS           See everything still open for you.
+AI OFF <last4>  Take a guest thread over yourself, e.g.  AI OFF 6789
+                The assistant goes quiet on that thread until you switch it back.
+AI ON <last4>   Hand the thread back to the assistant, e.g.  AI ON 6789
+
+Notes
+- Commands are not case-sensitive; a trailing . or ! is fine.
+- <id> is the 4–10 character code printed on the task card.
+- <last4> is the last 4+ digits of the guest's number. If more than one guest
+  ends in those digits, the assistant lists them and asks for more digits —
+  it never guesses which guest you meant.
+- Anything that isn't one of these is treated as an ordinary message and
+  ignored by the task system (it won't close anything by accident).
+```
+
+Only **exact roster numbers** are honoured (matched normalised-vs-normalised);
+a guest typing `DONE ...` is ordinary text that reaches the model, never the
+parser. `AI OFF` holds the thread **indefinitely** (until `AI ON`), not on a
+timer.
+
+**Roster commands vs ops draft commands are different audiences.** `DONE` /
+`TASKS` / `AI ON` / `AI OFF` are for **roster/staff** numbers. `OK` / `EDIT` /
+`NO` are **OPS-only draft-approval** commands (documented under CH-16 below) —
+a housekeeper typing `OK` is chatter and approves nothing.
+
+## Backups & keep-alive
+
+### Nightly encrypted off-site backup
+`src/ops/backup.ts` (orchestrator) + `src/ops/backupExec.ts` (the real
+pg_dump/age pipe) + `src/lib/s3.ts` (a hand-rolled SigV4 client). Runs at
+**02:30 IST** as an in-process cron (`ops.backup` queue) **only when
+`BACKUP_ENABLED=1`** — a single-runner like the poller, so **only Railway dumps**.
+Manual/one-off: `pnpm backup`.
+
+Pipeline: `pg_dump -Fc` → **age-encrypt to `BACKUP_AGE_RECIPIENT`** (the PUBLIC
+key — no private key ever touches the box) → S3 PUT to R2/B2 (key
+`nistula/backup-<UTC-stamp>.sql.age`) → prune anything older than
+`BACKUP_RETENTION_DAYS` (default **30**, load-bearing: `DELETE_GUEST` erasure
+completeness is tied to backups ageing out).
+
+**Invariants that will bite if you forget them:**
+- **Unset recipient ⇒ REFUSE.** No `BACKUP_AGE_RECIPIENT`, no dump — a plaintext
+  dump is a full PII export and must never leave the box (`backup_no_recipient`).
+- **The container image MUST carry `pg_dump` v16 (postgresql-client-16, matching
+  PG16) and `age`.** Missing either → an empty/failed dump (`backup_failed`).
+- `BACKUP_ENABLED=1` **refuses boot** without the full S3 destination +
+  `BACKUP_AGE_RECIPIENT` (fail-fast, `src/config.ts`).
+- The pipe resolves only when **both** pg_dump and age exit 0 — a truncated dump
+  that "looks fine" is worse than none.
+
+### Restore drill (scripted — run it once before go-live, then periodically)
+Proves the whole chain end-to-end with a **throwaway** key, no S3, no production
+private key. From a box with `pg_dump`, `age`, `age-keygen` and `pg_restore`
+installed, and `DATABASE_URL` pointing at the DB you want to prove you can restore
+(a seeded local, or production via `DATABASE_PUBLIC_URL` — never print it):
+
+```bash
+# 1. Throwaway keypair (NOT Paul's production key).
+age-keygen -o drill.key                 # prints "Public key: age1..." — copy it
+age-keygen -y drill.key                 # (or re-derive the public key any time)
+
+# 2. Produce an encrypted dump locally, no upload (writes ./backups/backup-*.sql.age).
+BACKUP_AGE_RECIPIENT=age1...publickey... pnpm backup --no-upload
+
+# 3. Decrypt with the throwaway private key.
+age -d -i drill.key backups/backup-*.sql.age > drill.dump
+
+# 4. Restore into a scratch database.
+createdb nistula_restore_drill
+pg_restore -d nistula_restore_drill drill.dump
+
+# 5. Verify: row-count parity against the source + spot-check a known guest.
+psql -d nistula_restore_drill -c "SELECT count(*) FROM messages;"   # compare to source
+psql -d nistula_restore_drill -c "SELECT phone FROM guests WHERE phone = '+91...';"
+```
+
+`--no-upload` uses `BACKUP_LOCAL_DIR` (default `./backups`) and needs only
+`BACKUP_AGE_RECIPIENT` (no S3 vars). **Honest limit:** this proves the
+pg_dump→age→pg_restore MECHANISM with a throwaway key. A full disaster-recovery
+test additionally requires decrypting a **real** production backup with the
+private key **Paul holds offline** — that key is deliberately not on any server,
+so a production restore is a Paul-in-the-loop step.
+
+### Coexistence keep-alive
+`src/ops/keepalive.ts`, daily **10:00 IST** (`ops.keepalive`). Meta drops the
+Cloud API link if the number's WhatsApp app stays **offline ~14 days** — which on
+a quiet number can happen silently and take the whole assistant down. Two modes,
+on the explicit `COEXISTENCE_ACTIVE` flag:
+
+- **`COEXISTENCE_ACTIVE=0` (pre-cutover, today's default):** a **weekly** nudge
+  (fires one weekday only) — `coexistence_keepalive_reminder`: "send one message
+  from the business line to keep it warm".
+- **`COEXISTENCE_ACTIVE=1` (post-cutover):** a **daily** check that the link has
+  shown life within `COEXISTENCE_KEEPALIVE_MAX_DAYS` (**13**, one day of margin
+  under Meta's ~14). "Life" = a genuine **guest inbound OR a staff-app echo** —
+  never a status webhook or our own outbound (those flow even against a link about
+  to lapse, so they cannot vouch for it). Stale ⇒ `coexistence_link_at_risk`.
+
+Flip `COEXISTENCE_ACTIVE=1` at real-number cutover (see the checklist).
+
+## Go-live cutover checklist
+
+The real-number cutover is an **ops event between CH-18 and CH-19** (plan §10) —
+the code is identical to what runs on the test number today, so **"env flip" is a
+real switch, not a first deploy**. Steps are ordered; each is tagged
+**[Paul/ops]** (a human action outside this repo) or **[done in code]** (already
+built — the checklist item is to *confirm/flip*, not build). Business go/no-go
+gates that ride on open questions are called out inline.
+
+1. **Meta business verification DONE** — **[Paul/ops]** · **HARD precondition**.
+   An unverified WABA is capped at **250 business-initiated conversations/day**;
+   above that, sends fail. Verify before anything else.
+2. **BSP signed** — **[Paul/ops]** · v4 coexistence **in writing**, before
+   **15 Oct 2026** (MSG91 → Dualhook → 360dialog).
+3. **Template pack submitted & approved** — **[Paul/ops]** (bodies **[done in
+   code]**). Run `pnpm templates:pack` for the exact bodies — **6 guest + 4 staff
+   templates** — and submit to the real WABA. Utility = service (confirmation,
+   pre-arrival, welcome, thank-you, all staff cards); Marketing = win-back +
+   lead-followup (also need `marketing_opt_in`).
+4. **Subscribe the extra webhook fields** — **[Paul/ops]** · `smb_message_echoes`,
+   `history`, `smb_app_state_sync`. ⚠️ `history` needs the **CH-18b history
+   handler live first** (do not subscribe it until CH-18b ships) or the import
+   chunks arrive with nothing to receive them.
+5. **Coexistence onboarding on +91 88103 58517** — **[Paul/ops]** · WhatsApp app
+   **v2.24.17+**, complete the history-sync consent prompt.
+6. **Device policy switch** — **[Paul/ops]** · move the number's day-to-day use
+   from the phone/PC app to **web.whatsapp.com** so the coexistence link stays live.
+7. **Roster onboarding** — **[Paul/ops]** · **every staff/ops number messages the
+   line once.** ⚠️ This buys **24 hours, not for ever** — a number quiet for 24h is
+   unreachable by free-form, so task cards to it fail until it writes again.
+   **🔴 GATE — OQ-25:** will the villa team actually message the line, and how
+   often? The whole hands-of-the-AI mechanism rests on this; confirm with the team
+   before relying on task cards.
+8. **Env flip to real ids** — **[Paul/ops]**, via Secret rotation + a redeploy ·
+   `WA_*` → the real WABA, `WA_TEMPLATE_MODE=send`, `WEBSITE_BASE_URL=nistula.life`,
+   `COEXISTENCE_ACTIVE=1`, and **re-confirm `LIFECYCLE_EPOCH`** (set it to the
+   cutover instant so history stays inert).
+   **🔴 GATE — OQ-20:** leave `LIFECYCLE_SOURCES` direct-only unless the business
+   has said we may WhatsApp OTA (Airbnb/Booking.com) guests — production holds real,
+   unmasked OTA numbers.
+   **🟡 GATE — OQ-15:** `TRUST_EZEE_ROOM_ASSIGNMENT` stays `false` — do not let the
+   AI name a specific villa to a guest pre-arrival until Paul + front desk confirm
+   the policy.
+9. **`DRAFT_MODE=true`** — **[done in code]** (it is the default) · the real number
+   opens in draft mode: the AI proposes, a human approves each send. Confirm
+   `OPS_NUMBERS` holds a real approver who has messaged the line within 24h. Unlock
+   conversation types one at a time via `AUTO_SEND_TYPES` (the CH-16 unlock ritual).
+10. **Smoke script** — **[Paul/ops]** · re-verify the coexistence + history
+    fixtures against the **real captures** (the provisional fixtures were built
+    from Meta's documented examples, §5.3) and run a live send/receive on the real
+    number.
+11. **Announce to staff** — **[Paul/ops]** · send the **Staff command sheet**
+    (above) to every roster number.
+
+**⚠️ Not ours, but track it — OQ-18:** the website's `/api/debug/booking/create`
+is still **ungated and unauthenticated** and writes to the live PMS. It takes no
+money and creates only an unconfirmed hold (which reserves nothing), so the blast
+radius is unauthenticated writes, not stolen inventory — but it is a website-repo
+pre-launch task (plan §10: "gate `/api/debug/*`").
 
 ## WhatsApp webhook + deploy (CH-02)
 
@@ -82,15 +533,15 @@ touch this screen.
 
 ### Railway variables (CH-02 pattern — secrets never transit chat/history)
 
-Values move from local `.env` to Railway via a throwaway script OUTSIDE the
-repo that pipes each value to
-`railway variable set <KEY> --stdin --service <service> --environment production --skip-deploys`
-and verifies via `railway variable list --json` compared in-process — the
-script prints variable NAMES and OK/VERIFIED only. Never run a bare
-`railway variable set KEY=value` or `railway variable list` outside this
-pattern: the CLI echoes raw values. Rotation (new WA token etc.) = update
-local `.env`, rerun the same script. CH-18a commits a parameterised copy as
-`scripts/railway-sync-secrets.mjs` and makes it the rotation procedure.
+Values move from local `.env` to Railway with the committed
+`node scripts/railway-sync-secrets.mjs` — **the canonical rotation procedure,
+now folded into its own [Secret rotation](#secret-rotation) section above.**
+It prints variable NAMES + a status word only. Never run a bare
+`railway variables --set KEY=value` or `railway variables` (without `--json`)
+outside that script: the CLI echoes raw values. The one rule that predates the
+script and still governs everything: **move secrets with Node, never a
+PowerShell pipe** (PS prepends a UTF-8 BOM into the stored value — the CH-10
+trap).
 
 ### WA token notes
 
@@ -817,12 +1268,6 @@ expiry rate, and the week's guardrail hits. To unlock a type once its approval r
 is high and its edit rate low: **add that type to `AUTO_SEND_TYPES` on Railway and
 redeploy.** Unlock ONE type at a time and watch the next report. To pull back, remove
 it — the change is just an env edit.
-
-## Sections to come
-
-- Staff command sheet: `DONE <id>` · `TASKS` · `AI ON/OFF <last4>` — CH-13/14
-- Incidents: webhook silent · eZee down · degraded mode · cost spike — CH-17/18
-- Env rotation (WA token!) · backups & restore drill · go-live checklist — CH-18a
 
 ## 🚨 OQ-19 — the villa label is eZee's GUESS (CH-11, 2026-07-14)
 
