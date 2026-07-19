@@ -85,6 +85,9 @@ async function seedGuest(): Promise<string> {
     { conversationId: null, direction: 'out', sender: 'system', type: 'template', status: 'sent', body: `DRAFT #DRFTA1 for ${FIRST} (instay)\n---\n${FIRST}, your villa is ready\n---\nReply: OK DRFTA1` },
     { conversationId: null, direction: 'out', sender: 'system', type: 'text', status: 'sent', body: `A guest asked for a human\nGuest: "${FIRST} here, my num ${DIGITS}"` },
     { conversationId: null, direction: 'out', sender: 'system', type: 'text', status: 'sent', body: `AI paused for ${FIRST} (…0450). It stays off until you send AI ON 0450.` },
+    // Staff INBOUND (sender='human', conversation_id=null) — stored verbatim
+    // before parsing; names the guest + phone, no back-link.
+    { conversationId: null, direction: 'in', sender: 'human', type: 'text', status: 'received', body: `EDIT DRFTA1 Dear ${FIRST}, arranged — ${DIGITS}` },
   ]);
   await db.insert(schema.guestFacts).values({ guestId, kind: 'preference', content: `${FIRST} loves early check-in` });
 
@@ -182,7 +185,7 @@ describe('eraseGuestByPhone', () => {
     expect(report!.tables.messages).toBe(3);
     expect(report!.tables.guest_facts).toBe(1);
     expect(report!.tables.tasks).toBe(2);
-    expect(report!.tables.staff_system_messages).toBe(4);
+    expect(report!.tables.conv_null_messages).toBe(5);
     expect(report!.tables.raw_events_whatsapp).toBe(3);
     expect(report!.tables.raw_events_system).toBe(1);
     // Nothing was written — the guest is still findable by phone with their name.
@@ -233,11 +236,14 @@ describe('eraseGuestByPhone', () => {
     const sysTask = await db.select().from(schema.tasks).where(eq(schema.tasks.shortId, 'TASKB2'));
     expect(sysTask[0]).toMatchObject({ guestId: null, summary: '[erased]' });
 
-    // Every conversation_id=null system message about THIS guest is scrubbed —
-    // cards (by shortId), the ops-escalation card and the AI-toggle reply (by
-    // name/phone) — while the bystander's card ("Keeper") is untouched.
-    const cards = await db.select().from(schema.messages).where(sql`conversation_id is null and sender = 'system'`);
-    expect(cards.filter((c) => c.body === '[erased]')).toHaveLength(4);
+    // Every conversation_id=null message about THIS guest is scrubbed — cards (by
+    // shortId), ops-escalation + AI-toggle (by name/phone), and the staff INBOUND
+    // (sender='human') — while the bystander's card ("Keeper") is untouched.
+    const cards = await db
+      .select()
+      .from(schema.messages)
+      .where(sql`conversation_id is null and sender in ('system','human')`);
+    expect(cards.filter((c) => c.body === '[erased]')).toHaveLength(5);
     expect(cards.some((c) => c.body?.includes('Keeper'))).toBe(true);
 
     // System telemetry KEEPS its aggregate history, blanks only the guest keys.
@@ -279,5 +285,30 @@ describe('eraseGuestByPhone', () => {
 
   it('returns null for an unknown phone', async () => {
     expect(await eraseGuestByPhone(db, '+917700900999', { confirm: true })).toBeNull();
+  });
+
+  // The exact shapes that defeated earlier fixes: an emoji-edged WhatsApp
+  // pushname (firstName null → the name is the SOLE identity token, and a \y
+  // regex on its non-word edge failed), plus staff INBOUND (sender='human').
+  it('erases an emoji-edged pushname and staff-inbound rows (conversation_id=null)', async () => {
+    const phone = '+917700900460';
+    const digits = '917700900460';
+    await db.insert(schema.guests).values({ phone, waProfileName: 'Priya 🌸' }); // firstName null
+    await db.insert(schema.messages).values([
+      // AI-toggle reply: name only (no shortId, only last4) — the emoji edge is
+      // exactly what a \y regex missed.
+      { conversationId: null, direction: 'out', sender: 'system', type: 'text', status: 'sent', body: 'AI paused for Priya 🌸 (…0460). Send AI ON 0460 to resume.' },
+      // Staff inbound naming the guest + full phone.
+      { conversationId: null, direction: 'in', sender: 'human', type: 'text', status: 'received', body: `EDIT A1 Dear Priya 🌸, arranged — ${digits}` },
+      // A bystander whose name CONTAINS "Priya" as a substring — must NOT be
+      // over-erased (the surrounding-context boundary rejects "Priyanka").
+      { conversationId: null, direction: 'out', sender: 'system', type: 'text', status: 'sent', body: 'AI paused for Priyanka (…9999).' },
+    ]);
+    const report = await eraseGuestByPhone(db, phone, { confirm: true });
+    expect(report!.tables.conv_null_messages).toBe(2); // the two Priya rows, not Priyanka
+    const rows = await db.select().from(schema.messages).where(sql`conversation_id is null`);
+    expect(rows.filter((r) => r.body === '[erased]')).toHaveLength(2);
+    expect(await residue(digits)).toEqual([]); // full phone gone everywhere
+    expect(rows.some((r) => r.body?.includes('Priyanka'))).toBe(true); // no over-match
   });
 });

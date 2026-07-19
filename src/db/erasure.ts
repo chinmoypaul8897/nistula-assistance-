@@ -26,26 +26,28 @@
  * per §4): summary/detail are the guest's own words and, unlike guest_facts,
  * are deliberately NOT screened for sensitive content (schema.ts tasks header).
  *
- * STAFF/OPS SYSTEM MESSAGES — the guest's name/phone/words are ALSO rendered
- * into `messages` rows with conversation_id=null, sender='system' that carry NO
- * back-link to the guest: task/escalation/draft cards, the escalateToOps ops
- * card, the AI ON/OFF takeover replies, SLA nudges. These are scrubbed by
- * matching the guest's IDENTITY tokens (phone, name, task+draft shortId) — the
- * CONTRACT, after a first re-review found that keying only on the shortId missed
- * escalateToOps + AI-toggle (the "a leak has siblings — enumerate ALL" class).
- * 🚨 KNOWN RESIDUAL, documented rather than silently missed: a conversation_id=
- * null system body carrying the guest's WORDS but NEITHER their name/phone nor a
- * shortId — a name-free complaint tail in an ops card, or the aggregate morning
- * DIGEST's task-summary line — is not attributable without a guest FK on
- * `messages`. It contains no name/phone (so the residue-sweep contract holds)
- * and goes to staff/OPS only. TODO(CH-18c): the durable fix is architectural —
- * give these staff sends a guest reference (or render from one on read) so guest
- * content never lands in an un-attributable row.
+ * CONVERSATION_ID=NULL MESSAGES — the guest's name/phone/words are ALSO rendered
+ * into `messages` rows that DON'T hang off the guest's conversation and carry NO
+ * guest FK: sender='system' (task/escalation/draft cards, the escalateToOps ops
+ * card, AI ON/OFF replies, SLA nudges) AND sender='human' (staff INBOUND typed at
+ * the line — an `EDIT <id> <text>` naming the guest, a free-form note). These are
+ * scrubbed by matching the guest's IDENTITY (phone, name-core, task+draft
+ * shortId) — the CONTRACT. This took THREE re-review rounds: a shortId-only scrub
+ * missed escalateToOps + AI-toggle; a \y name regex missed emoji/punctuation-edged
+ * pushnames; a sender='system' filter missed staff inbound ("a leak has siblings
+ * — enumerate ALL", each round a NEW sibling). 🚨 KNOWN RESIDUAL — this is a
+ * BEST-EFFORT string match, NOT a durable link: a conversation_id=null body that
+ * refers to the guest WITHOUT their stored name/phone/shortId (a name-free
+ * complaint tail, a staff paraphrase, a pure-emoji/1-char name) cannot be
+ * attributed by content. It carries no stored name/phone, so the residue-sweep
+ * contract holds; the DURABLE fix is architectural — TODO(CH-18c): give these
+ * staff/ops sends a guest reference (or render from one on read) so guest content
+ * never lands in an un-attributable row.
  *
  * Full erasure completes as the encrypted backups age out of their 30-day
  * retention (backups land in CH-18a-2); the LIVE database is erased now.
  */
-import { and, count, eq, or, sql, type SQL } from 'drizzle-orm';
+import { and, count, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import type { Db } from './client.js';
 import { deleteGuestFacts, getGuestByPhone } from './guestMemory.js';
@@ -148,23 +150,29 @@ export async function eraseGuestByPhone(
       ? eq(tasks.guestId, guestId)
       : or(eq(tasks.guestId, guestId), eq(tasks.conversationId, convId));
 
-  // Staff/ops messages ABOUT this guest live as conversation_id=null,
-  // sender='system' rows with the guest's name / phone / words rendered into the
-  // body and NO guest FK: task/escalation/draft cards AND the escalateToOps ops
-  // card AND the AI ON/OFF takeover replies AND SLA nudges. Guard by the CONTRACT
-  // — "does this staff message carry the guest's IDENTITY?" — not by one proxy (a
-  // shortId): a first re-review caught escalateToOps + AI-toggle leaking the name
-  // because they carry no shortId. Match the guest's identity tokens:
-  //   - literals (phone forms, task/draft shortIds): strpos substring — long and
-  //     unique, so no over-match and no LIKE-metachar hazard;
-  //   - names: a WORD-BOUNDARY regex (\y…\y, case-insensitive) so "Jo" cannot
-  //     over-match "Joseph" while still catching " · Jo · " — the name is a bound
-  //     param (never string-built SQL), regex metachars escaped.
-  // 🚨 RESIDUAL, documented (header): a conversation_id=null system body carrying
-  // the guest's WORDS but NEITHER name nor phone nor a shortId (a name-free
-  // complaint tail in an ops card, a name-free digest line) is not attributable
-  // without a guest back-link on `messages` — TODO(CH-18c). The name/phone
-  // contract the residue sweep asserts is fully met either way.
+  // Messages ABOUT this guest that live with conversation_id=null (so the
+  // conversation_id=convId scrub never reaches them) and carry NO guest FK:
+  //   - sender='system' — task/escalation/draft cards, the escalateToOps ops
+  //     card, AI ON/OFF takeover replies, SLA nudges;
+  //   - sender='human'  — staff INBOUND typed at the line (an `EDIT <id> <text>`
+  //     naming the guest, a free-form note), stored verbatim before parsing.
+  // Guard by the CONTRACT — "does this message carry the guest's IDENTITY?" — not
+  // by a proxy: prior re-reviews caught a shortId-only scrub missing escalateToOps
+  // + AI-toggle, and a sender='system'-only scrub missing staff inbound. Match:
+  //   - literals (phone forms, task/draft shortIds): strpos substring — long,
+  //     unique, no over-match, no metachar hazard;
+  //   - names: the guest's firstName/lastName/waProfileName, edge-trimmed to their
+  //     alphanumeric CORE and whitespace-collapsed to the rendered form, matched
+  //     with a SURROUNDING-context boundary — (^|[^alnum_])core([^alnum_]|$) — so
+  //     an emoji/punctuation-edged pushname ("Rahul 🙏", "🌸Anjali") still matches
+  //     (a \y on the name's own non-word edge silently failed — re-review BLOCKER)
+  //     while "Jo" still cannot over-match "Joseph". The pattern is a bound param.
+  // 🚨 RESIDUAL, documented (header) — BEST-EFFORT string match, not a link: a
+  // conversation_id=null body that refers to the guest WITHOUT their stored
+  // name/phone/shortId (a name-free complaint tail, a staff paraphrase, a
+  // pure-emoji/1-char name) is not attributable without a guest FK on `messages`
+  // (TODO CH-18c). It carries no stored name/phone, so the residue-sweep contract
+  // holds; the durable fix is a guest reference on these sends.
   const literalTokens = [
     phone,
     digits,
@@ -176,16 +184,20 @@ export async function eraseGuestByPhone(
         )),
   ];
   const regexEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const nameTokens = [guest.firstName, guest.lastName, guest.waProfileName].filter(
-    (n): n is string => typeof n === 'string' && n.trim().length >= 2,
-  );
+  // Edge-trim non-alphanumerics (emoji/punctuation/space) and collapse internal
+  // whitespace so the token equals the CORE of the name as writers render it.
+  const nameCores = [guest.firstName, guest.lastName, guest.waProfileName]
+    .filter((n): n is string => typeof n === 'string')
+    .map((n) => n.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/\s+/g, ' ').trim())
+    .filter((c) => c.length >= 2);
   const staffMsgWhere = and(
     sql`${messages.conversationId} is null`,
-    eq(messages.sender, 'system'),
+    inArray(messages.sender, ['system', 'human']),
     or(
       ...literalTokens.map((t) => sql`strpos(coalesce(${messages.body}, ''), ${t}) > 0`),
-      ...nameTokens.map(
-        (n) => sql`coalesce(${messages.body}, '') ~* ${`\\y${regexEscape(n.trim())}\\y`}`,
+      ...nameCores.map(
+        (c) =>
+          sql`coalesce(${messages.body}, '') ~* ${`(^|[^[:alnum:]_])${regexEscape(c)}([^[:alnum:]_]|$)`}`,
       ),
     ),
   );
@@ -212,7 +224,7 @@ export async function eraseGuestByPhone(
     scheduled_messages: await countWhere(db, scheduledMessages, eq(scheduledMessages.guestId, guestId)),
     drafts: convId === null ? 0 : await countWhere(db, drafts, eq(drafts.conversationId, convId)),
     tasks: await countWhere(db, tasks, taskWhere),
-    staff_system_messages: await countWhere(db, messages, staffMsgWhere),
+    conv_null_messages: await countWhere(db, messages, staffMsgWhere),
     reference_attempts: await countWhere(db, referenceAttempts, eq(referenceAttempts.phone, phone)),
     phone_windows: await countWhere(db, phoneWindows, eq(phoneWindows.phone, phone)),
     raw_events_whatsapp: waRows.length,
@@ -261,9 +273,9 @@ export async function eraseGuestByPhone(
     await deleteReferenceAttempts(tx, phone);
     await deletePhoneWindow(tx, phone);
 
-    // Scrub the guest's identity out of every staff/ops conversation_id=null
-    // system message attributable to them (cards, ops escalation, AI-toggle
-    // replies, nudges) — matched by phone / name / task+draft shortId.
+    // Scrub the guest's identity out of every conversation_id=null message
+    // attributable to them — staff/ops sends (system) and staff inbound (human) —
+    // matched by phone / name-core / task+draft shortId (see the gather block).
     await tx.update(messages).set({ body: ERASED }).where(staffMsgWhere);
 
     for (const row of waRows) {
