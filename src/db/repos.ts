@@ -182,6 +182,23 @@ export async function lastGuestInboundAt(db: Db): Promise<Date | null> {
   return row?.at != null ? new Date(row.at) : null;
 }
 
+/**
+ * The newest coexistence ECHO we received — a staff-app send mirrored back
+ * (`smb_message_echoes`, stored as a raw_event whose event_type carries that
+ * field string, webhook.ts). CH-18a-2's keep-alive treats an echo OR a genuine
+ * guest inbound as proof the WhatsApp app is still ONLINE and the API link is
+ * alive (Meta drops it after ~14 days offline). Deliberately NOT status
+ * webhooks or our own outbound: a lifecycle send produces delivery statuses
+ * even against a link about to lapse, so they cannot vouch for the app.
+ */
+export async function lastEchoAt(db: Db): Promise<Date | null> {
+  const [row] = await db
+    .select({ at: sql<string | null>`max(${rawEvents.createdAt})::text` })
+    .from(rawEvents)
+    .where(and(eq(rawEvents.source, 'whatsapp'), sql`${rawEvents.eventType} like '%smb_message_echoes%'`));
+  return row?.at != null ? new Date(row.at) : null;
+}
+
 /** The newest guest reply we actually DELIVERED (sent/delivered/read) — proof
  * the Graph link is up. Excludes system ops cards, null-conversation sends, and
  * 'queued'/'failed' rows (a committed-but-unconfirmed or failed send is NOT

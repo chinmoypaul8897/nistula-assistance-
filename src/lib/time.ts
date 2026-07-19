@@ -84,6 +84,11 @@ export function formatISTClock(instant: Date): string {
   return `${pad(p.hour)}:${pad(p.minute)}`;
 }
 
+/** IST day of week, 0=Sunday … 6=Saturday — the weekly keep-alive reminder (CH-18a-2). */
+export function istWeekday(instant: Date): number {
+  return new Date(instant.getTime() + IST_OFFSET_MINUTES * MS_PER_MINUTE).getUTCDay();
+}
+
 /** IST calendar day as YYYY-MM-DD — the business day for daily cost/lifecycle rollups. */
 export function istCalendarDay(instant: Date): string {
   const p = istParts(instant);
