@@ -59,7 +59,7 @@
 | CH-18a-1 | Security hardening + guest erasure | ✅ DONE 2026-07-19 — merged `main` (no-ff), tagged `vCH-18a-1` (**1721** tests; DELETE_GUEST one-tx anonymise-in-place + dry-run + residue-sweep contract test, `POST /admin/delete-guest`, 404-when-disabled test, secrets-shaped redaction fixture, rate-limit/cool-off final, audit clean. **3-round pre-merge review RED→fixed each time — all the "conversation_id=null staff-message sibling" class; accepted content residual → CH-18c**. Send/lifecycle TODOs also → CH-18c) | [↓](#ch-18a-1--security-hardening--guest-erasure-delete_guest--done-2026-07-19) |
 | CH-18a-2 | Backups + keep-alive + runbook + go-live | ✅ DONE 2026-07-19 — tagged `vCH-18a-2` (**1744** tests; 30-agent pre-merge review RED → **8 confirmed, all fixed**: `backupExec` pipe-crash DEFECT + backup-cron `unschedule` DEFECT + inert `retryLimit` + runbook phantom alert-kind + image-provisioning gated + `.gitignore`; all off-by-default ops infra) | [↓](#ch-18a-2--encrypted-backups--coexistence-keep-alive--runbook--go-live-checklist--done-2026-07-19) |
 | CH-18b | History import | ✅ DONE 2026-07-19 — tagged `vCH-18b` (**1765** tests; idempotent coexistence history import off a dedicated `wa.history` queue — 5 contract guards [no AI wake · own-timestamp · no window · roster-skip · dedupe], direction from the thread contact, CH-08 summary backfill) | [↓](#ch-18b--coexistence-history-import--done-2026-07-19) |
-| CH-18c | Erasure durable-linkage + reconciliation + stale-TODO cleanup (deferred slice) | ✅ DONE 2026-07-19 — tagged `vCH-18c` (**1768** tests; `messages.guest_id` + `aboutGuestId` through 9 conversation_id=NULL writers closes the CH-18a-1 identifier-free-card residual; fail-closed stale-`queued` reconciliation sweep; 3 stale schema TODOs cleared. **Poststay anchor DEFERRED** — verb unresolved + OQ-22 trigger unobserved; OQ-22 corrected) | [↓](#ch-18c--erasure-durable-linkage--reconciliation-sweep--stale-todo-cleanup--done-2026-07-19) |
+| CH-18c | Erasure durable-linkage + reconciliation + stale-TODO cleanup (deferred slice) | ✅ DONE 2026-07-19 — tagged `vCH-18c` (**1769** tests; `messages.guest_id` + `aboutGuestId` through 9 conversation_id=NULL writers closes the CH-18a-1 identifier-free-card residual; fail-closed stale-`queued` reconciliation sweep; 3 stale schema TODOs cleared. **Poststay anchor DEFERRED** — verb unresolved + OQ-22 trigger unobserved; OQ-22 corrected) | [↓](#ch-18c--erasure-durable-linkage--reconciliation-sweep--stale-todo-cleanup--done-2026-07-19) |
 | CH-19 | Acceptance — six scenarios | ⬜ pending | |
 
 Update this table (status + entry link) at the end of every session.
@@ -3176,9 +3176,21 @@ CH-18a-1 already deletes/scrubs those).
 - **Reconciliation marks terminal, NEVER resends** (the plan's explicit rule) — the double-send race is
   dodged entirely by not resending; ops verifies before any manual resend.
 
-**How to verify:** `pnpm check` (exit code, **1768**) incl. the erasure identifier-free-card test and
-the reconciliation test. No live over-the-wire needed (erasure is admin-only; reconciliation is an
-internal cron; the linkage only changes what a card row stores).
+**How to verify:** `pnpm check` (exit code, **1769**) incl. the erasure identifier-free-card test, the
+digest-linkage test, and the reconciliation test. No live over-the-wire needed (erasure is admin-only;
+reconciliation is an internal cron; the linkage only changes what a card row stores).
+
+**🚨 Pre-merge adversarial review (14 agents, 6 lenses → 2 skeptics) — RED → 1 MINOR fixed, re-green at
+1769:**
+- **[MINOR] the morning digest was MISCLASSIFIED as a multi-guest residual.** It actually embeds ONLY
+  `firstConverted`'s escalation words (ONE guest) plus anonymous counts, and that guest's id
+  (`converted[0].guestId`) was in scope — so it is single-guest-attributable, and a name-free overnight
+  complaint would otherwise have survived DELETE_GUEST in an unlinked digest row (a Group-B site I
+  wrongly grouped into the Group-C aggregate residual). **Fixed:** thread
+  `aboutGuestId: converted[0]?.guestId`; corrected the erasure.ts residual comments (only the TASKS list
+  is the multi-guest residual now); the digest test asserts the row links the escalated guest.
+- The other 3 raw findings were verified **FALSE** (no other missed writer; no over-erase / wrong-link;
+  no reconciliation race with an in-flight send).
 
 **Open questions:** the poststay anchor (OQ-22) stays open for the planning chat — its verb is undecided
 and its trigger unobserved.

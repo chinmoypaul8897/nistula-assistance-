@@ -38,11 +38,13 @@
  * rounds: a shortId-only scrub missed escalateToOps + AI-toggle; a \y name regex
  * missed emoji/punctuation-edged pushnames; a sender='system' filter missed staff
  * inbound ("a leak has siblings — enumerate ALL", each round a NEW sibling).
- * 🚨 REMAINING RESIDUAL (smaller): a MULTI-guest aggregate row — the TASKS list, the
- * morning digest — carries several guests' words in ONE body with no single owner,
- * so a single guest_id cannot attribute it and a name-free reference inside survives.
- * It carries no stored name/phone, so the residue-sweep contract still holds; a
- * per-line render-from-source (or a message↔guest join) is the durable fix if needed.
+ * 🚨 REMAINING RESIDUAL (smaller): the TASKS list — a MULTI-guest aggregate row that
+ * carries several guests' words (many shortId-bearing lines) in ONE body with no
+ * single owner, so a single guest_id cannot attribute it and a name-free reference
+ * inside survives. (The morning digest embeds ONLY firstConverted's words and IS
+ * linked by its guest_id — CH-18c.) It carries no stored name/phone, so the
+ * residue-sweep contract still holds; a per-line render-from-source (or a
+ * message↔guest join) is the durable fix for the TASKS list if ever needed.
  *
  * Full erasure completes as the encrypted backups age out of their 30-day
  * retention (backups land in CH-18a-2); the LIVE database is erased now.
@@ -169,12 +171,12 @@ export async function eraseGuestByPhone(
   //     while "Jo" still cannot over-match "Joseph". The pattern is a bound param.
   // CH-18c CLOSED the main residual: the guest_id FK (added to the OR below) erases
   // a SINGLE-guest card by link, so a name-free body is now attributable. What
-  // REMAINS (smaller): a MULTI-guest aggregate row — the TASKS list, the morning
-  // digest — embeds several guests' words in ONE body with no single owner, so a
+  // REMAINS (smaller): the TASKS list — a MULTI-guest aggregate row embedding many
+  // guests' words (shortId-bearing lines) in ONE body with no single owner, so a
   // single guest_id cannot attribute it; a name-free reference inside it survives.
   // It carries no stored name/phone, so the residue-sweep contract still holds. A
-  // per-line render-from-source (or a message↔guest join) is the durable fix for
-  // those, if ever needed.
+  // per-line render-from-source (or a message↔guest join) is the durable fix if
+  // ever needed.
   const literalTokens = [
     phone,
     digits,
