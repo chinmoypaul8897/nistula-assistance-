@@ -19,7 +19,8 @@
     "ezee:capture": "tsx scripts/ezee-capture.ts",
     "ezee:reconcile": "tsx scripts/ezee-reconcile.ts",
     "format": "prettier --write .",
-    "templates:pack": "tsx scripts/template-pack.ts"
+    "templates:pack": "tsx scripts/template-pack.ts",
+    "backup": "tsx scripts/backup.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

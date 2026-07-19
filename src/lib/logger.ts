@@ -20,6 +20,8 @@ const SECRET_KEYS = [
   'DATABASE_URL',
   'ADMIN_BEARER_TOKEN',
   'HEALTHCHECKS_URL',
+  'BACKUP_S3_ACCESS_KEY_ID',
+  'BACKUP_S3_SECRET_ACCESS_KEY',
   'waAccessToken',
   'waAppSecret',
   'waVerifyToken',
@@ -28,6 +30,8 @@ const SECRET_KEYS = [
   'databaseUrl',
   'adminBearerToken',
   'healthchecksUrl',
+  'backupS3AccessKeyId',
+  'backupS3SecretAccessKey',
 ];
 const REDACT_PATHS = [
   ...SECRET_KEYS,
