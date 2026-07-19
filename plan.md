@@ -223,6 +223,14 @@ DRAFT_MODE=true · AUTO_SEND_TYPES=            # csv: presales,instay,… unlock
 NIGHT_START=20:00 · NIGHT_END=10:00
 ADMIN_BEARER_TOKEN · ADMIN_ROUTES_ENABLED=0
 HEALTHCHECKS_URL · COST_ALERT_INR_PER_DAY=1000
+COEXISTENCE_ACTIVE=0          # CH-18a-2. 0 pre-cutover (keep-alive = weekly ops reminder); flip to 1 at
+                             # real-number cutover, when it becomes the daily "link alive in 13d?" check.
+COEXISTENCE_KEEPALIVE_MAX_DAYS=13   # one day of margin under Meta's ~14-day app-offline API-link drop.
+BACKUP_ENABLED=0             # CH-18a-2. Single runner (poller precedent): ONLY Railway dumps. Enabled
+                             # boot REQUIRES the S3 destination + BACKUP_AGE_RECIPIENT (fail-fast guard).
+BACKUP_S3_ENDPOINT · BACKUP_S3_BUCKET · BACKUP_S3_REGION=auto · BACKUP_S3_ACCESS_KEY_ID · BACKUP_S3_SECRET_ACCESS_KEY
+BACKUP_AGE_RECIPIENT         # age PUBLIC recipient key — encryption only, no private key on the box.
+BACKUP_RETENTION_DAYS=30     # LOAD-BEARING: DELETE_GUEST erasure completeness is tied to this window.
 FAKE_NOW_IST                  # dev/test only — lib/time returns it when set; boot-refused in production
 ```
 

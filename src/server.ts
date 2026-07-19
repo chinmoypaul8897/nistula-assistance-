@@ -227,6 +227,29 @@ async function main(): Promise<void> {
     knowledge: kb,
     opsNumbers: config.opsNumbers,
     healthchecksUrl: config.healthchecksUrl,
+    keepAlive: {
+      active: config.coexistenceActive,
+      maxDays: config.coexistenceKeepaliveMaxDays,
+    },
+    // CH-18a-2 nightly backup — mounted only when enabled (loadConfig's boot
+    // guard guarantees every field is present, so the `!` are safe). Single
+    // runner, like the poller: only Railway should set BACKUP_ENABLED=1.
+    ...(config.backupEnabled
+      ? {
+          backup: {
+            databaseUrl,
+            ageRecipient: config.backupAgeRecipient!,
+            retentionDays: config.backupRetentionDays,
+            s3: {
+              endpoint: config.backupS3Endpoint!,
+              region: config.backupS3Region,
+              bucket: config.backupS3Bucket!,
+              accessKeyId: config.backupS3AccessKeyId!,
+              secretAccessKey: config.backupS3SecretAccessKey!,
+            },
+          },
+        }
+      : {}),
     nightStart: config.nightStart,
     nightEnd: config.nightEnd,
     ezee: { client: ezee, pollerEnabled: config.ezeePollerEnabled },

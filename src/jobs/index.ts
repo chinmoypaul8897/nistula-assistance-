@@ -61,6 +61,10 @@ import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
 import { runMorningDigest, DIGEST_CRON } from '../staff/digest.js';
 import { runWatchdog, WATCHDOG_CRON } from '../ops/watchdog.js';
 import { runDailyRollup, ROLLUP_CRON } from '../ops/rollup.js';
+import { runKeepAlive, KEEPALIVE_CRON, DEFAULT_KEEPALIVE_MAX_DAYS } from '../ops/keepalive.js';
+import { runBackup } from '../ops/backup.js';
+import { pgDumpAgePipe } from '../ops/backupExec.js';
+import { createS3Client, type S3Config } from '../lib/s3.js';
 import type { WaClient } from '../wa/client.js';
 
 export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
@@ -85,6 +89,12 @@ export const DRAFT_QUALITY_REPORT_QUEUE = 'draft.quality_report';
 // 23:30 daily cost/ops rollup.
 export const OPS_WATCHDOG_QUEUE = 'ops.watchdog';
 export const OPS_ROLLUP_QUEUE = 'ops.rollup';
+// CH-18a-2: the daily coexistence keep-alive (weekly reminder pre-cutover /
+// daily link-staleness check post-cutover).
+export const OPS_KEEPALIVE_QUEUE = 'ops.keepalive';
+// CH-18a-2: the nightly encrypted off-site backup (mounted only when enabled —
+// single-runner like the poller, so only Railway dumps).
+export const OPS_BACKUP_QUEUE = 'ops.backup';
 export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
   created: BOOKING_CREATED_QUEUE,
   modified: BOOKING_MODIFIED_QUEUE,
@@ -317,6 +327,21 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryBackoff: true,
     expireInSeconds: 120,
   });
+  // CH-18a-2 keep-alive: like the watchdog, the next daily tick IS the retry.
+  await boss.createQueue(OPS_KEEPALIVE_QUEUE, {
+    policy: 'standard',
+    retryLimit: 0,
+    expireInSeconds: 240,
+  });
+  // CH-18a-2 backup: a couple of backed-off retries so a transient S3 blip does
+  // not lose the night; generous expire (a dump + upload can take a while).
+  await boss.createQueue(OPS_BACKUP_QUEUE, {
+    policy: 'stately',
+    retryLimit: 2,
+    retryDelay: 300,
+    retryBackoff: true,
+    expireInSeconds: 900,
+  });
 }
 
 /**
@@ -386,6 +411,20 @@ export interface JobsDeps {
   /** CH-17: HEALTHCHECKS_URL — the watchdog pings it when healthy. Unset ⇒ the
    * ping leg is skipped (dev); the quiet-channel + alert legs still run. */
   healthchecksUrl?: string;
+  /** CH-18a-2 coexistence keep-alive. `active` = COEXISTENCE_ACTIVE (weekly
+   * reminder pre-cutover / daily staleness check post-cutover); `maxDays` =
+   * COEXISTENCE_KEEPALIVE_MAX_DAYS. Absent ⇒ pre-cutover reminder mode with the
+   * 13-day default — mounted unconditionally like the rollup (needs only OPS). */
+  keepAlive?: { active: boolean; maxDays: number };
+  /** CH-18a-2 nightly backup. Absent/disabled ⇒ UNMOUNTED (single-runner: only
+   * Railway dumps, the poller precedent). Present ⇒ the container must carry
+   * pg_dump v16 + age. databaseUrl is the dump source; s3 the destination. */
+  backup?: {
+    databaseUrl: string;
+    ageRecipient: string;
+    retentionDays: number;
+    s3: S3Config;
+  };
   /** Config NIGHT_START/NIGHT_END for the SITUATION block; default 20:00/10:00. */
   nightStart?: string;
   nightEnd?: string;
@@ -781,6 +820,42 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   await scheduleCron(deps.boss, OPS_ROLLUP_QUEUE, ROLLUP_CRON, 'Asia/Kolkata', {
     singletonKey: 'ops_rollup',
   });
+
+  // ── CH-18a-2 coexistence keep-alive ─────────────────────────────────────
+  // Unconditional (needs only OPS_NUMBERS via the alertOps singleton). Pre-cutover
+  // (active=false, the default) it is a weekly warm-the-line nudge; post-cutover
+  // it is the daily link-staleness check.
+  await deps.boss.work(OPS_KEEPALIVE_QUEUE, workOptions, async () => {
+    await runKeepAlive({
+      db: deps.db,
+      log: deps.log,
+      active: deps.keepAlive?.active ?? false,
+      maxDays: deps.keepAlive?.maxDays ?? DEFAULT_KEEPALIVE_MAX_DAYS,
+      now: () => new Date(),
+    });
+  });
+  await scheduleCron(deps.boss, OPS_KEEPALIVE_QUEUE, KEEPALIVE_CRON, 'Asia/Kolkata', {
+    singletonKey: 'ops_keepalive',
+  });
+
+  // ── CH-18a-2 nightly encrypted backup (02:30 IST, only when enabled) ─────
+  if (deps.backup !== undefined) {
+    const backup = deps.backup;
+    const s3 = createS3Client(backup.s3);
+    await deps.boss.work(OPS_BACKUP_QUEUE, workOptions, async () => {
+      await runBackup({
+        ageRecipient: backup.ageRecipient,
+        retentionDays: backup.retentionDays,
+        log: deps.log,
+        produceEncryptedDump: () => pgDumpAgePipe(backup.databaseUrl, backup.ageRecipient),
+        s3,
+        now: () => new Date(),
+      });
+    });
+    await scheduleCron(deps.boss, OPS_BACKUP_QUEUE, '30 2 * * *', 'Asia/Kolkata', {
+      singletonKey: 'ops_backup',
+    });
+  }
 
   // ── CH-14a human takeover (coexistence) ─────────────────────────────────
   // Cancel the queued (not-yet-run) debounce job for a paused conversation, so a
