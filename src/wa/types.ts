@@ -32,6 +32,30 @@ export interface WaValue {
    * WhatsApp app, echoed to us. PROVISIONAL — the exact shape is re-verified at
    * the CH-18 cutover against real captures; parsed tolerantly until then. */
   message_echoes?: WaMessageEcho[];
+  /** CH-18b coexistence history import (§5.3): the number's past WhatsApp threads,
+   * delivered in chunks after onboarding on the `history` field. PROVISIONAL —
+   * re-verified at cutover; parsed tolerantly (a shape we do not recognise yields
+   * zero threads, never a throw). `smb_app_state_sync` routes here too. */
+  history?: WaHistoryChunk[];
+}
+
+/** One delivery chunk of the history sync. `metadata.progress` (0–100) and
+ * `chunk_order` let ops see how far the import has got; we read neither for
+ * correctness — dedupe on `wa_message_id` keeps the MESSAGES table order-safe on
+ * any redelivery, and an out-of-order chunk that lands rows behind the summary
+ * cursor is re-covered by a cursor rewind (wa/history.ts). */
+export interface WaHistoryChunk {
+  metadata?: { phase?: number; chunk_order?: number; progress?: number };
+  threads?: WaHistoryThread[];
+}
+
+/** One past thread. `id` is the CONTACT's wa_id — the guest this thread belongs
+ * to, and the anchor for message direction (a message whose `from` matches it is
+ * the guest's; anything else is a business/staff send). Its `messages` share the
+ * inbound message shape (a business send simply carries the business `from`). */
+export interface WaHistoryThread {
+  id?: string;
+  messages?: WaInboundMessage[];
 }
 
 /** One `smb_message_echoes` entry — a staff-app send. We read only the

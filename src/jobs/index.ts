@@ -31,7 +31,7 @@ import type { ReplyType } from '../config.js';
 import type { Db } from '../db/client.js';
 import { getMirrorByReservationNo } from '../db/bookings.js';
 import { insertDraft } from '../db/drafts.js';
-import { findConversationForTakeover, getMessageBody } from '../db/repos.js';
+import { findConversationForTakeover, getMessageBody, getRawEventById } from '../db/repos.js';
 import type { EzeeClient } from '../ezee/client.js';
 import { createEzeePoller } from '../ezee/poller.js';
 import { bookingState, type GateContext } from '../lifecycle/gates.js';
@@ -56,7 +56,7 @@ import { notifyDraft } from '../staff/draftNotify.js';
 import { runDraftExpiry, DRAFT_EXPIRY_CRON } from '../staff/draftExpiry.js';
 import { runQualityReport, QUALITY_REPORT_CRON } from '../staff/qualityReport.js';
 import { applyHumanTakeover } from '../staff/humanTakeover.js';
-import type { Roster } from '../staff/roster.js';
+import { isStaffPhone, type Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
 import { runMorningDigest, DIGEST_CRON } from '../staff/digest.js';
 import { runWatchdog, WATCHDOG_CRON } from '../ops/watchdog.js';
@@ -66,6 +66,8 @@ import { runBackup } from '../ops/backup.js';
 import { pgDumpAgePipe } from '../ops/backupExec.js';
 import { createS3Client, type S3Config } from '../lib/s3.js';
 import type { WaClient } from '../wa/client.js';
+import { importHistory } from '../wa/history.js';
+import type { WaValue, WaWebhookBody } from '../wa/types.js';
 
 export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
 export const CONVERSATION_SWEEP_QUEUE = 'conversation.sweep';
@@ -95,6 +97,9 @@ export const OPS_KEEPALIVE_QUEUE = 'ops.keepalive';
 // CH-18a-2: the nightly encrypted off-site backup (mounted only when enabled —
 // single-runner like the poller, so only Railway dumps).
 export const OPS_BACKUP_QUEUE = 'ops.backup';
+// CH-18b: coexistence history import — one job per webhook body, imported off the
+// hot path (the webhook enqueues just the raw event id).
+export const WA_HISTORY_QUEUE = 'wa.history';
 export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
   created: BOOKING_CREATED_QUEUE,
   modified: BOOKING_MODIFIED_QUEUE,
@@ -342,6 +347,17 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryBackoff: true,
     expireInSeconds: 900,
   });
+  // CH-18b history import: a bulk one-time job that only redelivery-dedupes, so a
+  // couple of backed-off retries cover a transient DB blip; the singletonKey (the
+  // raw event id) collapses duplicate enqueues of the same body. Generous expire
+  // (a large chunk is many inserts).
+  await boss.createQueue(WA_HISTORY_QUEUE, {
+    policy: 'standard',
+    retryLimit: 2,
+    retryDelay: 60,
+    retryBackoff: true,
+    expireInSeconds: 600,
+  });
 }
 
 /**
@@ -460,6 +476,9 @@ export interface Jobs {
   enqueueConversationProcess: (conversationId: string, startAfter?: Date) => Promise<void>;
   /** CH-13a: the webhook's staff-command wake (§8 step 3). */
   enqueueStaffCommand: (input: { phone: string; waMessageId: string }) => Promise<void>;
+  /** CH-18b: the webhook's history-import wake — carries just the raw event id,
+   * so the bulk import runs off the hot path (§8 step 5). */
+  enqueueHistory: (rawEventId: string) => Promise<void>;
   /** CH-14a: the coexistence takeover, bound to boss + db — server.ts hands this
    * to BOTH the webhook (`smb_message_echoes`) and the dev admin sim route so the
    * two paths share one implementation. */
@@ -483,6 +502,11 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   const windows = deps.windows ?? DEBOUNCE_WINDOWS;
   const enqueue = makeEnqueue(deps.boss, windows);
   const enqueueSummarise = makeEnqueueSummarise(deps.boss);
+  // CH-18b: one job per webhook body; the singletonKey (the raw event id)
+  // collapses a duplicate enqueue of the same body into a no-op.
+  const enqueueHistory = async (rawEventId: string): Promise<void> => {
+    await deps.boss.send(WA_HISTORY_QUEUE, { rawEventId }, { singletonKey: rawEventId });
+  };
   const thresholds = deps.summariser ?? SUMMARISER;
   // CH-13a. Built here rather than inside the poller branch on purpose: the
   // door read is BKG-03, a READ that never ACKs and so cannot consume the
@@ -838,6 +862,21 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     singletonKey: 'ops_keepalive',
   });
 
+  // ── CH-18b coexistence history import ───────────────────────────────────
+  // Mounted unconditionally (history arrives only after the field is subscribed
+  // at cutover; until then the queue is idle). The roster-skip is active only
+  // when a roster is configured — without one, dev/test imports every thread.
+  const isStaffPhoneForImport =
+    deps.staff !== undefined ? (phone: string) => isStaffPhone(deps.staff!.roster, phone) : undefined;
+  await deps.boss.work<{ rawEventId: string }>(WA_HISTORY_QUEUE, workOptions, async (jobs) => {
+    for (const job of jobs) {
+      await runHistoryImport(
+        { db: deps.db, log: deps.log, isStaffPhone: isStaffPhoneForImport, enqueueSummarise },
+        job.data.rawEventId,
+      );
+    }
+  });
+
   // ── CH-18a-2 nightly encrypted backup (02:30 IST, only when enabled) ─────
   if (deps.backup !== undefined) {
     const backup = deps.backup;
@@ -896,7 +935,47 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     apply: (input) => applyHumanTakeover(takeoverDeps, input),
   };
 
-  return { enqueueConversationProcess: enqueue, enqueueStaffCommand, coexistence };
+  return { enqueueConversationProcess: enqueue, enqueueStaffCommand, enqueueHistory, coexistence };
+}
+
+/**
+ * CH-18b history import worker: re-reads the stored webhook body and imports every
+ * `history` / `smb_app_state_sync` change idempotently. Never throws for a missing
+ * event (a logged drop) — a genuine DB error propagates so pg-boss retries.
+ */
+export async function runHistoryImport(
+  deps: {
+    db: Db;
+    log: WorkerLogger;
+    isStaffPhone?: (phone: string) => boolean;
+    enqueueSummarise: (conversationId: string) => Promise<void>;
+  },
+  rawEventId: string,
+): Promise<void> {
+  const rawEvent = await getRawEventById(deps.db, rawEventId);
+  if (rawEvent === null) {
+    deps.log.warn({ rawEventId }, 'history import: raw event not found — dropped');
+    return;
+  }
+  const body = rawEvent.payload as WaWebhookBody;
+  const entries = Array.isArray(body?.entry) ? body.entry : [];
+  const values = entries
+    .flatMap((entry) => (Array.isArray(entry?.changes) ? entry.changes : []))
+    .filter((change) => change?.field === 'history' || change?.field === 'smb_app_state_sync')
+    .map((change) => change?.value)
+    .filter((value): value is WaValue => value !== undefined && value !== null);
+  const totals = { threads: 0, importedMessages: 0, duplicateMessages: 0, skippedThreads: 0 };
+  for (const value of values) {
+    const report = await importHistory(
+      { db: deps.db, log: deps.log, isStaffPhone: deps.isStaffPhone, enqueueSummarise: deps.enqueueSummarise },
+      value,
+    );
+    totals.threads += report.threads;
+    totals.importedMessages += report.importedMessages;
+    totals.duplicateMessages += report.duplicateMessages;
+    totals.skippedThreads += report.skippedThreads;
+  }
+  deps.log.info({ rawEventId, ...totals }, 'history import complete');
 }
 
 /** Cron registration helper (CH-03 step 1) — every business cron states its

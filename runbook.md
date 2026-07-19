@@ -452,6 +452,21 @@ on the explicit `COEXISTENCE_ACTIVE` flag:
 
 Flip `COEXISTENCE_ACTIVE=1` at real-number cutover (see the checklist).
 
+### History import (one-time, at cutover)
+`src/wa/history.ts`, off the hot path via the `wa.history` queue. Once the `history`
+field is subscribed (checklist step 4), Meta delivers the number's PAST WhatsApp
+threads in chunks; each webhook body is enqueued once and a worker imports it
+idempotently, linking each thread to a guest by phone. It is deliberately INERT
+in five ways — a history message is an old message, not a live turn: it never
+wakes the AI, never opens a 24h window, preserves each message's OWN timestamp
+(a timestamp-less one is skipped, never dated now), skips roster/ops threads, and
+dedupes on `wa_message_id` (chunks repeat and arrive out of order). Imported
+threads are then compacted into their rolling summary by the CH-08 summariser
+(enqueued per touched thread; the nightly 04:00 pass is the backstop). Nothing to
+enable — subscribing the field at cutover is the only ops action. **Do not
+subscribe `history` before this handler is live**, or the chunks arrive with
+nothing to receive them (checklist step 4 states this).
+
 ## Go-live cutover checklist
 
 The real-number cutover is an **ops event between CH-18 and CH-19** (plan §10) —

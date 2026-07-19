@@ -14,12 +14,12 @@ import {
   insertRawEvent,
   updateRawEvent,
   upsertGuestByPhone,
-  type NewMessage,
 } from '../db/repos.js';
 import { inboundTimestamp, touchPhoneWindow } from '../db/windows.js';
 import { summarizeError } from '../lib/logger.js';
 import { normalizePhone } from '../lib/phone.js';
 import { alertOps } from '../ops/alerts.js';
+import { mapInboundType, mediaIdOf } from './messageShape.js';
 import { timingSafeStringEqual, verifySignature } from './signature.js';
 import type { WaChange, WaInboundMessage, WaStatus, WaValue, WaWebhookBody } from './types.js';
 
@@ -55,7 +55,19 @@ export interface WaWebhookOptions {
       echo: { waMessageId?: string; body: string | null; raw?: unknown };
     }) => Promise<void>;
   };
+  /**
+   * CH-18b coexistence history import (§5.3). Absent ⇒ `history` /
+   * `smb_app_state_sync` stay a logged raw-store no-op (their pre-CH-18b
+   * behaviour). Present ⇒ the raw event is enqueued ONCE for the import worker
+   * (jobs/index.ts), which re-reads it and imports idempotently off the hot path.
+   */
+  history?: {
+    enqueue: (rawEventId: string) => Promise<void>;
+  };
 }
+
+// The two coexistence fields that carry past threads to import (§5.3).
+const HISTORY_FIELDS = new Set(['history', 'smb_app_state_sync']);
 
 /** Fastify plugin carrying both /webhooks/whatsapp routes; register at boot with live deps. */
 export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app, opts) => {
@@ -113,7 +125,7 @@ export const waWebhookRoutes: FastifyPluginAsync<WaWebhookOptions> = async (app,
     // on timeout and wa_message_id dedupe makes redelivery a no-op.
     await reply.code(200).send();
     try {
-      await ingest(raw, opts.db, request.log, opts.enqueue, opts.staff, opts.coexistence);
+      await ingest(raw, opts.db, request.log, opts.enqueue, opts.staff, opts.coexistence, opts.history);
     } catch (error) {
       // Post-ack there is nothing to return to Meta; the raw row (when it
       // was written) carries the error per the D6 write contract.
@@ -133,6 +145,7 @@ async function ingest(
   enqueue: Enqueue,
   staff: WaWebhookOptions['staff'],
   coexistence: WaWebhookOptions['coexistence'],
+  history: WaWebhookOptions['history'],
 ): Promise<void> {
   let body: WaWebhookBody;
   try {
@@ -153,19 +166,30 @@ async function ingest(
   // elements, non-array changes) must still land in raw_events (D6 contract)
   // rather than throwing before the insert.
   const entries = Array.isArray(body.entry) ? body.entry : [];
-  const fields = [
-    ...new Set(
-      entries
-        .flatMap((entry) => (Array.isArray(entry?.changes) ? entry.changes : []))
-        .map((change) => (typeof change?.field === 'string' ? change.field : 'unknown')),
-    ),
-  ].join(',');
+  const fieldSet = new Set(
+    entries
+      .flatMap((entry) => (Array.isArray(entry?.changes) ? entry.changes : []))
+      .map((change) => (typeof change?.field === 'string' ? change.field : 'unknown')),
+  );
+  const fields = [...fieldSet].join(',');
   const rawEvent = await insertRawEvent(db, {
     source: 'whatsapp',
     eventType: fields === '' ? null : fields,
     payload: body,
     processed: false,
   });
+
+  // CH-18b: history arrives in chunks and can be large, so it goes OFF the hot
+  // path — one enqueue per body (the worker re-reads this raw event and imports
+  // every history change idempotently). Best-effort like the staff enqueue: the
+  // raw event is already committed, so a failed wake must not fail the ingest.
+  if (history !== undefined && [...fieldSet].some((f) => HISTORY_FIELDS.has(f))) {
+    try {
+      await history.enqueue(rawEvent.id);
+    } catch (error) {
+      log.warn({ rawEventId: rawEvent.id, err: summarizeError(error) }, 'history import enqueue failed');
+    }
+  }
 
   const errors: string[] = [];
   for (const [index, entry] of entries.entries()) {
@@ -204,9 +228,14 @@ async function handleChange(
     }
     return;
   }
+  if (change.field !== undefined && HISTORY_FIELDS.has(change.field)) {
+    // CH-18b: history/smb_app_state_sync are imported OFF the hot path — ingest
+    // enqueued the whole raw event once (or, when unwired, kept it raw). Nothing
+    // to do per-change here.
+    return;
+  }
   if (change.field !== 'messages') {
-    // history / smb_app_state_sync land in CH-18 — until then unknown fields are
-    // a tolerated, logged no-op with the payload kept raw (§5.3).
+    // Any other field is a tolerated, logged no-op with the payload kept raw (§5.3).
     log.info({ field: change.field }, 'webhook change field not handled yet — raw stored');
     return;
   }
@@ -445,30 +474,6 @@ async function handleStatus(status: WaStatus, db: Db, log: FastifyBaseLogger): P
       log.info({ waMessageId: status.id, status: status.status }, 'unknown status string');
       break;
   }
-}
-
-// §4 message_type values Meta can deliver inbound; 'template' is only ever
-// written by our own sends, everything unrecognised is 'unsupported'.
-const INBOUND_TYPES = new Set([
-  'text',
-  'image',
-  'audio',
-  'video',
-  'document',
-  'location',
-  'interactive',
-]);
-
-function mapInboundType(type: string | undefined): NewMessage['type'] {
-  return type !== undefined && INBOUND_TYPES.has(type)
-    ? (type as NewMessage['type'])
-    : 'unsupported';
-}
-
-function mediaIdOf(message: WaInboundMessage): string | null {
-  return (
-    message.image?.id ?? message.audio?.id ?? message.video?.id ?? message.document?.id ?? null
-  );
 }
 
 function statusErrorText(errors: WaStatus['errors']): string | undefined {

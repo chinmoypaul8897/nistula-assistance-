@@ -289,6 +289,9 @@ async function main(): Promise<void> {
     },
     // CH-14a: the prod `smb_message_echoes` takeover path.
     coexistence: jobs.coexistence,
+    // CH-18b: the one-time `history` / `smb_app_state_sync` import (§8 step 5) —
+    // enqueued off the hot path; the worker links threads to guests by phone.
+    history: { enqueue: jobs.enqueueHistory },
   });
   // CH-09: admin routes mount ONLY when enabled (§3.3). CH-14a's dev
   // human-takeover sim shares the coexistence core.

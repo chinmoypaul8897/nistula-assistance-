@@ -195,3 +195,27 @@ export async function applyConversationSummary(
     .returning({ id: conversations.id });
   return rows.length > 0;
 }
+
+/**
+ * CH-18b out-of-order safety. The summariser cursor is FORWARD-ONLY, so if a
+ * history chunk lands messages OLDER than the conversation's current cursor, that
+ * cursor now sits AHEAD of un-summarised rows the forward-only passes will never
+ * revisit — they would be invisible to the model for ever. Rewind: clear the
+ * summary + pointer so the next pass re-compacts from the earliest row. A no-op
+ * unless the cursor's OWN message is at or after the oldest newly-imported row
+ * (i.e. something really did land behind it).
+ */
+export async function resetSummaryIfBackfilledBehind(
+  db: Db,
+  conversationId: string,
+  oldestNewCreatedAt: Date,
+): Promise<void> {
+  await db.execute(sql`
+    UPDATE conversations c
+    SET summary = NULL, summary_upto_message_id = NULL, updated_at = now()
+    FROM messages p
+    WHERE c.id = ${conversationId}
+      AND p.id = c.summary_upto_message_id
+      AND p.created_at >= ${oldestNewCreatedAt.toISOString()}::timestamptz
+  `);
+}
