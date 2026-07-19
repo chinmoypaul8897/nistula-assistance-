@@ -55,6 +55,10 @@ export async function buildWaApp(
         echo: { waMessageId?: string; body: string | null; raw?: unknown };
       }) => Promise<void>;
     };
+    /** CH-18b coexistence history import — the `history` enqueue seam. */
+    history?: {
+      enqueue: (rawEventId: string) => Promise<void>;
+    };
   },
 ) {
   const app = Fastify(
@@ -68,6 +72,7 @@ export async function buildWaApp(
     enqueue: opts?.enqueue ?? (async () => {}),
     ...(opts?.staff === undefined ? {} : { staff: opts.staff }),
     ...(opts?.coexistence === undefined ? {} : { coexistence: opts.coexistence }),
+    ...(opts?.history === undefined ? {} : { history: opts.history }),
   });
   return app;
 }

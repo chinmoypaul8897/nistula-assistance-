@@ -1,0 +1,44 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "WABA_TEST_ID",
+      "changes": [
+        {
+          "field": "history",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "917700900001", "phone_number_id": "PNID_TEST" },
+            "contacts": [{ "wa_id": "917700900470", "profile": { "name": "Test Guest 47" } }],
+            "history": [
+              {
+                "metadata": { "phase": 0, "chunk_order": 1, "progress": 100 },
+                "threads": [
+                  {
+                    "id": "917700900470",
+                    "messages": [
+                      {
+                        "from": "917700900470",
+                        "id": "wamid.FIXTURE-HISTG1",
+                        "timestamp": "1710000000",
+                        "type": "text",
+                        "text": { "body": "Hi, is the villa free the first week of March?" }
+                      },
+                      {
+                        "from": "917700900001",
+                        "id": "wamid.FIXTURE-HISTB1",
+                        "timestamp": "1710000600",
+                        "type": "text",
+                        "text": { "body": "Yes, we have availability that week." }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
