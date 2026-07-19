@@ -154,10 +154,12 @@ export function createWaClient(deps: WaClientDeps) {
   /** The Graph call + settle, shared by the text and template paths so the
    * send-intent guarantees (§3.4) cannot diverge between them. */
   async function dispatchToGraph(args: DispatchArgs, payload: unknown): Promise<SendResult> {
-    // TODO(CH-18a): stale-'queued' reconciliation sweep + alert (§3.4 —
+    // TODO(CH-18c): stale-'queued' reconciliation sweep + alert (§3.4 —
     // a crash between the intent commit and here leaves an inert intent row).
-    // Re-pointed from CH-17: the watchdog/cost chunk deliberately scoped this
-    // out (not one of its five plan steps); reconciliation is a hardening item.
+    // Deferred to a dedicated slice (Paul, 2026-07-19): CH-18a-1 scoped to
+    // erasure/admin/redaction, and a naive "resend the queued row" re-opens a
+    // double-send race — this needs a real sent/send_failed message state + a
+    // resend verb first (CH-17 open Q#1). Re-pointed CH-17 → CH-18a → CH-18c.
     //
     // waMessageId is hoisted OUTSIDE the try so failure paths after a Graph
     // 2xx still record it — without it on the row, status webhooks match
