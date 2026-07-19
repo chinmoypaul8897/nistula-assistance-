@@ -26,6 +26,19 @@
  * per §4): summary/detail are the guest's own words and, unlike guest_facts,
  * are deliberately NOT screened for sensitive content (schema.ts tasks header).
  *
+ * STAFF/OPS CARD COPIES — the guest's name and words are ALSO rendered into
+ * `messages` rows with conversation_id=null (task_card / escalation_card /
+ * draft_card, sender='system') that carry NO back-link to the guest (a leak's
+ * sibling: tasks.summary is scrubbed but its rendered twin in messages.body was
+ * not — pre-merge review DEFECT). Every card prints a `#<shortId>`, so these are
+ * reached by matching the guest's task + draft shortIds. 🚨 KNOWN RESIDUAL,
+ * documented rather than silently missed: the aggregate morning DIGEST body
+ * (staff/digest.ts) carries the FIRST converted night-queue task's summary line
+ * with NO shortId, so it is not cleanly attributable; it goes to OPS numbers
+ * only and carries request words, not the name/phone. TODO(CH-18c): the durable
+ * fix is architectural — store a reference in staff message bodies and render on
+ * read, so guest PII never lands in an un-attributable conversation_id=null row.
+ *
  * Full erasure completes as the encrypted backups age out of their 30-day
  * retention (backups land in CH-18a-2); the LIVE database is erased now.
  */
@@ -52,6 +65,16 @@ import {
 const REDACTED = '[redacted]';
 const ERASED = '[erased]';
 
+/** Guest-identifying string keys blanked wholesale in a matched whatsapp
+ * envelope. NOT just 'body'/'caption': Meta puts the guest's DISPLAY NAME at
+ * contacts[].profile.name (the very string tombstoned to null on the guests
+ * row) and a shared-location's name/address at messages[].location.{name,
+ * address} — none of which contain the phone digits, so digit-replacement alone
+ * left the name intact (pre-merge review BLOCKER: the name survived erasure and
+ * the residue sweep was vacuously green because its seed omitted profile.name).
+ * Over-blanking an already guest-scoped audit envelope is the safe direction. */
+const BLANK_KEYS = new Set(['body', 'caption', 'name', 'address']);
+
 export interface EraseReport {
   /** uuid, not PII — safe to log/return. The phone is never echoed. */
   guestId: string;
@@ -71,10 +94,11 @@ async function countWhere(db: Db, table: PgTable, where: SQL | undefined): Promi
 /**
  * Recursively redact a webhook payload: replace every occurrence of the guest's
  * phone (in either the '+E.164' or the bare-wire-digits form Meta sends) and
- * blank any message `body`/`caption` (the guest's words). Runs only on rows
- * already matched to this guest, so blanking a body wholesale cannot touch
- * another guest's data unless a single webhook batched them — in which case
- * erring toward MORE erasure of an audit envelope is the safe direction.
+ * blank every guest-identifying string key (BLANK_KEYS — body/caption/name/
+ * address). Runs only on rows already matched to this guest, so blanking a key
+ * wholesale cannot touch another guest's data unless a single webhook batched
+ * them — in which case erring toward MORE erasure of an audit envelope is the
+ * safe direction.
  */
 export function redactPayload(value: unknown, reps: readonly string[]): unknown {
   if (typeof value === 'string') {
@@ -86,7 +110,7 @@ export function redactPayload(value: unknown, reps: readonly string[]): unknown 
   if (value !== null && typeof value === 'object') {
     const obj: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      obj[k] = k === 'body' || k === 'caption' ? null : redactPayload(v, reps);
+      obj[k] = BLANK_KEYS.has(k) ? null : redactPayload(v, reps);
     }
     return obj;
   }
@@ -121,6 +145,28 @@ export async function eraseGuestByPhone(
       ? eq(tasks.guestId, guestId)
       : or(eq(tasks.guestId, guestId), eq(tasks.conversationId, convId));
 
+  // Staff/ops CARD copies live as conversation_id=null, sender='system' messages
+  // (task_card/escalation_card/draft_card) with the guest's name + words rendered
+  // into the body and no guest FK. Every card prints a #<shortId>; gather the
+  // guest's task + draft shortIds (before they are unlinked) and scrub matching
+  // cards. shortIds are 6-char base32 — no LIKE metachars, negligible collision.
+  const cardShortIds = [
+    ...(await db.select({ s: tasks.shortId }).from(tasks).where(taskWhere)).map((r) => r.s),
+    ...(convId === null
+      ? []
+      : (await db.select({ s: drafts.shortId }).from(drafts).where(eq(drafts.conversationId, convId))).map(
+          (r) => r.s,
+        )),
+  ];
+  const cardWhere: SQL | undefined =
+    cardShortIds.length === 0
+      ? undefined
+      : and(
+          sql`${messages.conversationId} is null`,
+          eq(messages.sender, 'system'),
+          or(...cardShortIds.map((sid) => sql`${messages.body} like ${`%${sid}%`}`)),
+        );
+
   // The guest's own inbound/status webhook rows: phone lives only inside the
   // jsonb, unindexed, so this is a text scan (bounded — low traffic per guest).
   const waRows = [
@@ -143,6 +189,7 @@ export async function eraseGuestByPhone(
     scheduled_messages: await countWhere(db, scheduledMessages, eq(scheduledMessages.guestId, guestId)),
     drafts: convId === null ? 0 : await countWhere(db, drafts, eq(drafts.conversationId, convId)),
     tasks: await countWhere(db, tasks, taskWhere),
+    staff_card_messages: cardWhere === undefined ? 0 : await countWhere(db, messages, cardWhere),
     reference_attempts: await countWhere(db, referenceAttempts, eq(referenceAttempts.phone, phone)),
     phone_windows: await countWhere(db, phoneWindows, eq(phoneWindows.phone, phone)),
     raw_events_whatsapp: waRows.length,
@@ -160,8 +207,12 @@ export async function eraseGuestByPhone(
   await db.transaction(async (tx) => {
     if (convId !== null) {
       await tx
+        // `error` too: a failed send stores Meta's echoed error text verbatim
+        // and it "can embed a guest's phone or body" (sendFailure.ts) — the
+        // residue sweep scans messages.error, so leaving it is a real leak
+        // (pre-merge review DEFECT).
         .update(messages)
-        .set({ body: null, raw: null, waMessageId: null, mediaId: null })
+        .set({ body: null, raw: null, waMessageId: null, mediaId: null, error: null })
         .where(eq(messages.conversationId, convId));
       await tx.update(conversations).set({ summary: null }).where(eq(conversations.id, convId));
       await tx
@@ -186,6 +237,12 @@ export async function eraseGuestByPhone(
       .where(taskWhere);
     await deleteReferenceAttempts(tx, phone);
     await deletePhoneWindow(tx, phone);
+
+    if (cardWhere !== undefined) {
+      // Scrub the guest's name/words out of the rendered staff/ops card copies
+      // (conversation_id=null messages), attributed by their #<shortId>.
+      await tx.update(messages).set({ body: ERASED }).where(cardWhere);
+    }
 
     for (const row of waRows) {
       await tx

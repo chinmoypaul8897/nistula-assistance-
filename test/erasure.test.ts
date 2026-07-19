@@ -75,6 +75,12 @@ async function seedGuest(): Promise<string> {
   await db.insert(schema.messages).values([
     { conversationId: convId, direction: 'in', sender: 'guest', type: 'text', status: 'received', body: `${FIRST} here, my num ${DIGITS}`, waMessageId: 'wamid.ERASE1', mediaId: 'media-erase-1', raw: { from: DIGITS, text: { body: 'hi' } } },
     { conversationId: convId, direction: 'out', sender: 'ai', type: 'text', status: 'sent', body: 'our reply', waMessageId: 'wamid.ERASE2' },
+    // A FAILED send whose error text embeds Meta's echoed phone + name (defect 2).
+    { conversationId: convId, direction: 'out', sender: 'ai', type: 'text', status: 'failed', body: 'undelivered', error: `Graph 400 131026: Undeliverable — number ${DIGITS} for ${FIRST}`, waMessageId: 'wamid.ERASE3' },
+    // Staff/ops CARD copies: conversation_id=null, guest name + words + #shortId,
+    // no guest FK (defect 3). Reference the seeded task/draft shortIds.
+    { conversationId: null, direction: 'out', sender: 'system', type: 'template', status: 'sent', body: `NISTULA TASK #TASKA1\nApartment 06 · ${FIRST} · 2 towels\nReply DONE TASKA1 when finished.` },
+    { conversationId: null, direction: 'out', sender: 'system', type: 'template', status: 'sent', body: `DRAFT #DRFTA1 for ${FIRST} (instay)\n---\n${FIRST}, your villa is ready\n---\nReply: OK DRFTA1` },
   ]);
   await db.insert(schema.guestFacts).values({ guestId, kind: 'preference', content: `${FIRST} loves early check-in` });
 
@@ -102,8 +108,12 @@ async function seedGuest(): Promise<string> {
   await db.insert(schema.phoneWindows).values({ phone: PHONE, lastInboundAt: new Date() });
 
   await db.insert(schema.rawEvents).values([
-    { source: 'whatsapp', eventType: 'message', payload: { entry: [{ changes: [{ value: { contacts: [{ wa_id: DIGITS }], messages: [{ from: DIGITS, text: { body: `${FIRST} secret text` } }] } }] }] } },
+    // Meta puts the guest's DISPLAY NAME at contacts[].profile.name — the leaking
+    // field the blocker missed (name is not a phone and not a 'body' key).
+    { source: 'whatsapp', eventType: 'message', payload: { entry: [{ changes: [{ value: { contacts: [{ wa_id: DIGITS, profile: { name: `${FIRST} ${LAST}` } }], messages: [{ from: DIGITS, text: { body: `${FIRST} secret text` } }] } }] }] } },
     { source: 'whatsapp', eventType: 'status', payload: { entry: [{ changes: [{ value: { statuses: [{ recipient_id: DIGITS, status: 'read' }] } }] }] } },
+    // A shared-location message: name/address also carry identity outside 'body'.
+    { source: 'whatsapp', eventType: 'message', payload: { entry: [{ changes: [{ value: { messages: [{ from: DIGITS, type: 'location', location: { name: `${FIRST} villa`, address: `${LAST} Road, Assagao` } }] } }] }] } },
     { source: 'system', eventType: 'guardrail', processed: true, payload: { rule: 'price_integrity', action: 'blocked', draftHash: 'abc123', draft: `draft for ${FIRST}`, guestPhone: PHONE, details: {} } },
     { source: 'ezee', eventType: 'Bookings', payload: { Reservations: [{ Mobile: DIGITS, Name: FIRST }] } },
   ]);
@@ -161,10 +171,11 @@ describe('eraseGuestByPhone', () => {
     const report = await eraseGuestByPhone(db, PHONE, { confirm: false });
     expect(report).not.toBeNull();
     expect(report!.dryRun).toBe(true);
-    expect(report!.tables.messages).toBe(2);
+    expect(report!.tables.messages).toBe(3);
     expect(report!.tables.guest_facts).toBe(1);
     expect(report!.tables.tasks).toBe(2);
-    expect(report!.tables.raw_events_whatsapp).toBe(2);
+    expect(report!.tables.staff_card_messages).toBe(2);
+    expect(report!.tables.raw_events_whatsapp).toBe(3);
     expect(report!.tables.raw_events_system).toBe(1);
     // Nothing was written — the guest is still findable by phone with their name.
     const [g] = await db.select().from(schema.guests).where(eq(schema.guests.phone, PHONE));
@@ -213,6 +224,11 @@ describe('eraseGuestByPhone', () => {
     expect(tasks[0]).toMatchObject({ guestId: null, conversationId: null, bookingId: null, summary: '[erased]', detail: null });
     const sysTask = await db.select().from(schema.tasks).where(eq(schema.tasks.shortId, 'TASKB2'));
     expect(sysTask[0]).toMatchObject({ guestId: null, summary: '[erased]' });
+
+    // Staff/ops card copies (conversation_id=null, attributed by #shortId) scrubbed.
+    const cards = await db.select().from(schema.messages).where(sql`conversation_id is null and sender = 'system'`);
+    expect(cards).toHaveLength(2);
+    expect(cards.every((c) => c.body === '[erased]')).toBe(true);
 
     // System telemetry KEEPS its aggregate history, blanks only the guest keys.
     const [sysEvent] = await db
