@@ -140,8 +140,13 @@ export async function buildHarness(): Promise<Harness> {
   // converse once per tool round; script() replaces the queue so a turn that
   // called fewer times than scripted cannot leak rounds into the next.
   let scriptQueue: ConverseResult[] = [];
-  const converse: ConverseFn = async (_input: ConverseInput) => {
+  const converse: ConverseFn = async (input: ConverseInput) => {
     const next = scriptQueue.shift();
+    if (process.env.ACC_DEBUG === '1') {
+      const lastUser = [...input.messages].reverse().find((m) => m.role === 'user');
+      const body = typeof lastUser?.content === 'string' ? lastUser.content.slice(-60) : '[blocks]';
+      process.stderr.write(`\nCONVERSE queue=${scriptQueue.length} scripted=${next !== undefined} last="${body}"\n`);
+    }
     return next ?? txt('(unscripted turn — the harness registered no model round)');
   };
 
@@ -260,6 +265,10 @@ export async function buildHarness(): Promise<Harness> {
       await db.execute(TRUNCATE);
       sends.length = 0;
       scriptQueue = [];
+      // raw_events is truncated here, so the ingest counter must reset with it —
+      // otherwise waitIngested waits for a cumulative count the fresh table can
+      // never reach (S3 timed out on exactly this).
+      postedCount = 0;
     },
 
     script(...rounds) {
