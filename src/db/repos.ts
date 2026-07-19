@@ -5,6 +5,7 @@
  */
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Db, DbLike } from './client.js';
+import { nowIST } from '../lib/time.js';
 import { conversations, costEvents, guests, messages, rawEvents } from './schema.js';
 
 export type Guest = typeof guests.$inferSelect;
@@ -556,13 +557,22 @@ export async function getConversationTurnContext(
     .innerJoin(guests, eq(guests.id, conversations.guestId))
     .where(eq(conversations.id, conversationId));
   if (row === undefined) return null;
+  // WHY the turn clock may be the FAKE clock: FAKE_NOW_IST is the sanctioned
+  // dev/test clock (config boot-REFUSES it in production, §3.7), but the turn's
+  // own "now" is `now()` read from the DB — so without this the hottest path (the
+  // whole conversation turn: night/day escalation, cost-day rollover, stage-by-
+  // date, the 24h window) silently ignores it, and a CH-19 acceptance replay
+  // could not drive time through the REAL worker. Production is UNCHANGED: the
+  // env var is never set there, so dbNow stays the DB clock exactly as before.
+  const fake = process.env.FAKE_NOW_IST;
+  const usingFake = fake !== undefined && fake.trim() !== '';
   return {
     conversation: row.conversation,
     guestPhone: row.guestPhone,
     guestName: row.guestFirstName ?? row.guestProfileName,
     registerPref: row.registerPref,
     langPref: row.langPref,
-    dbNow: row.dbNow,
+    dbNow: usingFake ? nowIST() : row.dbNow,
   };
 }
 

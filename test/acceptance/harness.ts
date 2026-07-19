@@ -40,7 +40,7 @@ import { runSender } from '../../src/lifecycle/sender.js';
 import { runSlaNudger } from '../../src/staff/sla.js';
 import { runMorningDigest } from '../../src/staff/digest.js';
 import { isStaffPhone } from '../../src/staff/roster.js';
-import { istCalendarDay, nowIST } from '../../src/lib/time.js';
+import { atISTHour, istCalendarDay, nowIST, shiftDay } from '../../src/lib/time.js';
 import { createWaClient } from '../../src/wa/client.js';
 import { createTestBoss, waitUntil, TEST_URL } from '../helpers/boss.js';
 import { buildWaApp, signBody } from '../helpers/wa.js';
@@ -92,6 +92,16 @@ export interface Harness {
   simulateHumanReply(phone: string, text: string): Promise<{ status: number }>;
   /** POST a raw smb_message_echoes webhook (S4's staff→staff no-op check). */
   echo(recipientPhone: string, body: string, opts?: { wamid?: string }): Promise<void>;
+  /**
+   * Set the business clock to the NEXT IST HH:MM at or after real-now. This lands
+   * in the requested hour-band (S4 day 12:15, S5 night 23:05) AND stays inside
+   * (real-now, real-now+24h) — so a message stamped at real-now is still both
+   * "old" (debounce processes it) and inside the 24h window (the reply sends),
+   * whatever wall-clock hour the suite happens to run at.
+   */
+  setClockAtHour(hhmm: string): void;
+  /** Clear the business clock back to real time. */
+  clearClock(): void;
   close(): Promise<void>;
 }
 
@@ -269,6 +279,22 @@ export async function buildHarness(): Promise<Harness> {
       // otherwise waitIngested waits for a cumulative count the fresh table can
       // never reach (S3 timed out on exactly this).
       postedCount = 0;
+      // A clock a prior scenario set must never leak into the next.
+      delete process.env.FAKE_NOW_IST;
+    },
+
+    setClockAtHour(hhmm) {
+      const realNow = new Date();
+      const todayAt = atISTHour(realNow, hhmm);
+      const day =
+        todayAt.getTime() >= realNow.getTime()
+          ? istCalendarDay(realNow)
+          : shiftDay(istCalendarDay(realNow), 1);
+      process.env.FAKE_NOW_IST = `${day}T${hhmm}`;
+    },
+
+    clearClock() {
+      delete process.env.FAKE_NOW_IST;
     },
 
     script(...rounds) {

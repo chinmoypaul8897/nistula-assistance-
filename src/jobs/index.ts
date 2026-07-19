@@ -947,7 +947,12 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
   const takeoverDeps = {
     db: deps.db,
     log: deps.log,
-    now: () => new Date(),
+    // nowIST() not new Date(): the human-active TTL is judged against the turn's
+    // dbNow, which honours FAKE_NOW_IST (getConversationTurnContext) — so a
+    // real-clock TTL would read as expired under a dev/test clock hours ahead,
+    // and the AI would wrongly resume mid-takeover in an acceptance replay.
+    // Identical in production (FAKE_NOW is boot-refused there, §3.7).
+    now: () => nowIST(),
     cancelPending,
   };
   const coexistence: Jobs['coexistence'] = {
