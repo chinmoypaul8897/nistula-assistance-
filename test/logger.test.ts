@@ -1,6 +1,16 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { createLogger, loggableBody, summarizeError } from '../src/lib/logger.js';
+
+/** Every string value in a nested object (the fixture's sentinels). */
+function stringValues(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(stringValues);
+  if (value !== null && typeof value === 'object') return Object.values(value).flatMap(stringValues);
+  return [];
+}
 
 describe('summarizeError (CH-02 — §3.3: exception text without payload)', () => {
   it('strips the drizzle params tail that embeds guest phone and body', () => {
@@ -79,6 +89,24 @@ describe('createLogger redaction (CH-00 security box)', () => {
     ]) {
       expect(out).not.toContain(secret);
     }
+  });
+
+  it('leaks no secret from the standalone secrets-shaped fixture (CH-18a-1)', () => {
+    vi.stubEnv('LOG_LEVEL', 'info');
+    const fixture = JSON.parse(
+      readFileSync(fileURLToPath(new URL('./fixtures/secrets-shaped.json', import.meta.url)), 'utf8'),
+    ) as Record<string, unknown>;
+    const { logger, output } = captureLogger();
+    logger.info(fixture, 'boot config'); // logged WHOLESALE, the real risk shape
+    const out = output();
+    // Every SENTINEL-* value (all secret-shaped keys, both spellings, top + one
+    // level deep + req.headers.authorization) must be gone.
+    const sentinels = stringValues(fixture).filter((v) => v.startsWith('SENTINEL'));
+    expect(sentinels.length).toBeGreaterThan(30); // the fixture is comprehensive
+    for (const secret of sentinels) expect(out).not.toContain(secret);
+    // Redaction is SELECTIVE — a non-secret field still logs.
+    expect(out).toContain('[redacted]');
+    expect(out).toContain('VISIBLE-not-a-secret');
   });
 
   it('respects LOG_LEVEL from the environment', () => {
