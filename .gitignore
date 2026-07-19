@@ -11,7 +11,11 @@ node_modules/
 dist/
 
 # ── Database dumps / backups ──
+# *.dump = the decrypted restore-drill output; backups/ + *.age = the encrypted
+# backup artifacts (age-encrypted, but a full-DB export never belongs in git).
 *.dump
+backups/
+*.age
 
 # ── Logs & OS noise ──
 *.log

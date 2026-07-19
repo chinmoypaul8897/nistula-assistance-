@@ -377,6 +377,31 @@ completeness is tied to backups ageing out).
 - The pipe resolves only when **both** pg_dump and age exit 0 — a truncated dump
   that "looks fine" is worse than none.
 
+### Provisioning the image (do this BEFORE `BACKUP_ENABLED=1`)
+The default Railway Nixpacks Node image carries **neither** `pg_dump` **nor**
+`age`, so with backups on but the binaries absent every 02:30 run fails with a
+nightly `backup_failed` and produces **zero** off-site backups. The dev-box
+restore drill still passes, so this gap hides unless you provision the *deployed*
+image. Two ways, pick one:
+
+- **Nixpacks (`nixpacks.toml` at repo root, additive — does not clobber the Node
+  build):**
+  ```toml
+  [phases.setup]
+  aptPkgs = ["...", "age", "postgresql-client-16"]
+  ```
+  `"..."` preserves the auto-detected packages. ⚠️ **Confirm `postgresql-client-16`
+  resolves in the base image's apt** (it must match PG16 — an older client refuses
+  a v16 server). If the base image's apt only carries an older client, use the
+  Dockerfile route instead.
+- **Dockerfile (switches Railway to the Docker builder — validate a full deploy
+  first):** `FROM node:22-slim`, then add the PostgreSQL **pgdg** apt repo to
+  install `postgresql-client-16`, plus `age`, then the usual `pnpm install`/build.
+
+Either change alters the build, so **redeploy and run the restore drill against
+the deployed image** (below) before trusting backups — never against a dev box
+only.
+
 ### Restore drill (scripted — run it once before go-live, then periodically)
 Proves the whole chain end-to-end with a **throwaway** key, no S3, no production
 private key. From a box with `pg_dump`, `age`, `age-keygen` and `pg_restore`
@@ -480,6 +505,14 @@ gates that ride on open questions are called out inline.
     number.
 11. **Announce to staff** — **[Paul/ops]** · send the **Staff command sheet**
     (above) to every roster number.
+12. **Enable + prove off-site backups** — **[Paul/ops]** (code **[done]**) ·
+    **provision the image** with `pg_dump` v16 + `age` (see *Provisioning the
+    image*), set `BACKUP_ENABLED=1` + the S3 destination + `BACKUP_AGE_RECIPIENT`
+    (Paul's PUBLIC key) via Secret rotation, redeploy, then **run the restore
+    drill against the deployed image** and confirm one `nistula/backup-*.sql.age`
+    lands in the bucket. Until this passes, disaster recovery is unproven — the
+    nightly job alerts `backup_failed` if the binaries are missing. Leave
+    `BACKUP_ENABLED=0` if you are not ready to provision; backups are fail-closed.
 
 **⚠️ Not ours, but track it — OQ-18:** the website's `/api/debug/booking/create`
 is still **ungated and unauthenticated** and writes to the live PMS. It takes no
@@ -1196,8 +1229,12 @@ we now fail locally, before burning the call, and say why.
 human must pick it up) · `lifecycle_undescribable` (passed the gates but
 `stayView` will not describe it — multi-room, sibling rows, missing dates — so we
 say nothing rather than guess) · `lifecycle_send_failed` · `wa_template_invalid`
-(params Meta would reject: newlines, 4+ spaces, empty) · `wa_template_unsendable`
-(closed window while simulating) · `window_closed_blocked`.
+(params Meta would reject: newlines, 4+ spaces, empty) · `lifecycle_send_deferred`
+(a transient 429/5xx on the POST — re-armed for another attempt) ·
+`window_closed_blocked`. Note a **closed window while simulating** raises **no
+alert at all** — the message is silently deferred (a `scheduled_messages` row,
+skip reason `window_closed`) and retried when the window reopens, or skipped at
+the 36h horizon.
 
 ### Templates
 
