@@ -12,7 +12,7 @@
  *   most guests are mirrored BEFORE they ever message.
  */
 import { and, desc, eq, gte, inArray, or, sql } from 'drizzle-orm';
-import type { Db, DbLike } from './client.js';
+import type { DbLike } from './client.js';
 import { bookingsMirror, guestStays, referenceAttempts } from './schema.js';
 import type { BookingMirror } from './bookings.js';
 
@@ -176,9 +176,16 @@ export async function recordReferenceAttempt(
   await db.insert(referenceAttempts).values(attempt);
 }
 
-/** CH-18 DELETE_GUEST hook — a guest's claim trail is their data too. */
-export async function deleteReferenceAttempts(db: Db, phone: string): Promise<void> {
+/** DELETE_GUEST hook — a guest's claim trail is their data too. DbLike so it
+ * composes inside the single erasure transaction (db/erasure.ts). */
+export async function deleteReferenceAttempts(db: DbLike, phone: string): Promise<void> {
   await db.delete(referenceAttempts).where(eq(referenceAttempts.phone, phone));
+}
+
+/** DELETE_GUEST hook — the guest↔booking links are guest-keyed and go with the
+ * guest (the mirror rows themselves are reservation-keyed and stay, §schema). */
+export async function deleteGuestStays(db: DbLike, guestId: string): Promise<void> {
+  await db.delete(guestStays).where(eq(guestStays.guestId, guestId));
 }
 
 /** Admin/ops read: the mirror rows behind a set of ids (projected by callers). */
