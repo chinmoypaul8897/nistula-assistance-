@@ -77,10 +77,14 @@ async function seedGuest(): Promise<string> {
     { conversationId: convId, direction: 'out', sender: 'ai', type: 'text', status: 'sent', body: 'our reply', waMessageId: 'wamid.ERASE2' },
     // A FAILED send whose error text embeds Meta's echoed phone + name (defect 2).
     { conversationId: convId, direction: 'out', sender: 'ai', type: 'text', status: 'failed', body: 'undelivered', error: `Graph 400 131026: Undeliverable — number ${DIGITS} for ${FIRST}`, waMessageId: 'wamid.ERASE3' },
-    // Staff/ops CARD copies: conversation_id=null, guest name + words + #shortId,
-    // no guest FK (defect 3). Reference the seeded task/draft shortIds.
+    // Staff/ops system messages: conversation_id=null, no guest FK (defect 3 +
+    // the re-review siblings). Two carry a #shortId (task/draft card); two do NOT
+    // (the escalateToOps ops card and the AI ON/OFF reply) — those are only
+    // reachable via the guest's name/phone, which is why the fix keys on identity.
     { conversationId: null, direction: 'out', sender: 'system', type: 'template', status: 'sent', body: `NISTULA TASK #TASKA1\nApartment 06 · ${FIRST} · 2 towels\nReply DONE TASKA1 when finished.` },
     { conversationId: null, direction: 'out', sender: 'system', type: 'template', status: 'sent', body: `DRAFT #DRFTA1 for ${FIRST} (instay)\n---\n${FIRST}, your villa is ready\n---\nReply: OK DRFTA1` },
+    { conversationId: null, direction: 'out', sender: 'system', type: 'text', status: 'sent', body: `A guest asked for a human\nGuest: "${FIRST} here, my num ${DIGITS}"` },
+    { conversationId: null, direction: 'out', sender: 'system', type: 'text', status: 'sent', body: `AI paused for ${FIRST} (…0450). It stays off until you send AI ON 0450.` },
   ]);
   await db.insert(schema.guestFacts).values({ guestId, kind: 'preference', content: `${FIRST} loves early check-in` });
 
@@ -118,10 +122,14 @@ async function seedGuest(): Promise<string> {
     { source: 'ezee', eventType: 'Bookings', payload: { Reservations: [{ Mobile: DIGITS, Name: FIRST }] } },
   ]);
 
-  // The bystander — a message that must survive erasure of the other guest.
+  // The bystander — data that must survive erasure of the other guest, incl. a
+  // staff card ABOUT them (proves the identity-token scrub does not over-erase).
   const [other] = await db.insert(schema.guests).values({ phone: OTHER_PHONE, firstName: 'Keeper' }).returning();
   const [otherConv] = await db.insert(schema.conversations).values({ guestId: other!.id }).returning();
-  await db.insert(schema.messages).values({ conversationId: otherConv!.id, direction: 'in', sender: 'guest', type: 'text', status: 'received', body: 'Keeper stays' });
+  await db.insert(schema.messages).values([
+    { conversationId: otherConv!.id, direction: 'in', sender: 'guest', type: 'text', status: 'received', body: 'Keeper stays' },
+    { conversationId: null, direction: 'out', sender: 'system', type: 'template', status: 'sent', body: `NISTULA TASK #OTHER9\nVilla X · Keeper · lightbulb\nReply DONE OTHER9` },
+  ]);
 
   return guestId;
 }
@@ -174,7 +182,7 @@ describe('eraseGuestByPhone', () => {
     expect(report!.tables.messages).toBe(3);
     expect(report!.tables.guest_facts).toBe(1);
     expect(report!.tables.tasks).toBe(2);
-    expect(report!.tables.staff_card_messages).toBe(2);
+    expect(report!.tables.staff_system_messages).toBe(4);
     expect(report!.tables.raw_events_whatsapp).toBe(3);
     expect(report!.tables.raw_events_system).toBe(1);
     // Nothing was written — the guest is still findable by phone with their name.
@@ -225,10 +233,12 @@ describe('eraseGuestByPhone', () => {
     const sysTask = await db.select().from(schema.tasks).where(eq(schema.tasks.shortId, 'TASKB2'));
     expect(sysTask[0]).toMatchObject({ guestId: null, summary: '[erased]' });
 
-    // Staff/ops card copies (conversation_id=null, attributed by #shortId) scrubbed.
+    // Every conversation_id=null system message about THIS guest is scrubbed —
+    // cards (by shortId), the ops-escalation card and the AI-toggle reply (by
+    // name/phone) — while the bystander's card ("Keeper") is untouched.
     const cards = await db.select().from(schema.messages).where(sql`conversation_id is null and sender = 'system'`);
-    expect(cards).toHaveLength(2);
-    expect(cards.every((c) => c.body === '[erased]')).toBe(true);
+    expect(cards.filter((c) => c.body === '[erased]')).toHaveLength(4);
+    expect(cards.some((c) => c.body?.includes('Keeper'))).toBe(true);
 
     // System telemetry KEEPS its aggregate history, blanks only the guest keys.
     const [sysEvent] = await db
