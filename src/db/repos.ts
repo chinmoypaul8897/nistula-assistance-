@@ -125,6 +125,17 @@ export async function updateRawEvent(
 }
 
 /**
+ * CH-18b: the history import worker re-reads the stored webhook body by id — the
+ * webhook enqueues only the id, keeping the hot path thin. Null if the row is
+ * gone (it never should be for a just-enqueued event, but the worker degrades to
+ * a logged drop rather than a throw).
+ */
+export async function getRawEventById(db: Db, id: string): Promise<RawEvent | null> {
+  const [row] = await db.select().from(rawEvents).where(eq(rawEvents.id, id));
+  return row ?? null;
+}
+
+/**
  * How many guardrail hits landed since `since` (CH-14b morning digest). The
  * telemetry recorder writes each hit as a raw_events row with source='system',
  * event_type='guardrail' (brain/telemetry.ts) — a count, never the drafts (the
