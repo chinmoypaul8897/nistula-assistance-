@@ -8,7 +8,7 @@
  * the returned row tells the winner from the loser, and exactly one winner sends
  * the reply to the guest.
  */
-import { and, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, count, eq, gte, lt, sql } from 'drizzle-orm';
 import type { DbLike } from './client.js';
 import { drafts } from './schema.js';
 import { generateShortId } from './tasks.js';
@@ -25,6 +25,26 @@ export interface NewDraft {
   replyType: DraftReplyType;
   proposedBody: string;
   contextNote: string | null;
+}
+
+/**
+ * How many drafts this conversation produced since `since` — CH-17's daily
+ * turn cap counts drafted turns too. In draft mode a model turn writes a draft,
+ * NOT a sender='ai' message, so counting only AI messages let the cap be
+ * defeated in draft mode (pre-merge review — proxy vs the "AI turns today"
+ * contract). A turn produces one OR the other, never both, so summing them does
+ * not double-count.
+ */
+export async function countDraftsSince(
+  db: DbLike,
+  conversationId: string,
+  since: Date,
+): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(drafts)
+    .where(and(eq(drafts.conversationId, conversationId), gte(drafts.createdAt, since)));
+  return row?.n ?? 0;
 }
 
 /**

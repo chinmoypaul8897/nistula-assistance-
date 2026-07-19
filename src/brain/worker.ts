@@ -39,7 +39,7 @@ import { shouldDraftReply, stageToReplyType } from './draftRouting.js';
 import { isWindowOpen } from './draftGuards.js';
 import type { ReplyType } from '../config.js';
 import type { DbLike } from '../db/client.js';
-import type { Draft, NewDraft } from '../db/drafts.js';
+import { countDraftsSince, type Draft, type NewDraft } from '../db/drafts.js';
 import type { DraftCardInput } from '../staff/draftNotify.js';
 import { guestTextOf, isAffirmative } from './inbound.js';
 import { escalateToOps, recordPolicyOutcome } from './opsEscalation.js';
@@ -162,14 +162,17 @@ export async function processConversation(
     needsHuman: needsHuman(stays, today),
   };
 
-  // CH-17: the per-conversation 60-turns/day cap. Count today's AI replies (IST
+  // CH-17: the per-conversation 60-turns/day cap. Count today's AI turns (IST
   // day) and route the cap through COOL_OFF — no new counter table, and it
-  // recovers automatically tomorrow when the count resets under the cap.
-  const aiTurnsToday = await countAiMessagesSince(
-    deps.db,
-    conversationId,
-    atISTHour(ctx.dbNow, '00:00'),
-  );
+  // recovers automatically tomorrow when the count resets under the cap. A turn
+  // is EITHER a sent AI reply (direct mode) OR a committed draft (draft mode) —
+  // count both, or the cap is defeated in draft mode (pre-merge review).
+  const dayStartIst = atISTHour(ctx.dbNow, '00:00');
+  const [aiRepliesToday, draftsToday] = await Promise.all([
+    countAiMessagesSince(deps.db, conversationId, dayStartIst),
+    countDraftsSince(deps.db, conversationId, dayStartIst),
+  ]);
+  const aiTurnsToday = aiRepliesToday + draftsToday;
   const directive = decidePolicy({
     messages: msgs,
     conversation: ctx.conversation,

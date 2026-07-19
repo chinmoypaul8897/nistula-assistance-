@@ -14,7 +14,7 @@ import type { ConverseFn } from '../src/brain/claude.js';
 import { DEBOUNCE_WINDOWS } from '../src/brain/debounce.js';
 import { PHRASEBOOK } from '../src/brain/prompt.js';
 import { processConversation, type WorkerDeps } from '../src/brain/worker.js';
-import { configureCostMeter, noteSpend, resetCostMeter } from '../src/ops/costMeter.js';
+import { configureCostMeter, costStatus, noteSpend, resetCostMeter } from '../src/ops/costMeter.js';
 import { istCalendarDay } from '../src/lib/time.js';
 import { createWaClient, type WaClientDeps } from '../src/wa/client.js';
 import { noToolDeps, textResult } from './helpers/brain.js';
@@ -169,5 +169,53 @@ describe('per-conversation 60-turns/day cap', () => {
     await processConversation(rig.deps, conversation.id);
 
     expect(rig.calls()).toBe(1); // under the cap ⇒ the model runs
+  });
+
+  it('counts DRAFTED turns too — a turn is a sent reply OR a draft (pre-merge review fix)', async () => {
+    const { conversation } = await seedConversation(db, '+917700900805');
+    // 30 delivered AI replies + 30 drafts today = 60 turns, even though NEITHER
+    // count alone reaches 60. In draft mode a turn writes a draft, not an ai
+    // message — counting only ai messages let the cap be defeated.
+    for (let i = 0; i < 30; i++) {
+      await seedOutboundMessage(db, conversation.id, 'ai', `reply ${i}`, 1);
+    }
+    for (let i = 0; i < 30; i++) {
+      await db.insert(schema.drafts).values({
+        conversationId: conversation.id,
+        shortId: `DFT${String(i).padStart(3, '0')}`,
+        replyType: 'presales',
+        proposedBody: 'body',
+        status: 'pending',
+      });
+    }
+    await seedGuestMessage(db, conversation.id, 'one more', 20);
+    const rig = makeRig();
+
+    await processConversation(rig.deps, conversation.id);
+
+    expect(rig.calls()).toBe(0); // 30 + 30 = 60 ⇒ capped
+    expect(await aiBodies(conversation.id)).toContain(PHRASEBOOK.coolOff);
+  });
+});
+
+describe('cost meter is fed by the REAL turn path', () => {
+  it('a live turn with token usage advances costStatus (recordUsage -> noteSpend)', async () => {
+    const { conversation } = await seedConversation(db, '+917700900806');
+    await seedGuestMessage(db, conversation.id, 'hello', 20);
+    const rig = makeRig();
+    // A model turn that reports real token usage.
+    rig.deps.converse = (async () =>
+      textResult('hi there', {
+        inputTokens: 10_000,
+        outputTokens: 10_000,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      })) as WorkerDeps['converse'];
+
+    const before = costStatus(istCalendarDay(new Date())).total;
+    await processConversation(rig.deps, conversation.id);
+    const after = costStatus(istCalendarDay(new Date())).total;
+
+    expect(after).toBeGreaterThan(before); // the meter's data feed actually works end to end
   });
 });

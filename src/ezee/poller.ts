@@ -81,10 +81,6 @@ export function createEzeePoller(deps: EzeePollerDeps): EzeePoller {
     consecutiveFailures = 0;
     transientAlerted = false;
     authAlerted = false;
-    // CH-17: a clean cycle (incl. an EMPTY one — the poller ran, eZee had
-    // nothing) is the "poller last success" heartbeat the watchdog reads. A
-    // failed/auth-failed cycle deliberately does NOT beat.
-    noteHeartbeat('poller');
   }
 
   function noteTransientFailure(context: string, detail: Record<string, unknown>): void {
@@ -275,6 +271,13 @@ export function createEzeePoller(deps: EzeePollerDeps): EzeePoller {
   }
 
   async function runPoll(): Promise<void> {
+    // CH-17 (pre-merge review fix): beat the watchdog heartbeat on cron RUN, NOT
+    // on eZee SUCCESS. The heartbeat answers "is our poll cron alive" — a wedged
+    // or unscheduled cron stops beating and IS caught. It must NOT flip on an
+    // eZee OUTAGE (a third party down): beating only on success inverted internal
+    // health into a false dead-man ping + a false ops page on every routine eZee
+    // blip. eZee reachability has its OWN ladder (ezee_poll_failing, 5 in a row).
+    noteHeartbeat('poller');
     try {
       await runPollCycle();
     } catch (error) {

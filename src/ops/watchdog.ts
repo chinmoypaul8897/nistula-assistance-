@@ -20,7 +20,7 @@
  */
 import { http } from '../lib/http.js';
 import { atISTHour, nowIST } from '../lib/time.js';
-import { lastMessageAt } from '../db/repos.js';
+import { lastGuestInboundAt, lastGuestReplyDeliveredAt } from '../db/repos.js';
 import type { Db } from '../db/client.js';
 import { alertOps, type AlertLogger } from './alerts.js';
 import { isHealthy, probeHealth, unhealthyReasons, type HealthReport } from './health.js';
@@ -100,9 +100,11 @@ async function checkQuietChannel(deps: WatchdogDeps, now: Date): Promise<boolean
   // 08:00 < 23:00, so no midnight wrap — a plain range check.
   if (nowMs < startMs || nowMs >= endMs) return false;
 
+  // Guest-facing only: a delivered guest reply proves the Graph link, a guest
+  // inbound proves the webhook — system ops cards prove neither (pre-merge fix).
   const [lastIn, lastOut] = await Promise.all([
-    (deps.lastInboundAt ?? (() => lastMessageAt(deps.db, 'in')))(),
-    (deps.lastOutboundAt ?? (() => lastMessageAt(deps.db, 'out')))(),
+    (deps.lastInboundAt ?? (() => lastGuestInboundAt(deps.db)))(),
+    (deps.lastOutboundAt ?? (() => lastGuestReplyDeliveredAt(deps.db)))(),
   ]);
   if (!isStale(lastIn, nowMs) || !isStale(lastOut, nowMs)) return false;
 

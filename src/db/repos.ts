@@ -163,16 +163,41 @@ export async function countAiMessagesSince(
 }
 
 /**
- * The newest message timestamp in a direction ('in'/'out'), or null if none —
- * CH-17's quiet-channel monitor (both directions stale for 30 min in business
- * hours ⇒ verify the webhook subscription). ::text → Date is safe here: a 30-min
- * staleness check does not need the microsecond precision the cursor guards.
+ * The two GUEST-FACING traffic timestamps CH-17's quiet-channel monitor needs.
+ * ::text → Date is safe here: a 30-min staleness check does not need the
+ * microsecond precision the cursor guards.
+ *
+ * 🚨 Guard by the CONTRACT ("did a message actually flow to/from a GUEST?"), not
+ * the proxy ("does an out row exist?") — pre-merge review DEFECT. Every ops
+ * alert / digest / SLA nudge writes a `direction='out', sender='system',
+ * conversation_id=null` row, committed 'queued' BEFORE the Graph call — so even
+ * a FAILED ops send left a fresh 'out' row that made the pipe look alive and
+ * silenced the very monitor meant to catch a dropped inbound webhook.
  */
-export async function lastMessageAt(db: Db, direction: 'in' | 'out'): Promise<Date | null> {
+export async function lastGuestInboundAt(db: Db): Promise<Date | null> {
   const [row] = await db
     .select({ at: sql<string | null>`max(${messages.createdAt})::text` })
     .from(messages)
-    .where(eq(messages.direction, direction));
+    .where(and(eq(messages.direction, 'in'), eq(messages.sender, 'guest')));
+  return row?.at != null ? new Date(row.at) : null;
+}
+
+/** The newest guest reply we actually DELIVERED (sent/delivered/read) — proof
+ * the Graph link is up. Excludes system ops cards, null-conversation sends, and
+ * 'queued'/'failed' rows (a committed-but-unconfirmed or failed send is NOT
+ * evidence the channel works). */
+export async function lastGuestReplyDeliveredAt(db: Db): Promise<Date | null> {
+  const [row] = await db
+    .select({ at: sql<string | null>`max(${messages.createdAt})::text` })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.direction, 'out'),
+        inArray(messages.sender, ['ai', 'human']),
+        sql`${messages.conversationId} is not null`,
+        inArray(messages.status, ['sent', 'delivered', 'read']),
+      ),
+    );
   return row?.at != null ? new Date(row.at) : null;
 }
 
