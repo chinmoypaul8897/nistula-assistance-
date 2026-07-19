@@ -123,7 +123,11 @@ export async function runMorningDigest(deps: DigestDeps): Promise<DigestRun> {
 
   const day = formatDayDisplay(istCalendarDay(now));
   const summary = buildSummary(run, converted[0]);
-  run.sent = await sendToOps(deps, day, summary);
+  // CH-18c: the summary embeds ONE guest's escalation words (firstConverted) and
+  // that guest's id is in hand, so link the row for durable erasure. The rest of
+  // the digest is anonymous counts; when nothing converted, there is no guest word
+  // in the body and converted[0] is undefined → unlinked, which is correct.
+  run.sent = await sendToOps(deps, day, summary, converted[0]?.guestId ?? undefined);
   deps.log.info?.(
     {
       converted: run.converted,
@@ -160,7 +164,12 @@ function buildSummary(run: DigestRun, firstConverted: Task | undefined): string 
 // senders). Re-exported so existing importers (staff/qualityReport) are unchanged.
 export { capUtf16 } from '../lib/text.js';
 
-async function sendToOps(deps: DigestDeps, day: string, summary: string): Promise<boolean> {
+async function sendToOps(
+  deps: DigestDeps,
+  day: string,
+  summary: string,
+  aboutGuestId: string | undefined,
+): Promise<boolean> {
   if (deps.opsNumbers.length === 0) {
     // Dev's standing state — nobody to send to. The conversion + cards still ran.
     deps.log.info?.({ day }, 'morning digest — no OPS number configured, not sent');
@@ -171,7 +180,7 @@ async function sendToOps(deps: DigestDeps, day: string, summary: string): Promis
     const result = await deps.wa.sendTemplated(
       ops,
       { key: 'digest', params: { day, summary } },
-      { conversationId: null, sender: 'system' },
+      { conversationId: null, sender: 'system', aboutGuestId },
     );
     if (result.ok) sent = true;
   }

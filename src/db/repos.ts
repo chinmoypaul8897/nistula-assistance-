@@ -66,6 +66,17 @@ export async function upsertGuestFromBooking(
   return row;
 }
 
+/** CH-18c: the guest a conversation belongs to — for linking a conversation_id=NULL
+ * ops card (escalateToOps) back to its guest via messages.guest_id. Null if the
+ * conversation is gone. */
+export async function getConversationGuestId(db: Db, conversationId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ guestId: conversations.guestId })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId));
+  return row?.guestId ?? null;
+}
+
 /** The guest's single rolling conversation — created on first contact (§4). */
 export async function getOrCreateConversation(db: Db, guestId: string): Promise<Conversation> {
   const [created] = await db

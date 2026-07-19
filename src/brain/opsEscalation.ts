@@ -3,7 +3,7 @@
  * CH-08 for the ~300-line rule). Real escalate_to_human lands CH-14; until
  * then escalations message OPS_NUMBERS directly through the wa chokepoint.
  */
-import { insertMessage } from '../db/repos.js';
+import { getConversationGuestId, insertMessage } from '../db/repos.js';
 import type { Db } from '../db/client.js';
 import { summarizeError } from '../lib/logger.js';
 import { alertOps } from '../ops/alerts.js';
@@ -78,9 +78,16 @@ export async function escalateToOps(
   // all, the alert log IS the ops channel (CH-02 decision D4 — that is how dev
   // runs today). "Nobody is configured" and "everybody was unreachable" are
   // different facts, and only the second one makes the promise a lie.
+  // CH-18c: the card quotes the guest's own words (guestTextTail) — link it to the
+  // guest so DELETE_GUEST erases it by FK, not by string-matching a paraphrase.
+  const aboutGuestId = (await getConversationGuestId(deps.db, conversationId)) ?? undefined;
   let delivered = deps.opsNumbers.length === 0;
   for (const ops of deps.opsNumbers) {
-    const result = await deps.wa.sendText(ops, card, { conversationId: null, sender: 'system' });
+    const result = await deps.wa.sendText(ops, card, {
+      conversationId: null,
+      sender: 'system',
+      aboutGuestId,
+    });
     if (result.ok) delivered = true;
   }
 

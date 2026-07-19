@@ -31,6 +31,9 @@ export interface DraftCardInput {
   /** The FULL proposed reply. The card shows a flattened, capped PREVIEW of it;
    * the untruncated text lives in drafts.proposed_body and is what OK sends. */
   body: string;
+  /** CH-18c: the guest this reply is for — links the card (which shows the guest's
+   * name + a preview of a reply about them) to messages.guest_id for erasure. */
+  guestId: string | null;
 }
 
 const NAME_MAX = 40;
@@ -69,7 +72,7 @@ export async function notifyDraft(
     const result = await deps.wa.sendTemplated(
       ops,
       { key: 'draft_card', params },
-      { conversationId: null, sender: 'system' },
+      { conversationId: null, sender: 'system', aboutGuestId: input.guestId ?? undefined },
     );
     if (result.ok) {
       delivered = true;

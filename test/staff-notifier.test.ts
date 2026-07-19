@@ -73,7 +73,8 @@ describe('notifyTask — the card', () => {
       // 🚨 conversationId null is what routes windowStateFor to phone_windows.
       // A staff number that is ALSO a guest has two independent windows, and
       // judging a task card by the guest one is the wrong question entirely.
-      { conversationId: null, sender: 'system' },
+      // CH-18c: aboutGuestId links the card to the guest for durable erasure.
+      { conversationId: null, sender: 'system', aboutGuestId: 'g-1' },
     );
   });
 

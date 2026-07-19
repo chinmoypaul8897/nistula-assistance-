@@ -59,7 +59,7 @@
 | CH-18a-1 | Security hardening + guest erasure | ✅ DONE 2026-07-19 — merged `main` (no-ff), tagged `vCH-18a-1` (**1721** tests; DELETE_GUEST one-tx anonymise-in-place + dry-run + residue-sweep contract test, `POST /admin/delete-guest`, 404-when-disabled test, secrets-shaped redaction fixture, rate-limit/cool-off final, audit clean. **3-round pre-merge review RED→fixed each time — all the "conversation_id=null staff-message sibling" class; accepted content residual → CH-18c**. Send/lifecycle TODOs also → CH-18c) | [↓](#ch-18a-1--security-hardening--guest-erasure-delete_guest--done-2026-07-19) |
 | CH-18a-2 | Backups + keep-alive + runbook + go-live | ✅ DONE 2026-07-19 — tagged `vCH-18a-2` (**1744** tests; 30-agent pre-merge review RED → **8 confirmed, all fixed**: `backupExec` pipe-crash DEFECT + backup-cron `unschedule` DEFECT + inert `retryLimit` + runbook phantom alert-kind + image-provisioning gated + `.gitignore`; all off-by-default ops infra) | [↓](#ch-18a-2--encrypted-backups--coexistence-keep-alive--runbook--go-live-checklist--done-2026-07-19) |
 | CH-18b | History import | ✅ DONE 2026-07-19 — tagged `vCH-18b` (**1765** tests; idempotent coexistence history import off a dedicated `wa.history` queue — 5 contract guards [no AI wake · own-timestamp · no window · roster-skip · dedupe], direction from the thread contact, CH-08 summary backfill) | [↓](#ch-18b--coexistence-history-import--done-2026-07-19) |
-| CH-18c | Send-intent reconciliation + poststay anchor (deferred slice) | ⬜ pending — planning-chat to bless; gated on OQ-22/OQ-24 | |
+| CH-18c | Erasure durable-linkage + reconciliation + stale-TODO cleanup (deferred slice) | ✅ DONE 2026-07-19 — tagged `vCH-18c` (**1769** tests; `messages.guest_id` + `aboutGuestId` through 9 conversation_id=NULL writers closes the CH-18a-1 identifier-free-card residual; fail-closed stale-`queued` reconciliation sweep; 3 stale schema TODOs cleared. **Poststay anchor DEFERRED** — verb unresolved + OQ-22 trigger unobserved; OQ-22 corrected) | [↓](#ch-18c--erasure-durable-linkage--reconciliation-sweep--stale-todo-cleanup--done-2026-07-19) |
 | CH-19 | Acceptance — six scenarios | ⬜ pending | |
 
 Update this table (status + entry link) at the end of every session.
@@ -3117,3 +3117,80 @@ found 1 DEFECT + 1 MINOR; the DEFECT was a residual of the first fix (green suit
   the real `importHistory`/`runHistoryImport`/webhook paths against real Postgres.
 
 **Open questions:** none new.
+
+### CH-18c · Erasure durable-linkage + reconciliation sweep + stale-TODO cleanup — DONE 2026-07-19
+
+**Scope:** the deferred slice — three buildable parts (A/B/D) shipped fail-closed; the fourth (the
+poststay anchor, C) DELIBERATELY DEFERRED. `pnpm check` green at **1768** (exit code).
+
+**Part A — erasure DURABLE-LINKAGE (closes the CH-18a-1 accepted residual):**
+- New `messages.guest_id` FK + index (migration 0015). `SendOptions.aboutGuestId` threads through the
+  ONE send chokepoint (`createSendIntent`, `wa/client.ts` + `wa/templateSend.ts`) so every
+  conversation_id=NULL card ABOUT a guest records it.
+- **DELETE_GUEST now erases those cards by FK:** `eq(messages.guestId, guestId)` is the PRIMARY matcher
+  in `staffMsgWhere`; the CH-18a-1 identity string-match stays belt-and-braces for staff INBOUND
+  (`sender='human'`, never routed through createSendIntent, so no guest_id) and any pre-linkage row.
+  Also nulls `raw`/`error` on these cards (a card's raw can carry the guest name in template params).
+- **9 Group-B writers threaded:** task + escalation cards (`task.guestId`), SLA nudge, `escalateToOps`
+  (via new `getConversationGuestId`), draft card (`ctx.conversation.guestId`), AI ON/OFF toggle + DONE
+  ack + unclosable ack + draft OK/EDIT/NO acks.
+- **This CLOSES the residual for single-guest cards** — an identifier-FREE card body (a name-free
+  complaint tail, a paraphrase) is now attributable by FK, which string-matching never could.
+  **Remaining (smaller) residual:** MULTI-guest aggregate rows (the TASKS list, the morning digest)
+  carry several guests in one body with no single owner — still the documented residual.
+- Test: `erasure.test.ts` seeds an identifier-free card linked ONLY by guest_id (+ a bystander's own
+  linked card) and asserts the erased guest's card is scrubbed (body + raw) while the bystander's is
+  untouched — proving the FK path, not the string-match.
+
+**Part B — stale send-intent RECONCILIATION sweep (fail-closed):**
+- `src/wa/sendReconcile.ts` + a 5-min cron. A row stranded in `queued` by a crash between the intent
+  commit and the Graph settle (§3.4) is marked terminally `failed` (verify-before-resend reason) +
+  ops-alerted. **NEVER resends** — a `queued` row may have reached Meta before the crash, so a resend
+  risks a double send; a real resend verb needs a sent/send_failed state model (deliberately out of
+  scope, CH-17 open Q#1). Only `status='queued'` older than 10 min is touched (well past the 20s
+  dispatch timeout, so no race with an in-flight send). Re-points the `wa/client.ts` + `wa/sendFailure.ts`
+  TODOs. Test: `send-reconcile.test.ts` — stale queued → failed; recent queued + settled rows untouched;
+  never a second send-intent row.
+
+**Part D — cleared 3 stale `TODO(CH-18)` markers** in `schema.ts` (guest_stays / guest_facts / tasks —
+CH-18a-1 already deletes/scrubs those).
+
+**Part C — poststay anchor DEFERRED (not built), and this is the disciplined call:**
+- The fix has an UNRESOLVED engineering decision a wrong guess would turn into the signature failure
+  class. The ANCHOR is clear (the FRESH mirror `check_out` read at send time — NOT `row.createdAt`,
+  which is ~booking time ~76d before send_at, so a grace measured from it skips EVERY thank-you). The
+  VERB is not: it may not SKIP on the mutable check_out (the eleventh-instance trap) nor DEFER (starves
+  the batch — poststay has no `stay_over` backstop, and a permanently-deferred row owns the
+  `ORDER BY send_at LIMIT 10` batch for ever). AND the trigger is UNREACHABLE today — **OQ-22: no
+  `Modify` has ever reached the live feed**, so the current plan-age-on-`send_at` rule is correct in
+  practice. Building a defensive fix now would guess the verb against an unobserved trigger.
+- Left as an open question for the planning chat. `sendGuards.ts` TODO refined; **`docs/open-questions.md`
+  OQ-22 CORRECTED** — the earlier "re-anchor on `createdAt`" recommendation was WRONG (it skips every
+  thank-you).
+
+**Decisions made while building:**
+- **Linkage on conversation_id=NULL cards only** (not every guest message) — a guest-thread send is
+  already erased by the conversation scrub, so only the un-attributable cards need the FK; minimal churn.
+- **guest_id predicate PRIMARY, string-match belt-and-braces** — the FK is durable; the string-match
+  still covers staff INBOUND and any pre-linkage row.
+- **Reconciliation marks terminal, NEVER resends** (the plan's explicit rule) — the double-send race is
+  dodged entirely by not resending; ops verifies before any manual resend.
+
+**How to verify:** `pnpm check` (exit code, **1769**) incl. the erasure identifier-free-card test, the
+digest-linkage test, and the reconciliation test. No live over-the-wire needed (erasure is admin-only;
+reconciliation is an internal cron; the linkage only changes what a card row stores).
+
+**🚨 Pre-merge adversarial review (14 agents, 6 lenses → 2 skeptics) — RED → 1 MINOR fixed, re-green at
+1769:**
+- **[MINOR] the morning digest was MISCLASSIFIED as a multi-guest residual.** It actually embeds ONLY
+  `firstConverted`'s escalation words (ONE guest) plus anonymous counts, and that guest's id
+  (`converted[0].guestId`) was in scope — so it is single-guest-attributable, and a name-free overnight
+  complaint would otherwise have survived DELETE_GUEST in an unlinked digest row (a Group-B site I
+  wrongly grouped into the Group-C aggregate residual). **Fixed:** thread
+  `aboutGuestId: converted[0]?.guestId`; corrected the erasure.ts residual comments (only the TASKS list
+  is the multi-guest residual now); the digest test asserts the row links the escalated guest.
+- The other 3 raw findings were verified **FALSE** (no other missed writer; no over-erase / wrong-link;
+  no reconciliation race with an in-flight send).
+
+**Open questions:** the poststay anchor (OQ-22) stays open for the planning chat — its verb is undecided
+and its trigger unobserved.

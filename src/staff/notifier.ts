@@ -107,7 +107,8 @@ export async function notifyTask(
   const result = await deps.wa.sendTemplated(
     task.assignedPhone,
     { key: 'task_card', params },
-    { conversationId: null, sender: 'system' },
+    // CH-18c: the card names the guest, so link it for durable erasure.
+    { conversationId: null, sender: 'system', aboutGuestId: task.guestId ?? undefined },
   );
 
   if (!result.ok) {
@@ -167,7 +168,8 @@ export async function notifyEscalation(
   const result = await deps.wa.sendTemplated(
     task.assignedPhone,
     { key: 'escalation_card', params },
-    { conversationId: null, sender: 'system' },
+    // CH-18c: carries the guest's own words in `detail` — link for durable erasure.
+    { conversationId: null, sender: 'system', aboutGuestId: task.guestId ?? undefined },
   );
   if (!result.ok) {
     // No status flip (see the contract note above): the task stays `open`.

@@ -171,7 +171,13 @@ export function createTemplateSender(ctx: TemplateSenderContext) {
   async function sendTemplated(
     toE164: string,
     send: TemplatedSend,
-    opts: { conversationId: string | null; sender: 'ai' | 'human' | 'system' },
+    // CH-18c: aboutGuestId threads through to createSendIntent (messages.guest_id)
+    // for a conversation_id=NULL card about a guest; planTemplatedSend ignores it.
+    opts: {
+      conversationId: string | null;
+      sender: 'ai' | 'human' | 'system';
+      aboutGuestId?: string;
+    },
   ) {
     const planned = await planTemplatedSend(toE164, send, opts);
     if (!planned.ok) {

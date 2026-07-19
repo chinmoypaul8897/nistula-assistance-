@@ -37,11 +37,20 @@ let db: Db;
 let guestId: string;
 let conversationId: string;
 
-const carded: { to: string; key: string; params: Record<string, string> }[] = [];
+const carded: {
+  to: string;
+  key: string;
+  params: Record<string, string>;
+  opts?: { conversationId: string | null; sender: string; aboutGuestId?: string };
+}[] = [];
 const wa = {
   sendTemplated: vi.fn(
-    async (to: string, msg: { key: string; params: Record<string, string> }) => {
-      carded.push({ to, key: msg.key, params: msg.params });
+    async (
+      to: string,
+      msg: { key: string; params: Record<string, string> },
+      opts?: { conversationId: string | null; sender: string; aboutGuestId?: string },
+    ) => {
+      carded.push({ to, key: msg.key, params: msg.params, opts });
       return { ok: true as const, messageId: 'm', waMessageId: 'wamid.y', usedTemplate: false };
     },
   ),
@@ -117,6 +126,17 @@ describe('night_queue wakes into a live escalation at 10:00 (S5)', () => {
     expect(woke?.slaDeadline.getTime()).toBeGreaterThan(NOW.getTime());
     // The now-on-duty front desk gets its FIRST card (an escalation card).
     expect(carded.find((c) => c.key === 'escalation_card')?.to).toBe(LEAD);
+  });
+
+  it('CH-18c: links the digest row to the escalated guest for durable erasure', async () => {
+    // The digest body embeds firstConverted's escalation words — a single guest —
+    // so the row must carry that guest's guest_id (not be left an "aggregate").
+    await seed('night_queue', { slaDeadline: NOW });
+    await runMorningDigest(deps());
+    const digest = carded.find((c) => c.key === 'digest');
+    expect(digest).toBeDefined();
+    expect(digest!.opts?.conversationId).toBeNull();
+    expect(digest!.opts?.aboutGuestId).toBe(guestId);
   });
 
   it('is idempotent — a second run converts nothing', async () => {

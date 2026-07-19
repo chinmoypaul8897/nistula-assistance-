@@ -159,6 +159,12 @@ export const messages = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     conversationId: uuid('conversation_id').references(() => conversations.id),
+    // CH-18c: a DURABLE erasure link for the conversation_id=NULL staff/ops cards
+    // that are ABOUT a guest but not on the guest's thread (task/escalation/draft
+    // cards, the AI ON/OFF reply, DONE acks). DELETE_GUEST keys off this FK instead
+    // of best-effort identity string-matching, so an identifier-free card body (a
+    // name-free complaint tail, a paraphrase) is still attributable and erasable.
+    guestId: uuid('guest_id').references(() => guests.id),
     waMessageId: text('wa_message_id').unique(), // nullable for internal sends
     direction: messageDirectionEnum('direction').notNull(),
     sender: messageSenderEnum('sender').notNull(),
@@ -174,6 +180,8 @@ export const messages = pgTable(
   (table) => [
     // §4 index list: transcript reads walk a conversation in time order.
     index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+    // CH-18c: DELETE_GUEST scans conversation_id=NULL cards by their guest link.
+    index('messages_guest_idx').on(table.guestId),
   ],
 );
 
@@ -262,7 +270,7 @@ export const referenceAttemptOutcomeEnum = pgEnum('reference_attempt_outcome', [
 
 /** Link table guest↔booking (§4, CH-10) — phone match now; reference_in_chat
  * and manual arrive with CH-11/admin. Real relations, so real FKs.
- * TODO(CH-18): DELETE_GUEST must erase a guest's rows here (guest-keyed). */
+ * DELETE_GUEST deletes a guest's rows here (deleteGuestStays; CH-18a-1). */
 export const guestStays = pgTable(
   'guest_stays',
   {
@@ -286,7 +294,7 @@ export const guestStays = pgTable(
 /** Long-term memory, structured (§4, CH-09) — one durable service-relevant
  * fact per row, saved sparingly via remember_fact. Content is screened at
  * save time (factScreens.ts) and rendered as untrusted DATA in block [5].
- * TODO(CH-18): DELETE_GUEST erases a guest's rows here (deleteGuestFacts). */
+ * DELETE_GUEST deletes a guest's rows here (deleteGuestFacts; CH-18a-1). */
 export const guestFacts = pgTable(
   'guest_facts',
   {
@@ -462,8 +470,9 @@ export const taskStatusEnum = pgEnum('task_status', [
  * of where we ACTUALLY sent someone, which is an audit fact. Re-reading it later
  * would answer a different question (where eZee thinks they are NOW).
  *
- * 🚨 TODO(CH-18): DELETE_GUEST must reach `summary`/`detail` here, and this is
- * NOT the same erasure as guest_facts'. §4 says "tasks retained unlinked", which
+ * 🚨 DELETE_GUEST scrubs `summary`/`detail` here AND unlinks (guest/conv/booking
+ * → null) — CH-18a-1. This is NOT the same erasure as guest_facts'. §4 says "tasks
+ * retained unlinked", which
  * was written when a task was assumed to be a bare work item — but `summary` is
  * the GUEST'S OWN WORDS, and it is deliberately NOT screened for sensitive
  * content the way guest_facts is (factScreens refuses "allergic to shellfish";
