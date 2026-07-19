@@ -30,9 +30,11 @@ import type { Db } from '../db/client.js';
 import {
   getOrCreateConversation,
   insertMessage,
+  markConversationHistoryProcessed,
   upsertGuestByPhone,
   type NewMessage,
 } from '../db/repos.js';
+import { resetSummaryIfBackfilledBehind } from '../db/summaries.js';
 import { summarizeError } from '../lib/logger.js';
 import { normalizePhone } from '../lib/phone.js';
 import { mapInboundType, mediaIdOf } from './messageShape.js';
@@ -95,6 +97,10 @@ export async function importHistory(
     conversationsTouched: 0,
   };
   const touched = new Set<string>();
+  // The oldest NEWLY-inserted history time per conversation — so the summary
+  // backfill can rewind a cursor a later out-of-order chunk landed messages behind.
+  const oldestNew = new Map<string, Date>();
+  const nowMs = Date.now();
   const chunks = Array.isArray(value.history) ? value.history : [];
   for (const chunk of chunks) {
     const threads = Array.isArray(chunk?.threads) ? chunk.threads : [];
@@ -118,7 +124,7 @@ export async function importHistory(
       const messages = Array.isArray(thread?.messages) ? thread.messages : [];
       const rows: ImportRow[] = [];
       for (const message of messages) {
-        const row = toImportRow(message, contactPhone);
+        const row = toImportRow(message, contactPhone, nowMs);
         if (row === null) report.skippedMessages += 1;
         else rows.push(row);
       }
@@ -128,15 +134,18 @@ export async function importHistory(
       }
 
       // Guard 4 already passed (not a roster number). Link by phone (§8 step 5).
+      // Array.isArray like every other read of this PROVISIONAL value — a non-array
+      // `contacts` (`{}`, a string) must not throw `.find is not a function`.
+      const contacts = Array.isArray(value.contacts) ? value.contacts : [];
       const profileName =
         typeof thread.id === 'string'
-          ? value.contacts?.find((c) => c.wa_id === thread.id)?.profile?.name
+          ? contacts.find((c) => c.wa_id === thread.id)?.profile?.name
           : undefined;
       const guest = await upsertGuestByPhone(deps.db, contactPhone, profileName);
       const conversation = await getOrCreateConversation(deps.db, guest.id);
-      let newInThread = 0;
+      let newestNew: { id: string; createdAt: Date } | null = null;
       for (const row of rows) {
-        const { isNew } = await insertMessage(deps.db, {
+        const { message, isNew } = await insertMessage(deps.db, {
           conversationId: conversation.id,
           waMessageId: row.waMessageId,
           direction: row.direction,
@@ -149,16 +158,27 @@ export async function importHistory(
           // Guard 2: the message's OWN historical time, never our receipt time.
           createdAt: row.createdAt,
         });
-        if (isNew) {
+        if (isNew && message !== null) {
           report.importedMessages += 1;
-          newInThread += 1;
+          if (newestNew === null || isAfter(row.createdAt, message.id, newestNew)) {
+            newestNew = { id: message.id, createdAt: row.createdAt };
+          }
+          const prev = oldestNew.get(conversation.id);
+          if (prev === undefined || row.createdAt < prev) oldestNew.set(conversation.id, row.createdAt);
         } else {
           report.duplicateMessages += 1;
         }
       }
-      // Only re-summarise a thread that actually gained messages — an all-duplicate
-      // redelivery buys no model call.
-      if (newInThread > 0) touched.add(conversation.id);
+      // GUARD 1 — the SIBLING path. Mark imported history as ALREADY PROCESSED so
+      // the always-on every-2-min stale-conversation sweeper never wakes the brain
+      // on it (a history message is to remember, not to answer). Forward-only, and
+      // `newest` is an OLD imported time, so a live conversation's cursor never
+      // moves onto a genuine unanswered message; a fresh conversation's null cursor
+      // is set past all imported rows.
+      if (newestNew !== null) {
+        await markConversationHistoryProcessed(deps.db, conversation.id, newestNew);
+        touched.add(conversation.id);
+      }
     }
   }
 
@@ -169,6 +189,15 @@ export async function importHistory(
   if (deps.enqueueSummarise !== undefined) {
     for (const conversationId of touched) {
       try {
+        // Dedupe keeps the MESSAGES table order-safe, but the summariser cursor is
+        // FORWARD-ONLY: a chunk that lands messages OLDER than an already-advanced
+        // cursor (out-of-order delivery across jobs) would leave them deemed
+        // "covered" yet never compacted — invisible to the model for ever. Rewind
+        // the cursor so the next pass re-covers from the earliest row.
+        const oldest = oldestNew.get(conversationId);
+        if (oldest !== undefined) {
+          await resetSummaryIfBackfilledBehind(deps.db, conversationId, oldest);
+        }
         await deps.enqueueSummarise(conversationId);
       } catch (error) {
         deps.log.warn(
@@ -187,10 +216,10 @@ export async function importHistory(
  * timestamp ⇒ guard 2 (never stamp now()); no normalisable `from` ⇒ direction is
  * unknowable and a misattributed row would corrupt the summary and erasure match.
  */
-function toImportRow(message: WaInboundMessage, contactPhone: string): ImportRow | null {
+function toImportRow(message: WaInboundMessage, contactPhone: string, nowMs: number): ImportRow | null {
   const waMessageId = typeof message?.id === 'string' ? message.id : null;
   if (waMessageId === null) return null;
-  const createdAt = historyTimestamp(message?.timestamp);
+  const createdAt = historyTimestamp(message?.timestamp, nowMs);
   if (createdAt === null) return null;
   const from = typeof message?.from === 'string' ? normalizePhone(message.from) : null;
   if (from === null) return null;
@@ -212,13 +241,30 @@ function toImportRow(message: WaInboundMessage, contactPhone: string): ImportRow
   };
 }
 
+/** (createdAt, id) strictly after the current newest — the same ordering the
+ * process cursor uses; Postgres uuid order matches lowercase-hex text order. */
+function isAfter(createdAt: Date, id: string, cur: { id: string; createdAt: Date }): boolean {
+  const t = createdAt.getTime();
+  const ct = cur.createdAt.getTime();
+  return t > ct || (t === ct && id > cur.id);
+}
+
+// A real WhatsApp history timestamp is unix SECONDS on or after 2000-01-01.
+const MIN_HISTORY_MS = 946_684_800_000;
+
 /**
  * STRICT unix-seconds parse — unlike `inboundTimestamp`, which falls back to
- * now(). For history, a missing/garbled timestamp means SKIP (guard 2), because
- * a history row dated now() would look live.
+ * now(). Returns null (⇒ a guard-2 SKIP, never a throw, never a stored row) for
+ * anything that is not a plausible past history time. The bound is load-bearing:
+ * without it a WRONG-UNIT value (ms/µs — the classic seconds-vs-ms slip) either
+ * overflows to an Invalid Date whose insert THROWS and poisons the whole batch,
+ * or (for ~1.7e12 ms) stores a valid row dated ~year 57000 that sorts as the
+ * NEWEST message and poisons the transcript window. A future time is not history.
  */
-function historyTimestamp(raw: string | undefined): Date | null {
+function historyTimestamp(raw: string | undefined, nowMs: number): Date | null {
   const seconds = Number(raw);
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
-  return new Date(seconds * 1000);
+  const ms = seconds * 1000;
+  if (!Number.isFinite(ms) || ms < MIN_HISTORY_MS || ms > nowMs) return null;
+  return new Date(ms);
 }

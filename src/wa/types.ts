@@ -41,7 +41,9 @@ export interface WaValue {
 
 /** One delivery chunk of the history sync. `metadata.progress` (0–100) and
  * `chunk_order` let ops see how far the import has got; we read neither for
- * correctness — dedupe on `wa_message_id` makes any order/redelivery safe. */
+ * correctness — dedupe on `wa_message_id` keeps the MESSAGES table order-safe on
+ * any redelivery, and an out-of-order chunk that lands rows behind the summary
+ * cursor is re-covered by a cursor rewind (wa/history.ts). */
 export interface WaHistoryChunk {
   metadata?: { phase?: number; chunk_order?: number; progress?: number };
   threads?: WaHistoryThread[];

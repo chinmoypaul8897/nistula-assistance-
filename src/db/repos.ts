@@ -136,6 +136,37 @@ export async function getRawEventById(db: Db, id: string): Promise<RawEvent | nu
 }
 
 /**
+ * CH-18b: mark a conversation's imported history as ALREADY PROCESSED so the
+ * every-2-min stale-conversation sweeper never wakes the brain on it (Guard 1 —
+ * imported history is to remember, not to answer). Advances the process pointer to
+ * the NEWEST IMPORTED message, FORWARD-ONLY: it moves only when the current cursor
+ * is null or older than `newest`. That is what keeps it safe — a LIVE conversation
+ * already holds a cursor past the (older) imported rows, so `newest` is behind it
+ * and the pointer never moves onto a genuine unanswered live message; a fresh
+ * import-only conversation gets its null cursor set. `newest` is the newest row
+ * this run actually inserted (an all-duplicate redelivery already advanced it).
+ */
+export async function markConversationHistoryProcessed(
+  db: Db,
+  conversationId: string,
+  newest: { id: string; createdAt: Date },
+): Promise<void> {
+  await db.execute(sql`
+    UPDATE conversations c
+    SET last_processed_message_id = ${newest.id}, updated_at = now()
+    WHERE c.id = ${conversationId}
+      AND (
+        c.last_processed_message_id IS NULL
+        OR NOT EXISTS (
+          SELECT 1 FROM messages p
+          WHERE p.id = c.last_processed_message_id
+            AND (p.created_at, p.id) >= (${newest.createdAt.toISOString()}::timestamptz, ${newest.id}::uuid)
+        )
+      )
+  `);
+}
+
+/**
  * How many guardrail hits landed since `since` (CH-14b morning digest). The
  * telemetry recorder writes each hit as a raw_events row with source='system',
  * event_type='guardrail' (brain/telemetry.ts) — a count, never the drafts (the

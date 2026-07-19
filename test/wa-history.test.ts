@@ -19,7 +19,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
-import { insertRawEvent } from '../src/db/repos.js';
+import { findStaleConversations, insertRawEvent } from '../src/db/repos.js';
 import { runHistoryImport } from '../src/jobs/index.js';
 import { importHistory, type HistoryImportDeps } from '../src/wa/history.js';
 import type { WaInboundMessage, WaValue } from '../src/wa/types.js';
@@ -242,5 +242,94 @@ describe('webhook enqueue seam', () => {
     // ...and the brain was NOT woken (guard 1) — no guest, no conversation enqueue.
     expect(enqueueCalls).toEqual([]);
     await app.close();
+  });
+});
+
+// The review found the real Guard-1 leak: importHistory does not enqueue the
+// brain, but the always-on CH-03 stale-conversation SWEEPER would — a null-cursor
+// conversation with an old guest inbound is exactly what findStaleConversations
+// selects. These drive the REAL sweeper predicate, not the import's own seam.
+describe('GUARD 1 (sibling path) — the stale-conversation sweeper cannot wake the brain on history', () => {
+  it('advances the process cursor so findStaleConversations returns nothing', async () => {
+    await importHistory(deps(), value([guestMsg('wamid.S1', '1710000000', 'a'), bizMsg('wamid.S2', '1710000600', 'b')]));
+    // Without the fix the null-cursor + months-old guest inbound is STALE → swept
+    // into the brain. With it, the cursor sits at the newest imported message.
+    expect(await findStaleConversations(db, 60)).toEqual([]);
+    const rows = await messagesInOrder();
+    const [conv] = await db.select().from(schema.conversations);
+    expect(conv?.lastProcessedMessageId).toBe(rows.at(-1)!.id);
+  });
+
+  it('stays non-stale when a LATER chunk carries a NEWER message (cursor moves forward)', async () => {
+    await importHistory(deps(), value([guestMsg('wamid.C1', '1707000000', 'older chunk')]));
+    await importHistory(deps(), value([guestMsg('wamid.C2', '1710000000', 'newer chunk')]));
+    expect(await findStaleConversations(db, 60)).toEqual([]);
+    const [c2] = await db.select().from(schema.messages).where(eq(schema.messages.waMessageId, 'wamid.C2'));
+    const [conv] = await db.select().from(schema.conversations);
+    expect(conv?.lastProcessedMessageId).toBe(c2!.id);
+  });
+});
+
+describe('GUARD 2 — timestamp validation (never throw, never a year-57000 row)', () => {
+  it('SKIPS a wrong-unit (millisecond-scale) timestamp rather than throwing or storing a future row', async () => {
+    const msScale: WaInboundMessage = { from: CONTACT_WAID, id: 'wamid.MS', timestamp: '1710000000000', type: 'text', text: { body: 'x' } };
+    const report = await importHistory(deps(), value([msScale, guestMsg('wamid.OkTs', '1710000000', 'ok')]));
+    expect(report).toMatchObject({ importedMessages: 1, skippedMessages: 1 });
+    const rows = await messagesInOrder();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.waMessageId).toBe('wamid.OkTs');
+  });
+
+  it('SKIPS a future timestamp (a history message is never in the future)', async () => {
+    const future = String(Math.floor(Date.now() / 1000) + 86_400 * 3650);
+    const msg: WaInboundMessage = { from: CONTACT_WAID, id: 'wamid.FUT', timestamp: future, type: 'text', text: { body: 'x' } };
+    const report = await importHistory(deps(), value([msg]));
+    expect(report).toMatchObject({ importedMessages: 0, skippedThreads: 1 });
+  });
+});
+
+// The review escalated the out-of-order case from "accepted limitation" to a
+// DEFECT: a chunk landing behind the forward-only summary cursor is orphaned for
+// ever. The fix rewinds the cursor; these prove it (and that it is conditional).
+describe('out-of-order — the summary cursor is rewound when a chunk lands behind it', () => {
+  async function seedSummarised(waId: string, ts: string) {
+    await importHistory(deps(), value([guestMsg(waId, ts, 'seed')]));
+    const [conv] = await db.select().from(schema.conversations);
+    const [row] = await db.select().from(schema.messages).where(eq(schema.messages.waMessageId, waId));
+    await db.update(schema.conversations)
+      .set({ summary: 'notes', summaryUptoMessageId: row!.id })
+      .where(eq(schema.conversations.id, conv!.id));
+    return conv!.id;
+  }
+
+  it('resets summary + cursor when a later chunk imports an OLDER message', async () => {
+    await seedSummarised('wamid.Mar', '1710000000');
+    await importHistory(deps(), value([guestMsg('wamid.Feb', '1707000000', 'older')]));
+    const [conv] = await db.select().from(schema.conversations);
+    expect(conv?.summaryUptoMessageId).toBeNull();
+    expect(conv?.summary).toBeNull();
+  });
+
+  it('does NOT reset when the later chunk is all NEWER than the cursor', async () => {
+    const convId = await seedSummarised('wamid.Old', '1707000000');
+    const [oldRow] = await db.select().from(schema.messages).where(eq(schema.messages.waMessageId, 'wamid.Old'));
+    await importHistory(deps(), value([guestMsg('wamid.New', '1710000000', 'newer')]));
+    const [conv] = await db.select().from(schema.conversations).where(eq(schema.conversations.id, convId));
+    expect(conv?.summaryUptoMessageId).toBe(oldRow!.id);
+    expect(conv?.summary).toBe('notes');
+  });
+});
+
+describe('tolerant parse — a non-array contacts must not throw', () => {
+  it('imports the thread with no pushname when value.contacts is not an array', async () => {
+    // A provisional shape where contacts is an object, not an array (§5.3).
+    const v = {
+      contacts: {},
+      history: [{ threads: [{ id: CONTACT_WAID, messages: [guestMsg('wamid.NC', '1710000000', 'hi')] }] }],
+    } as unknown as WaValue;
+    const report = await importHistory(deps(), v);
+    expect(report.importedMessages).toBe(1);
+    const [guest] = await db.select().from(schema.guests).where(eq(schema.guests.phone, CONTACT_PHONE));
+    expect(guest?.waProfileName ?? null).toBeNull();
   });
 });
