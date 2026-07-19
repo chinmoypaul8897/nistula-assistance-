@@ -57,6 +57,13 @@ export type OutboundSender = Exclude<Message['sender'], 'guest'>;
 export interface SendOptions {
   conversationId: string | null;
   sender: OutboundSender;
+  // CH-18c: for a conversation_id=NULL card that is ABOUT a guest (task /
+  // escalation / draft cards, the AI ON/OFF reply, DONE acks), the guest it
+  // concerns — persisted as messages.guest_id so DELETE_GUEST erases it by a
+  // durable link, not best-effort identity string-matching. Additive + optional:
+  // a guest-thread send (conversationId set) is already covered by the
+  // conversation scrub and leaves this unset.
+  aboutGuestId?: string;
 }
 
 /** Dispatch of a committed intent row — messages has no phone column, so the caller restates the target. */
@@ -119,6 +126,8 @@ export function createWaClient(deps: WaClientDeps) {
     // (CH-02 decision D1; CH-12/13/16/17 inherit this, do not reopen it).
     const { message } = await insertMessage(dbLike, {
       conversationId: opts.conversationId,
+      // CH-18c: the durable erasure link for a conversation_id=NULL card (§4).
+      guestId: opts.aboutGuestId ?? null,
       direction: 'out',
       sender: opts.sender,
       type: extra?.type ?? 'text',
@@ -154,12 +163,12 @@ export function createWaClient(deps: WaClientDeps) {
   /** The Graph call + settle, shared by the text and template paths so the
    * send-intent guarantees (§3.4) cannot diverge between them. */
   async function dispatchToGraph(args: DispatchArgs, payload: unknown): Promise<SendResult> {
-    // TODO(CH-18c): stale-'queued' reconciliation sweep + alert (§3.4 —
-    // a crash between the intent commit and here leaves an inert intent row).
-    // Deferred to a dedicated slice (Paul, 2026-07-19): CH-18a-1 scoped to
-    // erasure/admin/redaction, and a naive "resend the queued row" re-opens a
-    // double-send race — this needs a real sent/send_failed message state + a
-    // resend verb first (CH-17 open Q#1). Re-pointed CH-17 → CH-18a → CH-18c.
+    // §3.4: a crash between the intent commit and this Graph settle leaves an inert
+    // 'queued' row. CH-18c's 5-min reconcile sweep (wa/sendReconcile.ts) is the
+    // recovery net — it marks such a row terminally 'failed' + alerts, and by design
+    // NEVER resends (a 'queued' row may have reached Meta before the crash, so a
+    // resend risks a double send; a real resend verb needs a sent/send_failed state
+    // model, CH-17 open Q#1, deliberately out of scope).
     //
     // waMessageId is hoisted OUTSIDE the try so failure paths after a Graph
     // 2xx still record it — without it on the row, status webhooks match

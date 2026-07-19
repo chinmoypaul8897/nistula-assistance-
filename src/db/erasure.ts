@@ -27,22 +27,22 @@
  * are deliberately NOT screened for sensitive content (schema.ts tasks header).
  *
  * CONVERSATION_ID=NULL MESSAGES — the guest's name/phone/words are ALSO rendered
- * into `messages` rows that DON'T hang off the guest's conversation and carry NO
- * guest FK: sender='system' (task/escalation/draft cards, the escalateToOps ops
- * card, AI ON/OFF replies, SLA nudges) AND sender='human' (staff INBOUND typed at
- * the line — an `EDIT <id> <text>` naming the guest, a free-form note). These are
- * scrubbed by matching the guest's IDENTITY (phone, name-core, task+draft
- * shortId) — the CONTRACT. This took THREE re-review rounds: a shortId-only scrub
- * missed escalateToOps + AI-toggle; a \y name regex missed emoji/punctuation-edged
- * pushnames; a sender='system' filter missed staff inbound ("a leak has siblings
- * — enumerate ALL", each round a NEW sibling). 🚨 KNOWN RESIDUAL — this is a
- * BEST-EFFORT string match, NOT a durable link: a conversation_id=null body that
- * refers to the guest WITHOUT their stored name/phone/shortId (a name-free
- * complaint tail, a staff paraphrase, a pure-emoji/1-char name) cannot be
- * attributed by content. It carries no stored name/phone, so the residue-sweep
- * contract holds; the DURABLE fix is architectural — TODO(CH-18c): give these
- * staff/ops sends a guest reference (or render from one on read) so guest content
- * never lands in an un-attributable row.
+ * into `messages` rows that DON'T hang off the guest's conversation: sender='system'
+ * (task/escalation/draft cards, the escalateToOps ops card, AI ON/OFF replies, SLA
+ * nudges) AND sender='human' (staff INBOUND typed at the line — an `EDIT <id> <text>`
+ * naming the guest, a free-form note). **CH-18c gave the SYSTEM cards a durable link
+ * — `messages.guest_id`, written through createSendIntent's `aboutGuestId` — so they
+ * erase by FK.** The IDENTITY string-match (phone, name-core, task+draft shortId)
+ * stays as belt-and-braces for staff INBOUND (never routed through createSendIntent,
+ * so no guest_id) and any pre-linkage row. That match took THREE CH-18a-1 re-review
+ * rounds: a shortId-only scrub missed escalateToOps + AI-toggle; a \y name regex
+ * missed emoji/punctuation-edged pushnames; a sender='system' filter missed staff
+ * inbound ("a leak has siblings — enumerate ALL", each round a NEW sibling).
+ * 🚨 REMAINING RESIDUAL (smaller): a MULTI-guest aggregate row — the TASKS list, the
+ * morning digest — carries several guests' words in ONE body with no single owner,
+ * so a single guest_id cannot attribute it and a name-free reference inside survives.
+ * It carries no stored name/phone, so the residue-sweep contract still holds; a
+ * per-line render-from-source (or a message↔guest join) is the durable fix if needed.
  *
  * Full erasure completes as the encrypted backups age out of their 30-day
  * retention (backups land in CH-18a-2); the LIVE database is erased now.
@@ -167,12 +167,14 @@ export async function eraseGuestByPhone(
   //     an emoji/punctuation-edged pushname ("Rahul 🙏", "🌸Anjali") still matches
   //     (a \y on the name's own non-word edge silently failed — re-review BLOCKER)
   //     while "Jo" still cannot over-match "Joseph". The pattern is a bound param.
-  // 🚨 RESIDUAL, documented (header) — BEST-EFFORT string match, not a link: a
-  // conversation_id=null body that refers to the guest WITHOUT their stored
-  // name/phone/shortId (a name-free complaint tail, a staff paraphrase, a
-  // pure-emoji/1-char name) is not attributable without a guest FK on `messages`
-  // (TODO CH-18c). It carries no stored name/phone, so the residue-sweep contract
-  // holds; the durable fix is a guest reference on these sends.
+  // CH-18c CLOSED the main residual: the guest_id FK (added to the OR below) erases
+  // a SINGLE-guest card by link, so a name-free body is now attributable. What
+  // REMAINS (smaller): a MULTI-guest aggregate row — the TASKS list, the morning
+  // digest — embeds several guests' words in ONE body with no single owner, so a
+  // single guest_id cannot attribute it; a name-free reference inside it survives.
+  // It carries no stored name/phone, so the residue-sweep contract still holds. A
+  // per-line render-from-source (or a message↔guest join) is the durable fix for
+  // those, if ever needed.
   const literalTokens = [
     phone,
     digits,
@@ -194,6 +196,13 @@ export async function eraseGuestByPhone(
     sql`${messages.conversationId} is null`,
     inArray(messages.sender, ['system', 'human']),
     or(
+      // CH-18c: the DURABLE link (messages.guest_id, written by every Group-B card
+      // through createSendIntent's aboutGuestId). It erases a card by FK, so even
+      // an identifier-FREE body — a name-free complaint tail, a staff paraphrase —
+      // is now attributable. The string match stays as belt-and-braces for staff
+      // INBOUND (sender='human', never routed through createSendIntent so it has no
+      // guest_id) and any pre-linkage row.
+      eq(messages.guestId, guestId),
       ...literalTokens.map((t) => sql`strpos(coalesce(${messages.body}, ''), ${t}) > 0`),
       ...nameCores.map(
         (c) =>
@@ -275,8 +284,11 @@ export async function eraseGuestByPhone(
 
     // Scrub the guest's identity out of every conversation_id=null message
     // attributable to them — staff/ops sends (system) and staff inbound (human) —
-    // matched by phone / name-core / task+draft shortId (see the gather block).
-    await tx.update(messages).set({ body: ERASED }).where(staffMsgWhere);
+    // matched by the CH-18c guest_id link OR phone / name-core / task+draft shortId
+    // (see the gather block). `raw`/`error` too: a card's raw can carry the guest's
+    // name in template params and a failed send stores Meta's echoed text — both
+    // are scanned by the residue sweep, so blank them alongside the body.
+    await tx.update(messages).set({ body: ERASED, raw: null, error: null }).where(staffMsgWhere);
 
     for (const row of waRows) {
       await tx
