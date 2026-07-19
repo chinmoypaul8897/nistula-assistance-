@@ -67,6 +67,7 @@ import { pgDumpAgePipe } from '../ops/backupExec.js';
 import { createS3Client, type S3Config } from '../lib/s3.js';
 import type { WaClient } from '../wa/client.js';
 import { importHistory } from '../wa/history.js';
+import { reconcileStaleSends } from '../wa/sendReconcile.js';
 import type { WaValue, WaWebhookBody } from '../wa/types.js';
 
 export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
@@ -100,6 +101,9 @@ export const OPS_BACKUP_QUEUE = 'ops.backup';
 // CH-18b: coexistence history import — one job per webhook body, imported off the
 // hot path (the webhook enqueues just the raw event id).
 export const WA_HISTORY_QUEUE = 'wa.history';
+// CH-18c: the 5-min stale send-intent reconciliation sweep (fail-closed: mark a
+// stranded 'queued' row failed, alert, NEVER resend).
+export const WA_RECONCILE_QUEUE = 'wa.reconcile';
 export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
   created: BOOKING_CREATED_QUEUE,
   modified: BOOKING_MODIFIED_QUEUE,
@@ -357,6 +361,12 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryDelay: 60,
     retryBackoff: true,
     expireInSeconds: 600,
+  });
+  // CH-18c reconcile: like the watchdog, the next 5-min tick IS the retry.
+  await boss.createQueue(WA_RECONCILE_QUEUE, {
+    policy: 'standard',
+    retryLimit: 0,
+    expireInSeconds: 120,
   });
 }
 
@@ -875,6 +885,16 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
         job.data.rawEventId,
       );
     }
+  });
+
+  // ── CH-18c stale send-intent reconciliation (every 5 min) ───────────────
+  // Fail-closed recovery for a send-intent row stranded in 'queued' by a crash
+  // between the intent commit and the Graph settle (§3.4). Unconditional.
+  await deps.boss.work(WA_RECONCILE_QUEUE, workOptions, async () => {
+    await reconcileStaleSends({ db: deps.db, log: deps.log });
+  });
+  await scheduleCron(deps.boss, WA_RECONCILE_QUEUE, '*/5 * * * *', 'Asia/Kolkata', {
+    singletonKey: 'wa_reconcile',
   });
 
   // ── CH-18a-2 nightly encrypted backup (02:30 IST, only when enabled) ─────

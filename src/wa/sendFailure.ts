@@ -119,8 +119,9 @@ export async function failSend(
       })
       .where(and(eq(messages.id, messageId), eq(messages.status, 'queued')));
   } catch {
-    // DB gone mid-failure: the row stays 'queued' — inert by design; the
-    // TODO(CH-18c) stale-queued sweep is the recovery net. Alert regardless.
+    // DB gone mid-failure: the row stays 'queued' — inert by design; CH-18c's
+    // stale-queued reconcile sweep (wa/sendReconcile.ts) is the recovery net,
+    // marking it terminally failed. Alert regardless.
   }
   // A dead token surfaces here as a per-message failure; raise the distinct
   // token alert instead of the generic one so ops gets "rotate", not noise.
