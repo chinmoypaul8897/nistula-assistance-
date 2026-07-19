@@ -13,6 +13,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { getAllGuestFacts, getGuestByPhone } from '../db/guestMemory.js';
+import { eraseGuestByPhone } from '../db/erasure.js';
 import { getGuestStays } from '../db/stays.js';
 import { projectAll } from '../brain/stayView.js';
 import { istCalendarDay } from '../lib/time.js';
@@ -44,6 +45,11 @@ const bodySchema = z.object({ phone: z.string().min(1).max(32) });
 const simReplySchema = z.object({
   phone: z.string().min(1).max(32),
   text: z.string().min(1).max(1000),
+});
+// confirm defaults false → a bare call is a DRY-RUN preview, never an erasure.
+const deleteBodySchema = z.object({
+  phone: z.string().min(1).max(32),
+  confirm: z.boolean().optional(),
 });
 
 /** Fastify plugin carrying the admin routes; register at boot ONLY when enabled. */
@@ -107,6 +113,29 @@ export const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, op
       });
     } catch (error) {
       request.log.error({ err: summarizeError(error) }, 'admin guest-lookup failed');
+      return reply.code(500).send({ error: 'internal' });
+    }
+  });
+
+  // CH-18a-1: DELETE_GUEST — the DPDP right-to-erasure action (§3.3). A bare
+  // call (no confirm) is a DRY-RUN preview; confirm:true erases in one
+  // transaction (db/erasure.ts). Idempotent: a re-run by the now-tombstoned
+  // phone returns 404. Logs ids + counts only — NEVER the phone (§3.3).
+  app.post('/admin/delete-guest', async (request, reply) => {
+    const parsed = deleteBodySchema.safeParse(request.body);
+    const phone = parsed.success ? normalizePhone(parsed.data.phone) : null;
+    if (phone === null) return reply.code(400).send({ error: 'invalid phone' });
+    const confirm = parsed.success && parsed.data.confirm === true;
+    try {
+      const report = await eraseGuestByPhone(opts.db, phone, { confirm });
+      if (report === null) return reply.code(404).send({ error: 'not found' });
+      request.log.info(
+        { guestId: report.guestId, dryRun: report.dryRun, tables: report.tables },
+        report.dryRun ? 'admin delete-guest dry-run' : 'admin delete-guest erased',
+      );
+      return await reply.send({ ok: true, ...report });
+    } catch (error) {
+      request.log.error({ err: summarizeError(error) }, 'admin delete-guest failed');
       return reply.code(500).send({ error: 'internal' });
     }
   });
