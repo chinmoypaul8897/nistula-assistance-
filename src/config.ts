@@ -111,6 +111,29 @@ const envSchema = z.object({
   ADMIN_ROUTES_ENABLED: z.enum(['0', '1']).default('0'),
   HEALTHCHECKS_URL: z.url().optional(),
   COST_ALERT_INR_PER_DAY: z.coerce.number().positive().default(1000),
+  // ── CH-18a-2 coexistence keep-alive. New §3.7 registry vars. ──────────────
+  // OFF pre-cutover: the daily keep-alive is a weekly ops REMINDER to warm the
+  // line. Flipped to 1 at real-number cutover, when the same job becomes the
+  // daily "has the link shown life in 13 days?" staleness check. An EXPLICIT
+  // flag — never derived from WA_TEMPLATE_MODE (the proxy trap).
+  COEXISTENCE_ACTIVE: z.enum(['0', '1']).default('0'),
+  // One day of margin under Meta's ~14-day app-offline link-drop.
+  COEXISTENCE_KEEPALIVE_MAX_DAYS: z.coerce.number().int().positive().default(13),
+  // ── CH-18a-2 encrypted off-site backups. New §3.7 registry vars. ──────────
+  // Default OFF (EZEE_POLLER_ENABLED single-runner precedent): only ONE
+  // environment (Railway) runs the nightly dump. Enabled boot REQUIRES the S3
+  // destination + the age recipient (guard below) — a dump with no encryption
+  // key or nowhere to go must fail loudly, not silently every night.
+  BACKUP_ENABLED: z.enum(['0', '1']).default('0'),
+  BACKUP_S3_ENDPOINT: z.url().optional(),
+  BACKUP_S3_BUCKET: z.string().optional(),
+  BACKUP_S3_REGION: z.string().default('auto'), // Cloudflare R2 uses 'auto'
+  BACKUP_S3_ACCESS_KEY_ID: z.string().optional(), // secret
+  BACKUP_S3_SECRET_ACCESS_KEY: z.string().optional(), // secret
+  // The age PUBLIC recipient key — encryption only, no private key on the box.
+  BACKUP_AGE_RECIPIENT: z.string().optional(),
+  // LOAD-BEARING: plan step 1 ties DELETE_GUEST completeness to this window.
+  BACKUP_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   FAKE_NOW_IST: z
     .string()
     .regex(IST_WALL_CLOCK)
@@ -161,6 +184,16 @@ export interface Config {
   adminRoutesEnabled: boolean;
   healthchecksUrl: string | undefined;
   costAlertInrPerDay: number;
+  coexistenceActive: boolean;
+  coexistenceKeepaliveMaxDays: number;
+  backupEnabled: boolean;
+  backupS3Endpoint: string | undefined;
+  backupS3Bucket: string | undefined;
+  backupS3Region: string;
+  backupS3AccessKeyId: string | undefined;
+  backupS3SecretAccessKey: string | undefined;
+  backupAgeRecipient: string | undefined;
+  backupRetentionDays: number;
   fakeNowIst: string | undefined;
 }
 
@@ -197,6 +230,25 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new ConfigError(
       'ADMIN_ROUTES_ENABLED=1 requires ADMIN_BEARER_TOKEN of at least 16 characters (§3.3)',
     );
+  }
+
+  // CH-18a-2: an enabled backup with no destination or no encryption key would
+  // REFUSE every night (or, worse, have nowhere to go) — fail fast at boot.
+  if (raw.BACKUP_ENABLED === '1') {
+    const missing = (
+      [
+        ['BACKUP_S3_ENDPOINT', raw.BACKUP_S3_ENDPOINT],
+        ['BACKUP_S3_BUCKET', raw.BACKUP_S3_BUCKET],
+        ['BACKUP_S3_ACCESS_KEY_ID', raw.BACKUP_S3_ACCESS_KEY_ID],
+        ['BACKUP_S3_SECRET_ACCESS_KEY', raw.BACKUP_S3_SECRET_ACCESS_KEY],
+        ['BACKUP_AGE_RECIPIENT', raw.BACKUP_AGE_RECIPIENT],
+      ] as const
+    )
+      .filter(([, v]) => v === undefined)
+      .map(([k]) => k);
+    if (missing.length > 0) {
+      throw new ConfigError(`BACKUP_ENABLED=1 requires: ${missing.join(', ')} (§8 CH-18 step 2)`);
+    }
   }
 
   return {
@@ -236,6 +288,16 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     adminRoutesEnabled: raw.ADMIN_ROUTES_ENABLED === '1',
     healthchecksUrl: raw.HEALTHCHECKS_URL,
     costAlertInrPerDay: raw.COST_ALERT_INR_PER_DAY,
+    coexistenceActive: raw.COEXISTENCE_ACTIVE === '1',
+    coexistenceKeepaliveMaxDays: raw.COEXISTENCE_KEEPALIVE_MAX_DAYS,
+    backupEnabled: raw.BACKUP_ENABLED === '1',
+    backupS3Endpoint: raw.BACKUP_S3_ENDPOINT,
+    backupS3Bucket: raw.BACKUP_S3_BUCKET,
+    backupS3Region: raw.BACKUP_S3_REGION,
+    backupS3AccessKeyId: raw.BACKUP_S3_ACCESS_KEY_ID,
+    backupS3SecretAccessKey: raw.BACKUP_S3_SECRET_ACCESS_KEY,
+    backupAgeRecipient: raw.BACKUP_AGE_RECIPIENT,
+    backupRetentionDays: raw.BACKUP_RETENTION_DAYS,
     fakeNowIst: raw.FAKE_NOW_IST,
   };
 }
@@ -390,6 +452,16 @@ export function configSummary(config: Config): string {
     `ADMIN_ROUTES_ENABLED=${config.adminRoutesEnabled}`,
     `HEALTHCHECKS_URL=${presence(config.healthchecksUrl)}`,
     `COST_ALERT_INR_PER_DAY=${config.costAlertInrPerDay}`,
+    `COEXISTENCE_ACTIVE=${config.coexistenceActive}`,
+    `COEXISTENCE_KEEPALIVE_MAX_DAYS=${config.coexistenceKeepaliveMaxDays}`,
+    `BACKUP_ENABLED=${config.backupEnabled}`,
+    `BACKUP_S3_ENDPOINT=${config.backupS3Endpoint ?? 'unset'}`,
+    `BACKUP_S3_BUCKET=${config.backupS3Bucket ?? 'unset'}`,
+    `BACKUP_S3_REGION=${config.backupS3Region}`,
+    `BACKUP_S3_ACCESS_KEY_ID=${presence(config.backupS3AccessKeyId)}`,
+    `BACKUP_S3_SECRET_ACCESS_KEY=${presence(config.backupS3SecretAccessKey)}`,
+    `BACKUP_AGE_RECIPIENT=${presence(config.backupAgeRecipient)}`,
+    `BACKUP_RETENTION_DAYS=${config.backupRetentionDays}`,
     `FAKE_NOW_IST=${config.fakeNowIst ?? 'unset'}`,
   ].join(' · ');
 }
