@@ -14,6 +14,7 @@ import { upsertGuestByPhone } from '../src/db/repos.js';
 import { insertGuestFactGuarded, updateGuestPrefs } from '../src/db/guestMemory.js';
 import { buildAdminApp, TEST_ADMIN_TOKEN } from './helpers/admin.js';
 import { captureLog } from './helpers/wa.js';
+import { buildServer, maybeRegisterAdminRoutes } from '../src/server.js';
 
 const TEST_URL =
   process.env.TEST_DATABASE_URL ?? 'postgresql://nistula:nistula@localhost:5432/nistula_test';
@@ -168,5 +169,108 @@ describe('config pairing guard (boot must refuse enabled-without-token)', () => 
     });
     expect(ok.adminRoutesEnabled).toBe(true);
     expect(loadConfig(base).adminRoutesEnabled).toBe(false);
+  });
+});
+
+describe('admin route gating (CH-18a-1 — server-boot registration)', () => {
+  it('disabled → admin routes are Fastify 404 (never registered)', async () => {
+    const app = buildServer();
+    const registered = await maybeRegisterAdminRoutes(app, {
+      enabled: false,
+      bearerToken: undefined,
+      db,
+      coexistence: undefined,
+    });
+    expect(registered).toBe(false);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/delete-guest',
+      payload: { phone: '+917700900338' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('enabled → registered and bearer-gated (401 without a token)', async () => {
+    const app = buildServer();
+    const registered = await maybeRegisterAdminRoutes(app, {
+      enabled: true,
+      bearerToken: TEST_ADMIN_TOKEN,
+      db,
+      coexistence: undefined,
+    });
+    expect(registered).toBe(true);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/delete-guest',
+      payload: { phone: '+917700900338' },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+});
+
+describe('delete-guest (CH-18a-1 DELETE_GUEST — dry-run default, confirm erases)', () => {
+  it('unknown phone → 404', async () => {
+    const app = await buildAdminApp(db);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/delete-guest',
+      headers: auth,
+      payload: { phone: '+917700900339' },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('no confirm → dry-run preview; the guest survives', async () => {
+    await upsertGuestByPhone(db, '+917700900330', 'DryRun Guest');
+    const app = await buildAdminApp(db);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/delete-guest',
+      headers: auth,
+      payload: { phone: '+917700900330' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, dryRun: true });
+    const look = await app.inject({
+      method: 'POST',
+      url: '/admin/guest-lookup',
+      headers: auth,
+      payload: { phone: '+917700900330' },
+    });
+    expect(look.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('confirm erases; lookup then 404s; re-erase is 404; phone never logged', async () => {
+    await upsertGuestByPhone(db, '+917700900331', 'Erase Guest');
+    const capture = captureLog();
+    const app = await buildAdminApp(db, capture);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/delete-guest',
+      headers: auth,
+      payload: { phone: '+917700900331', confirm: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, dryRun: false });
+    const look = await app.inject({
+      method: 'POST',
+      url: '/admin/guest-lookup',
+      headers: auth,
+      payload: { phone: '+917700900331' },
+    });
+    expect(look.statusCode).toBe(404);
+    const again = await app.inject({
+      method: 'POST',
+      url: '/admin/delete-guest',
+      headers: auth,
+      payload: { phone: '+917700900331', confirm: true },
+    });
+    expect(again.statusCode).toBe(404);
+    expect(JSON.stringify(capture.lines)).not.toContain('7700900331');
+    await app.close();
   });
 });
