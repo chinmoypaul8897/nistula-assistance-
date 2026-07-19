@@ -88,6 +88,10 @@ async function seedGuest(): Promise<string> {
     // Staff INBOUND (sender='human', conversation_id=null) — stored verbatim
     // before parsing; names the guest + phone, no back-link.
     { conversationId: null, direction: 'in', sender: 'human', type: 'text', status: 'received', body: `EDIT DRFTA1 Dear ${FIRST}, arranged — ${DIGITS}` },
+    // CH-18c: an IDENTIFIER-FREE card — no name, no phone, no shortId — that ONLY
+    // the messages.guest_id link can attribute. The string-match residual would
+    // miss it entirely; this is the row that proves the durable fix.
+    { conversationId: null, guestId, direction: 'out', sender: 'system', type: 'text', status: 'sent', body: 'The guest in room three asked for extra towels this evening.', waMessageId: 'wamid.ERASE-LINK1', raw: { params: { guestName: FIRST } } },
   ]);
   await db.insert(schema.guestFacts).values({ guestId, kind: 'preference', content: `${FIRST} loves early check-in` });
 
@@ -132,6 +136,9 @@ async function seedGuest(): Promise<string> {
   await db.insert(schema.messages).values([
     { conversationId: otherConv!.id, direction: 'in', sender: 'guest', type: 'text', status: 'received', body: 'Keeper stays' },
     { conversationId: null, direction: 'out', sender: 'system', type: 'template', status: 'sent', body: `NISTULA TASK #OTHER9\nVilla X · Keeper · lightbulb\nReply DONE OTHER9` },
+    // CH-18c: the bystander's OWN identifier-free card, linked to THEIR guest_id —
+    // erasing the other guest must leave it untouched (no over-erase by link).
+    { conversationId: null, guestId: other!.id, direction: 'out', sender: 'system', type: 'text', status: 'sent', body: 'A different guest asked for a late checkout.', waMessageId: 'wamid.OTHER-LINK1', raw: { params: { note: 'keep' } } },
   ]);
 
   return guestId;
@@ -185,7 +192,7 @@ describe('eraseGuestByPhone', () => {
     expect(report!.tables.messages).toBe(3);
     expect(report!.tables.guest_facts).toBe(1);
     expect(report!.tables.tasks).toBe(2);
-    expect(report!.tables.conv_null_messages).toBe(5);
+    expect(report!.tables.conv_null_messages).toBe(6); // 5 string-matched + 1 CH-18c guest_id-linked
     expect(report!.tables.raw_events_whatsapp).toBe(3);
     expect(report!.tables.raw_events_system).toBe(1);
     // Nothing was written — the guest is still findable by phone with their name.
@@ -237,14 +244,26 @@ describe('eraseGuestByPhone', () => {
     expect(sysTask[0]).toMatchObject({ guestId: null, summary: '[erased]' });
 
     // Every conversation_id=null message about THIS guest is scrubbed — cards (by
-    // shortId), ops-escalation + AI-toggle (by name/phone), and the staff INBOUND
-    // (sender='human') — while the bystander's card ("Keeper") is untouched.
+    // shortId), ops-escalation + AI-toggle (by name/phone), the staff INBOUND
+    // (sender='human'), AND the CH-18c identifier-free card (by guest_id) — while
+    // the bystander's cards ("Keeper" + their own linked card) are untouched.
     const cards = await db
       .select()
       .from(schema.messages)
       .where(sql`conversation_id is null and sender in ('system','human')`);
-    expect(cards.filter((c) => c.body === '[erased]')).toHaveLength(5);
+    expect(cards.filter((c) => c.body === '[erased]')).toHaveLength(6);
     expect(cards.some((c) => c.body?.includes('Keeper'))).toBe(true);
+
+    // CH-18c — the durable link. The identifier-free card (no name/phone/shortId
+    // in its body) is attributable ONLY via guest_id, and string-matching would
+    // have MISSED it: it is scrubbed (body + raw), proving the FK closed the residual.
+    const [linked] = await db.select().from(schema.messages).where(eq(schema.messages.waMessageId, 'wamid.ERASE-LINK1'));
+    expect(linked?.body).toBe('[erased]');
+    expect(linked?.raw).toBeNull();
+    // The bystander's OWN linked card is left ENTIRELY intact — no over-erase by link.
+    const [otherLinked] = await db.select().from(schema.messages).where(eq(schema.messages.waMessageId, 'wamid.OTHER-LINK1'));
+    expect(otherLinked?.body).toBe('A different guest asked for a late checkout.');
+    expect(otherLinked?.guestId).not.toBeNull();
 
     // System telemetry KEEPS its aggregate history, blanks only the guest keys.
     const [sysEvent] = await db
