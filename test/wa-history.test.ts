@@ -268,6 +268,38 @@ describe('GUARD 1 (sibling path) — the stale-conversation sweeper cannot wake 
     const [conv] = await db.select().from(schema.conversations);
     expect(conv?.lastProcessedMessageId).toBe(c2!.id);
   });
+
+  it('NEVER moves a live cursor backward onto a live message (forward-only)', async () => {
+    // A live conversation whose cursor sits at a recent (newer) message.
+    await importHistory(deps(), value([guestMsg('wamid.Live', '1720000000', 'live')]));
+    const [conv0] = await db.select().from(schema.conversations);
+    const [liveRow] = await db.select().from(schema.messages).where(eq(schema.messages.waMessageId, 'wamid.Live'));
+    expect(conv0?.lastProcessedMessageId).toBe(liveRow!.id);
+    // Importing OLDER history for the same guest must not drag the cursor back
+    // (which would mark the live message unprocessed → an unanswered guest).
+    await importHistory(deps(), value([guestMsg('wamid.Hist', '1707000000', 'old history')]));
+    const [conv1] = await db.select().from(schema.conversations);
+    expect(conv1?.lastProcessedMessageId).toBe(liveRow!.id);
+    expect(await findStaleConversations(db, 60)).toEqual([]);
+  });
+
+  it('re-advances the cursor on an ALL-DUPLICATE redelivery (crash/job-expiry retry)', async () => {
+    // Simulate a crash: the inserts committed but the cursor mark did not.
+    await importHistory(deps(), value([guestMsg('wamid.R1', '1710000000', 'a')]));
+    const [conv0] = await db.select().from(schema.conversations);
+    await db.update(schema.conversations)
+      .set({ lastProcessedMessageId: null })
+      .where(eq(schema.conversations.id, conv0!.id));
+    expect(await findStaleConversations(db, 60)).toEqual([conv0!.id]); // stale again
+    // pg-boss redelivers the same body: every row is now a duplicate. The mark
+    // must STILL advance (it is DB-computed + unconditional, not gated on newInThread).
+    const report = await importHistory(deps(), value([guestMsg('wamid.R1', '1710000000', 'a')]));
+    expect(report).toMatchObject({ importedMessages: 0, duplicateMessages: 1 });
+    expect(await findStaleConversations(db, 60)).toEqual([]);
+    const [r1] = await db.select().from(schema.messages).where(eq(schema.messages.waMessageId, 'wamid.R1'));
+    const [conv1] = await db.select().from(schema.conversations);
+    expect(conv1?.lastProcessedMessageId).toBe(r1!.id);
+  });
 });
 
 describe('GUARD 2 — timestamp validation (never throw, never a year-57000 row)', () => {

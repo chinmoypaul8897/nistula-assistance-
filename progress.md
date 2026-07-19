@@ -58,7 +58,7 @@
 | CH-17 | Watchdog & costs | ✅ BUILT 2026-07-19 — `chunk/CH-17-watchdog-costs` (**1708** tests; 61-agent pre-merge review RED→fixed: poller-heartbeat-on-run, summariser cost gate, quiet-monitor guest-facing filter, draft-mode turn cap. alertOps WhatsApp delivery + dedupe + log-only token alert, heartbeats + deepened /health, 5-min watchdog + quiet-channel monitor, cost 2×/4× kill-switch auto-resuming at IST midnight + 60-turns/day cap, 23:30 rollup. **Merge/tag DEFERRED to Paul** — merge auto-deploys) | [↓](#ch-17--watchdog-alerts--cost-meter--built-2026-07-19) |
 | CH-18a-1 | Security hardening + guest erasure | ✅ DONE 2026-07-19 — merged `main` (no-ff), tagged `vCH-18a-1` (**1721** tests; DELETE_GUEST one-tx anonymise-in-place + dry-run + residue-sweep contract test, `POST /admin/delete-guest`, 404-when-disabled test, secrets-shaped redaction fixture, rate-limit/cool-off final, audit clean. **3-round pre-merge review RED→fixed each time — all the "conversation_id=null staff-message sibling" class; accepted content residual → CH-18c**. Send/lifecycle TODOs also → CH-18c) | [↓](#ch-18a-1--security-hardening--guest-erasure-delete_guest--done-2026-07-19) |
 | CH-18a-2 | Backups + keep-alive + runbook + go-live | ✅ DONE 2026-07-19 — tagged `vCH-18a-2` (**1744** tests; 30-agent pre-merge review RED → **8 confirmed, all fixed**: `backupExec` pipe-crash DEFECT + backup-cron `unschedule` DEFECT + inert `retryLimit` + runbook phantom alert-kind + image-provisioning gated + `.gitignore`; all off-by-default ops infra) | [↓](#ch-18a-2--encrypted-backups--coexistence-keep-alive--runbook--go-live-checklist--done-2026-07-19) |
-| CH-18b | History import | ✅ DONE 2026-07-19 — tagged `vCH-18b` (**1763** tests; idempotent coexistence history import off a dedicated `wa.history` queue — 5 contract guards [no AI wake · own-timestamp · no window · roster-skip · dedupe], direction from the thread contact, CH-08 summary backfill) | [↓](#ch-18b--coexistence-history-import--done-2026-07-19) |
+| CH-18b | History import | ✅ DONE 2026-07-19 — tagged `vCH-18b` (**1765** tests; idempotent coexistence history import off a dedicated `wa.history` queue — 5 contract guards [no AI wake · own-timestamp · no window · roster-skip · dedupe], direction from the thread contact, CH-08 summary backfill) | [↓](#ch-18b--coexistence-history-import--done-2026-07-19) |
 | CH-18c | Send-intent reconciliation + poststay anchor (deferred slice) | ⬜ pending — planning-chat to bless; gated on OQ-22/OQ-24 | |
 | CH-19 | Acceptance — six scenarios | ⬜ pending | |
 
@@ -2996,7 +2996,7 @@ of it is off-by-default ops infrastructure. `pnpm check` green at **1744** (exit
 **Scope:** plan §8 CH-18 step 5 — the LAST code step of CH-18. When the number is onboarded to
 coexistence and the `history` field subscribed (an ops event at cutover), Meta delivers the number's
 PAST WhatsApp threads in chunks; this stores them idempotently and links them to guests by phone.
-`pnpm check` green at **1763** (exit code).
+`pnpm check` green at **1765** (exit code).
 
 **Built:**
 - **`src/wa/history.ts` — `importHistory(deps, value)`**, the idempotent import core. Parses the
@@ -3085,8 +3085,29 @@ the codebase's signature class:**
   siblings. **Verified-FALSE (correctly skipped):** DELETE_GUEST "over-blanks other guests" in a shared
   history raw_events payload — that is benign over-redaction of audit data, not a leak.
 
+**🚨 SECOND-round review of the FIXES (14 agents — "a fix is the most dangerous thing in the room")
+found 1 DEFECT + 1 MINOR; the DEFECT was a residual of the first fix (green suite hid it), re-green at
+1765:**
+- **[DEFECT] the Guard-1 cursor mark was gated on `newestNew !== null`** ("did I insert new rows THIS
+  run?") — a PROXY, not the contract. A crash / **600s job-expiry redelivery** of a bulk import re-runs
+  the job with every row now a DUPLICATE → `newestNew` stays null → the mark was SKIPPED → the cursor
+  stayed NULL → the sweeper wakes the brain on months-old history (the exact Guard-1 harm the first fix
+  addressed, re-opened). **Fixed:** `markConversationHistoryProcessed` now resolves the target FROM THE
+  DB (the newest message ≤ the newest imported time, new or duplicate) and runs UNCONDITIONALLY per
+  imported thread — idempotent, so an all-duplicate retry STILL advances; test drives the all-duplicate
+  redelivery + the real `findStaleConversations`.
+- **[MINOR, ACCEPTED RESIDUAL] null-cursor concurrent-summarise race.** `resetSummaryIfBackfilledBehind`
+  joins through `summary_upto_message_id`, so on a still-NULL cursor it no-ops — and if a FIRST summarise
+  for the thread is mid model-call when an out-of-order older chunk lands, that summarise's CAS advances
+  NULL→newest and orphans the one older message from the SUMMARY. Requires a >30-message thread split
+  across out-of-order bodies with precise timing, at the one-time cutover; **non-guest-facing** (the
+  message is fully present in `messages`/transcript/erasure — only a best-effort ≤10-bullet internal
+  summary may miss it). The robust fix is a **summariser generation guard** in the delicate shared CAS
+  (ripples into the `lost`/re-enqueue path) — not worth the regression risk here (the CH-18a-1 accepted-
+  residual precedent). Documented in `wa/history.ts` + here; a future summariser-hardening TODO.
+
 **How to verify:**
-- `pnpm check` (exit code) incl. `test/wa-history.test.ts` (12): direction/linking/historical-times
+- `pnpm check` (exit code) incl. `test/wa-history.test.ts` (21): direction/linking/historical-times
   from the committed fixture, all five guards (no-wake, timestamp-skip, no-window, roster-skip,
   dedupe), out-of-order ordering, declined-consent/empty + unparseable threads create no guest, the
   worker re-read filtering history from a mixed body, and a signed history POST that enqueues import +

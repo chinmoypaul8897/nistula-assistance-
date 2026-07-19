@@ -139,28 +139,40 @@ export async function getRawEventById(db: Db, id: string): Promise<RawEvent | nu
  * CH-18b: mark a conversation's imported history as ALREADY PROCESSED so the
  * every-2-min stale-conversation sweeper never wakes the brain on it (Guard 1 —
  * imported history is to remember, not to answer). Advances the process pointer to
- * the NEWEST IMPORTED message, FORWARD-ONLY: it moves only when the current cursor
- * is null or older than `newest`. That is what keeps it safe — a LIVE conversation
- * already holds a cursor past the (older) imported rows, so `newest` is behind it
- * and the pointer never moves onto a genuine unanswered live message; a fresh
- * import-only conversation gets its null cursor set. `newest` is the newest row
- * this run actually inserted (an all-duplicate redelivery already advanced it).
+ * the newest message at or before `newestImportedAt`, FORWARD-ONLY: it moves only
+ * when the current cursor is null or strictly older than that target. That keeps it
+ * safe — a LIVE conversation holds a cursor past the (older) imported rows, so the
+ * target is behind it and the pointer never lands on a genuine unanswered live
+ * message; a fresh import-only conversation gets its null cursor set.
+ *
+ * The target is resolved FROM THE DB (not from this run's inserts) and this runs
+ * unconditionally per imported thread, so it is idempotent: a crash / job-expiry
+ * redelivery whose rows are now all duplicates STILL advances the cursor. Keying
+ * off "did I insert new rows this run?" instead would leave a null cursor for the
+ * sweeper to wake the brain on — the proxy-not-contract trap.
  */
 export async function markConversationHistoryProcessed(
   db: Db,
   conversationId: string,
-  newest: { id: string; createdAt: Date },
+  newestImportedAt: Date,
 ): Promise<void> {
   await db.execute(sql`
     UPDATE conversations c
-    SET last_processed_message_id = ${newest.id}, updated_at = now()
+    SET last_processed_message_id = tgt.id, updated_at = now()
+    FROM (
+      SELECT id, created_at FROM messages
+      WHERE conversation_id = ${conversationId}
+        AND created_at <= ${newestImportedAt.toISOString()}::timestamptz
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    ) tgt
     WHERE c.id = ${conversationId}
       AND (
         c.last_processed_message_id IS NULL
         OR NOT EXISTS (
           SELECT 1 FROM messages p
           WHERE p.id = c.last_processed_message_id
-            AND (p.created_at, p.id) >= (${newest.createdAt.toISOString()}::timestamptz, ${newest.id}::uuid)
+            AND (p.created_at, p.id) >= (tgt.created_at, tgt.id)
         )
       )
   `);
