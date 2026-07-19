@@ -38,6 +38,7 @@ import {
 import type { Db, DbLike } from '../db/client.js';
 import {
   findConversationsByPhoneSuffix,
+  getConversationGuestId,
   getConversationTurnContext,
   insertMessage,
   setTakeoverState,
@@ -179,6 +180,8 @@ export async function handleStaffCommand(
   await deps.wa.sendText(input.phone, `Thank you — #${closed.shortId} is closed.`, {
     conversationId: null,
     sender: 'system',
+    // CH-18c: names the task's shortId — link for durable erasure.
+    aboutGuestId: closed.guestId ?? undefined,
   });
   await tellGuest(deps, closed);
 }
@@ -198,7 +201,12 @@ async function replyToUnclosable(
     existing === null
       ? `Sorry — no task #${shortId.toUpperCase()}. Reply TASKS to see what is open for you.`
       : `#${existing.shortId} was already closed. Nothing more to do.`;
-  await deps.wa.sendText(phone, line, { conversationId: null, sender: 'system' });
+  // CH-18c: when it names a real task, link it; an unknown id names no guest.
+  await deps.wa.sendText(phone, line, {
+    conversationId: null,
+    sender: 'system',
+    aboutGuestId: existing?.guestId ?? undefined,
+  });
 }
 
 function renderTaskList(open: Task[]): string {
@@ -235,8 +243,11 @@ async function handleAiToggle(
   command: { kind: 'ai_on' | 'ai_off'; digits: string },
 ): Promise<void> {
   const candidates = await findConversationsByPhoneSuffix(deps.db, command.digits);
-  const send = (body: string): Promise<unknown> =>
-    deps.wa.sendText(staffPhone, body, { conversationId: null, sender: 'system' });
+  // CH-18c: aboutGuestId links a card to the guest for durable erasure. The no-match
+  // and ambiguous replies name no single guest, so it stays undefined for those; the
+  // single-candidate reply names one guest and passes it.
+  const send = (body: string, aboutGuestId?: string): Promise<unknown> =>
+    deps.wa.sendText(staffPhone, body, { conversationId: null, sender: 'system', aboutGuestId });
 
   if (candidates.length === 0) {
     await send(`No guest ending in ${command.digits}. Reply TASKS to see your open work.`);
@@ -254,15 +265,17 @@ async function handleAiToggle(
 
   const target = candidates[0] as TakeoverCandidate;
   const who = sanitiseInline(target.guestName ?? 'the guest', CANDIDATE_NAME_MAX) || 'the guest';
+  const aboutGuestId = (await getConversationGuestId(deps.db, target.conversationId)) ?? undefined;
   if (command.kind === 'ai_off') {
     await setTakeoverState(deps.db, target.conversationId, 'human_active', null);
     await cancelLiveEscalationsForConversation(deps.db, target.conversationId);
     await send(
       `AI paused for ${who} (…${target.last4}). It stays off until you send AI ON ${target.last4}.`,
+      aboutGuestId,
     );
   } else {
     await setTakeoverState(deps.db, target.conversationId, 'ai_active', null);
-    await send(`AI is back on for ${who} (…${target.last4}).`);
+    await send(`AI is back on for ${who} (…${target.last4}).`, aboutGuestId);
   }
   deps.log.info?.(
     { conversationId: target.conversationId, action: command.kind },

@@ -174,6 +174,8 @@ async function nudgeOne(deps: SlaDeps, task: Task, rung: Rung): Promise<boolean>
     const result = await deps.wa.sendTemplated(phone, { key, params }, {
       conversationId: null,
       sender: 'system',
+      // CH-18c: the nudge carries the task's summary/detail — link for erasure.
+      aboutGuestId: task.guestId ?? undefined,
     });
     if (result.ok) delivered = true;
   }

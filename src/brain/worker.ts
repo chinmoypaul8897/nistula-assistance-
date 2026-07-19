@@ -397,6 +397,8 @@ export async function processConversation(
         guestName: ctx.guestName,
         replyType,
         body,
+        // CH-18c: link the draft card to the guest for durable erasure.
+        guestId: ctx.conversation.guestId,
       });
     } else if (intentId !== null && body !== null) {
       await deps.wa.dispatchText({ messageId: intentId, toE164: ctx.guestPhone, body, conversationId });

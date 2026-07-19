@@ -17,7 +17,7 @@ import {
   type Draft,
   type DraftDecision,
 } from '../db/drafts.js';
-import { getConversationTurnContext } from '../db/repos.js';
+import { getConversationGuestId, getConversationTurnContext } from '../db/repos.js';
 import { isHumanActive } from '../brain/policy.js';
 import { scanForLeaks } from '../brain/leakGuards.js';
 import { sanitiseInline } from '../brain/prompt.js';
@@ -72,7 +72,7 @@ export async function handleDraftDecision(
 
   if (command.kind === 'no') {
     deps.log.info?.({ shortId: claimed.shortId }, 'draft rejected by ops');
-    await ackOps(deps, opsPhone, `Dropped #${claimed.shortId}. The guest will get nothing.`);
+    await ackOps(deps, opsPhone, `Dropped #${claimed.shortId}. The guest will get nothing.`, claimed.conversationId);
     return;
   }
 
@@ -104,7 +104,7 @@ async function sendApprovedReply(
       summary: 'An approved draft could not be sent — its conversation was not found',
       detail: { shortId: draft.shortId },
     });
-    await ackOps(deps, opsPhone, `#${draft.shortId} approved, but I could not find the guest thread.`);
+    await ackOps(deps, opsPhone, `#${draft.shortId} approved, but I could not find the guest thread.`, draft.conversationId);
     return;
   }
   // 🚨 §6.7 line 1 is absolute: human_active ⇒ the AI is SILENT. A takeover can
@@ -123,6 +123,7 @@ async function sendApprovedReply(
       deps,
       opsPhone,
       `#${draft.shortId} approved, but a human has taken this thread over — not sending. They will reply from the app.`,
+      draft.conversationId,
     );
     return;
   }
@@ -142,7 +143,7 @@ async function sendApprovedReply(
   });
   if (result.ok) {
     deps.log.info?.({ shortId: draft.shortId }, 'approved draft sent to guest');
-    await ackOps(deps, opsPhone, `Sent to ${who} — #${draft.shortId}.`);
+    await ackOps(deps, opsPhone, `Sent to ${who} — #${draft.shortId}.`, draft.conversationId);
     return;
   }
   await alertOps(deps.log, {
@@ -154,6 +155,7 @@ async function sendApprovedReply(
     deps,
     opsPhone,
     `#${draft.shortId} approved, but it did not send (${result.error}). The guest has NOT been messaged.`,
+    draft.conversationId,
   );
 }
 
@@ -169,9 +171,19 @@ async function replyToUndecidable(
     existing === null
       ? `Sorry — no draft #${shortId.toUpperCase()}.`
       : `#${existing.shortId} was already ${existing.status}. Nothing to do.`;
-  await ackOps(deps, opsPhone, line);
+  await ackOps(deps, opsPhone, line, existing?.conversationId);
 }
 
-function ackOps(deps: StaffCommandDeps, opsPhone: string, body: string): Promise<unknown> {
-  return deps.wa.sendText(opsPhone, body, { conversationId: null, sender: 'system' });
+/** CH-18c: the ack names the guest and/or the draft shortId, so link it to the
+ * guest (resolved from the draft's conversation) for durable erasure. `null`
+ * conversationId (no draft found) names no guest, so it stays unlinked. */
+async function ackOps(
+  deps: StaffCommandDeps,
+  opsPhone: string,
+  body: string,
+  conversationId?: string | null,
+): Promise<unknown> {
+  const aboutGuestId =
+    conversationId == null ? undefined : ((await getConversationGuestId(deps.db, conversationId)) ?? undefined);
+  return deps.wa.sendText(opsPhone, body, { conversationId: null, sender: 'system', aboutGuestId });
 }
