@@ -15,7 +15,7 @@
  *  - The 5-minutely nudger and a staff DONE can race on the same row.
  * This is the `lifecycle/sender.ts` pattern (CH-12), for the same reason.
  */
-import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { randomInt } from 'node:crypto';
 import type { DbLike } from './client.js';
 import { tasks } from './schema.js';
@@ -481,6 +481,23 @@ export async function convertNightQueueTasks(
     })
     .where(and(eq(tasks.kind, 'night_queue'), eq(tasks.status, 'open')))
     .returning();
+}
+
+/** How many tasks of the given kinds were RAISED (opened_at) since `since` —
+ * CH-17's daily rollup "escalations today". Counts RAISED, not currently-open:
+ * a resolved escalation still happened today (distinct from getLiveTasksByKinds,
+ * which is the live-work count). */
+export async function countTasksRaisedSince(
+  db: DbLike,
+  kinds: TaskKind[],
+  since: Date,
+): Promise<number> {
+  if (kinds.length === 0) return 0;
+  const [row] = await db
+    .select({ n: count() })
+    .from(tasks)
+    .where(and(inArray(tasks.kind, kinds), gte(tasks.openedAt, since)));
+  return row?.n ?? 0;
 }
 
 /** Open/nudged tasks of the given kinds — the morning digest's overnight

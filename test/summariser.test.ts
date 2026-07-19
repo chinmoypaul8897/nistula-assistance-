@@ -7,7 +7,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ConverseFn, ConverseInput } from '../src/brain/claude.js';
 import {
   SUMMARISER,
@@ -26,6 +26,8 @@ import {
   getSummarisableMessages,
   getSystemContextKinds,
 } from '../src/db/summaries.js';
+import { configureCostMeter, noteSpend, resetCostMeter } from '../src/ops/costMeter.js';
+import { istCalendarDay } from '../src/lib/time.js';
 import { textResult } from './helpers/brain.js';
 import { seedConversation, seedGuestMessage, seedOutboundMessage } from './helpers/seed.js';
 
@@ -284,6 +286,22 @@ async function conversationRow(id: string) {
     .where(eq(schema.conversations.id, id));
   return row;
 }
+
+describe('summariser — CH-17 cost kill-switch (pre-merge review fix)', () => {
+  afterEach(() => resetCostMeter());
+
+  it('DEFERS (no model call, cursor unmoved) when the 4x cost switch is HARD', async () => {
+    const { conversation } = await seedConversation(db, '+917700900299');
+    for (let i = 0; i < 40; i++) await seedGuestMessage(db, conversation.id, `c${i}`, 4000 - i * 10);
+    configureCostMeter({ thresholdInr: 1 });
+    noteSpend(istCalendarDay(new Date()), 100); // 100 >= 4x1 ⇒ hard
+
+    const rig = makeSummariserRig();
+    expect(await summariseConversation(rig.deps, conversation.id)).toBe('deferred');
+    expect(rig.converseCalls).toHaveLength(0); // the second Anthropic call site is now gated too
+    expect((await conversationRow(conversation.id))?.summaryUptoMessageId).toBeNull(); // re-runs next pass
+  });
+});
 
 describe('summariseConversation — the compaction engine', () => {
   it('compacts exactly the pre-window range, advances the cursor once; a re-run is a noop (DoD: idempotent)', async () => {

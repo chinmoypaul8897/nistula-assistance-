@@ -33,6 +33,7 @@ import type { Db } from '../db/client.js';
 import { insertRawEvent, updateRawEvent } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
 import { alertOps } from '../ops/alerts.js';
+import { noteHeartbeat } from '../ops/heartbeat.js';
 import { BOOKING_EVENT_QUEUES } from '../jobs/index.js';
 import { sendInTx } from '../jobs/txSend.js';
 import type { EzeeAckItem, EzeeClient } from './client.js';
@@ -270,6 +271,13 @@ export function createEzeePoller(deps: EzeePollerDeps): EzeePoller {
   }
 
   async function runPoll(): Promise<void> {
+    // CH-17 (pre-merge review fix): beat the watchdog heartbeat on cron RUN, NOT
+    // on eZee SUCCESS. The heartbeat answers "is our poll cron alive" — a wedged
+    // or unscheduled cron stops beating and IS caught. It must NOT flip on an
+    // eZee OUTAGE (a third party down): beating only on success inverted internal
+    // health into a false dead-man ping + a false ops page on every routine eZee
+    // blip. eZee reachability has its OWN ladder (ezee_poll_failing, 5 in a row).
+    noteHeartbeat('poller');
     try {
       await runPollCycle();
     } catch (error) {

@@ -977,3 +977,76 @@ SELECT kind, status, skip_reason, send_at FROM scheduled_messages
 - **STOP is durable.** `opt_out_marketing` is only ever cleared by hand (a human), never by code.
 - The dev test number cannot prove the closed-window send path (a "template" is free-form in
   `simulate` mode); the STOP confirmation lands because the guest just messaged (window open).
+
+## Watchdog, alerts & cost meter (CH-17)
+
+### What runs
+- **Watchdog** (every 5 min). Probes the internals and pings `HEALTHCHECKS_URL` **only when
+  healthy** (boss responsive, DB round-trip <1s, poller last success <5 min, sender last run
+  <5 min). Unhealthy ⇒ it does NOT ping (healthchecks.io's dead-man timeout raises the external
+  alert) and ALSO raises a direct ops WhatsApp alert (`watchdog_unhealthy`). Same tick runs the
+  **quiet-channel monitor**: in business hours (08:00–23:00 IST) with NO message in OR out for
+  30 min, warns ops once (`channel_quiet` — "verify webhook subscription").
+- **Ops alerts** (`alertOps`) now WhatsApp-deliver to `OPS_NUMBERS` via the `nst_digest` template,
+  deduped to **once per 30 min per alert kind** (in memory; a deploy resets it, which errs toward
+  more delivery). The log line always fires too. **`wa_token_expired` is log-only by design** — a
+  dead token would fail its own alert send with the same 401.
+- **Cost meter.** A per-IST-day INR total (seeded from `cost_events` at boot). At **2×**
+  `COST_ALERT_INR_PER_DAY` → `cost_soft_alarm` (keep serving). At **4×** → the AI STOPS calling
+  Anthropic: the guest gets an honest "bringing the team in" hold line, a human is escalated, and
+  `cost_kill_switch` pages ops.
+- **Per-conversation cap.** 60 AI turns per conversation per IST day → the guest gets the cool-off
+  line and store-only for the rest of the day.
+- **Daily rollup** (23:30 IST). One ops line — spend, msgs in/out, conversations, escalations,
+  guardrail hits — plus a `raw_events(daily_rollup)` breakdown. Fail-quiet on an empty day.
+- **`/health`** now returns `{ok, version, uptime, db, boss, pollerAgeMs, senderAgeMs, degraded}`.
+  It STAYS 200 while the process serves (liveness) — a degraded external website is reported, never
+  gated, so it cannot restart-loop a healthy box.
+
+### The cost kill-switch — how it clears (Paul's call, CH-17)
+- **It auto-resumes at IST midnight.** The daily total is keyed on the IST day, so the new day
+  starts at 0 and the AI serves again. There is no in-prod reset button (Railway runs admin routes
+  disabled — by design).
+- **A restart does NOT un-trip a genuine same-day overrun**: on boot the meter re-seeds today's
+  total from `cost_events`, which is still ≥4×, so it re-trips. That asymmetry is the safety — a
+  runaway can only be *fixed* (address the cause, or raise `COST_ALERT_INR_PER_DAY` and redeploy),
+  never silently un-stopped.
+- When `cost_kill_switch` fires: check `/health` and the logs for the spend driver, decide whether
+  it is real load or a bug, and either wait for midnight or raise the budget + redeploy.
+
+### The WA-token-expired alert → the rotation ritual
+`wa_token_expired` ("WA token expired — rotate per runbook") means the WhatsApp access token is
+dead (HTTP 401 / Meta code 190). Rotate it: generate a new **System User permanent** token in Meta
+Business settings, then set `WA_ACCESS_TOKEN` on Railway with **Node** (never a PowerShell pipe — it
+prepends a UTF-8 BOM into the stored value). This alert is log-only (a dead token cannot send its
+own WhatsApp alert), so watch the logs / healthchecks for it.
+
+### Reading the state
+```sql
+-- today's spend by kind (IST day)
+SELECT kind, sum(inr_estimate)::numeric(12,2) AS inr, sum(quantity) AS qty
+  FROM cost_events WHERE day = to_char(now() AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')
+  GROUP BY kind ORDER BY inr DESC;
+-- the daily rollups
+SELECT created_at, payload FROM raw_events
+  WHERE source='system' AND event_type='daily_rollup' ORDER BY created_at DESC LIMIT 7;
+```
+`curl -s $BASE/health | jq` shows `pollerAgeMs`/`senderAgeMs` (null = that feature is disabled here,
+which is correct in dev where the poller never runs).
+
+### Alerts you may see
+- `watchdog_unhealthy` — internals failed the probe (detail lists which: db/boss/poller/sender).
+- `channel_quiet` — no traffic either way for 30 min in business hours; verify the Meta webhook sub.
+- `cost_soft_alarm` / `cost_kill_switch` — 2× / 4× the daily budget.
+- `wa_token_expired` — rotate the WA token (above). `rollup_undelivered` — the 23:30 line reached no
+  ops number (dev's standing state; harmless).
+
+### Known limits (CH-17)
+- The alert dedupe and the cost total are **in memory** — a redeploy resets the dedupe window (more
+  delivery, fail-safe) and re-seeds the cost total from `cost_events` (no loss).
+- A poller that is enabled but has **never once succeeded** since boot reads as N/A (not stale), so
+  the watchdog won't flag it via `pollerAgeMs` — a boot/registration failure is caught instead by the
+  boss check and by healthchecks.io (whole-process death).
+- Live over-the-wire ops-alert + 23:30 digest delivery is **not yet demonstrated** — it needs a warm
+  ops number (a second allowlisted number). The mechanics are proven by tests against the real send
+  path in `simulate` mode.

@@ -21,6 +21,7 @@ import type { EzeeAckItem, EzeeAckOutcome, EzeeClient, EzeePollOutcome } from '.
 import { createEzeePoller, type EzeePoller } from '../src/ezee/poller.js';
 import { parseBookingsEnvelope, type EzeeCancelReservation, type EzeeReservation } from '../src/ezee/types.js';
 import { ensureQueues, BOOKING_EVENT_QUEUES } from '../src/jobs/index.js';
+import { heartbeatAgeMs, resetHeartbeats } from '../src/ops/heartbeat.js';
 import { createTestBoss, TEST_URL } from './helpers/boss.js';
 
 let client: ReturnType<typeof postgres>;
@@ -151,6 +152,20 @@ async function drainEvents(kind: 'created' | 'modified' | 'cancelled'): Promise<
 }
 
 // --- battery ------------------------------------------------------------
+
+describe('CH-17 watchdog heartbeat (pre-merge review fix)', () => {
+  it('beats on cron RUN even when eZee is UNREACHABLE — a third-party outage must not flip internal health', async () => {
+    resetHeartbeats();
+    const { poller } = makePoller([{ status: 'unreachable' } as EzeePollOutcome]);
+    expect(heartbeatAgeMs('poller')).toBeNull(); // not beaten yet
+
+    await poller.runPoll(); // eZee down → the cycle fails, but the cron RAN
+
+    const age = heartbeatAgeMs('poller');
+    expect(age).not.toBeNull(); // beat despite the outage (was: only on success)
+    expect(age as number).toBeLessThan(60_000);
+  });
+});
 
 describe('golden path', () => {
   it('new booking → mirror row + created event + guest link + exact ACK + audit row', async () => {

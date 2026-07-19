@@ -21,6 +21,7 @@ import {
 import { countGuardrailHitsSince } from '../db/repos.js';
 import { countExpiredDraftsSince } from '../db/drafts.js';
 import { sanitiseInline } from '../brain/prompt.js';
+import { capUtf16 } from '../lib/text.js';
 import { alertOps, type AlertLogger } from '../ops/alerts.js';
 import type { WaClient } from '../wa/client.js';
 import { assignFor, type Roster } from './roster.js';
@@ -155,18 +156,9 @@ function buildSummary(run: DigestRun, firstConverted: Task | undefined): string 
   return capUtf16(parts.join('; '), SUMMARY_MAX_UNITS);
 }
 
-/** Trim to <= maxUnits UTF-16 CODE UNITS without splitting a surrogate pair.
- * A Meta template param (the digest slot is staffReadParam `.max(200)`) is
- * measured in UTF-16 units, so a code-point cap alone could still produce a
- * string zod rejects — an emoji-heavy summary would then silently kill the
- * OPS digest (review DEFECT). */
-export function capUtf16(s: string, maxUnits: number): string {
-  if (s.length <= maxUnits) return s;
-  let end = maxUnits;
-  const code = s.charCodeAt(end - 1);
-  if (code >= 0xd800 && code <= 0xdbff) end -= 1; // don't cut a surrogate pair
-  return s.slice(0, end);
-}
+// capUtf16 moved to lib/text.ts in CH-17 (shared with the ops-alert + cost-rollup
+// senders). Re-exported so existing importers (staff/qualityReport) are unchanged.
+export { capUtf16 } from '../lib/text.js';
 
 async function sendToOps(deps: DigestDeps, day: string, summary: string): Promise<boolean> {
   if (deps.opsNumbers.length === 0) {

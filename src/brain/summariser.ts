@@ -21,6 +21,7 @@ import {
 import { summarizeError } from '../lib/logger.js';
 import { istCalendarDay } from '../lib/time.js';
 import { alertOps } from '../ops/alerts.js';
+import { costStatus } from '../ops/costMeter.js';
 import type { ConverseFn } from './claude.js';
 import {
   TRANSCRIPT_FETCH_LIMIT,
@@ -73,7 +74,7 @@ Apply the SAME discard rules to the CURRENT NOTES: drop any existing bullet that
 Merge the CURRENT NOTES with the NEW MESSAGES into ONE updated list: keep what still matters, drop what is stale, never invent or embellish. Prefix a bullet with its date (YYYY-MM-DD) when it anchors a booking, stay or event.
 Reply with ONLY the bullet list — one line per bullet, starting "- ", no headings, no commentary.`;
 
-export type SummariseOutcome = 'applied' | 'advanced' | 'noop' | 'lost' | 'failed';
+export type SummariseOutcome = 'applied' | 'advanced' | 'noop' | 'lost' | 'failed' | 'deferred';
 
 /**
  * Compacts one conversation up to the live-window boundary. Idempotent by
@@ -135,6 +136,15 @@ export async function summariseConversation(
       summary: memory.summary,
     });
     return advanced ? 'advanced' : 'lost';
+  }
+
+  // CH-17 (pre-merge review fix): the 4× cost kill-switch must STOP calling
+  // Anthropic at EVERY call site — the summariser is the second one, and a leak
+  // has siblings. DEFER (do not advance the cursor) so the range re-runs next
+  // pass; the meter resets at IST midnight. Same costStatus gate as turn.ts.
+  if (costStatus(istCalendarDay(new Date())).level === 'hard') {
+    deps.log.info({ conversationId }, 'summariser skipped — daily cost kill-switch active (4x)');
+    return 'deferred';
   }
 
   let text: string;

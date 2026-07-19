@@ -59,6 +59,8 @@ import { applyHumanTakeover } from '../staff/humanTakeover.js';
 import type { Roster } from '../staff/roster.js';
 import { runSlaNudger, SLA_NUDGER_CRON } from '../staff/sla.js';
 import { runMorningDigest, DIGEST_CRON } from '../staff/digest.js';
+import { runWatchdog, WATCHDOG_CRON } from '../ops/watchdog.js';
+import { runDailyRollup, ROLLUP_CRON } from '../ops/rollup.js';
 import type { WaClient } from '../wa/client.js';
 
 export const CONVERSATION_PROCESS_QUEUE = 'conversation.process';
@@ -79,6 +81,10 @@ export const STAFF_DIGEST_QUEUE = 'staff.digest';
 // CH-16 draft mode: the 5-min expiry sweep and the Sunday-18:00 quality report.
 export const DRAFT_EXPIRY_QUEUE = 'draft.expiry';
 export const DRAFT_QUALITY_REPORT_QUEUE = 'draft.quality_report';
+// CH-17: the 5-min watchdog (health ping + quiet-channel monitor) and the
+// 23:30 daily cost/ops rollup.
+export const OPS_WATCHDOG_QUEUE = 'ops.watchdog';
+export const OPS_ROLLUP_QUEUE = 'ops.rollup';
 export const BOOKING_EVENT_QUEUES: Record<'created' | 'modified' | 'cancelled', string> = {
   created: BOOKING_CREATED_QUEUE,
   modified: BOOKING_MODIFIED_QUEUE,
@@ -296,6 +302,21 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
     retryBackoff: true,
     expireInSeconds: 120,
   });
+  // CH-17. Watchdog: no retry — the next 5-min tick IS the retry; expire < the
+  // cadence so a hung tick cannot stack. Rollup: a few backed-off retries so a
+  // transient blip at 23:30 does not lose the day's cost/ops line.
+  await boss.createQueue(OPS_WATCHDOG_QUEUE, {
+    policy: 'standard',
+    retryLimit: 0,
+    expireInSeconds: 240,
+  });
+  await boss.createQueue(OPS_ROLLUP_QUEUE, {
+    policy: 'stately',
+    retryLimit: 3,
+    retryDelay: 60,
+    retryBackoff: true,
+    expireInSeconds: 120,
+  });
 }
 
 /**
@@ -362,6 +383,9 @@ export interface JobsDeps {
   summariser?: SummariserThresholds;
   /** OPS_NUMBERS (E.164) for the interim price escalation; default none. */
   opsNumbers?: string[];
+  /** CH-17: HEALTHCHECKS_URL — the watchdog pings it when healthy. Unset ⇒ the
+   * ping leg is skipped (dev); the quiet-channel + alert legs still run. */
+  healthchecksUrl?: string;
   /** Config NIGHT_START/NIGHT_END for the SITUATION block; default 20:00/10:00. */
   nightStart?: string;
   nightEnd?: string;
@@ -724,6 +748,39 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
     await deps.boss.unschedule(STAFF_SLA_QUEUE).catch(() => {});
     await deps.boss.unschedule(STAFF_DIGEST_QUEUE).catch(() => {});
   }
+
+  // ── CH-17 watchdog ──────────────────────────────────────────────────────
+  // Unconditional: the health ping + quiet-channel monitor are valuable on every
+  // boot, independent of staff/lifecycle wiring. probeHealth/ping use their live
+  // defaults; alertOps delivery is the module singleton configured in main().
+  await deps.boss.work(OPS_WATCHDOG_QUEUE, workOptions, async () => {
+    await runWatchdog({
+      db: deps.db,
+      log: deps.log,
+      healthchecksUrl: deps.healthchecksUrl,
+      now: () => new Date(),
+    });
+  });
+  await scheduleCron(deps.boss, OPS_WATCHDOG_QUEUE, WATCHDOG_CRON, 'Asia/Kolkata', {
+    singletonKey: 'watchdog',
+  });
+
+  // ── CH-17 daily rollup ──────────────────────────────────────────────────
+  // Unconditional (only needs OPS_NUMBERS, not the roster). Empty ops list ⇒
+  // fail-quiet, like the digest. `now` re-derived per run so a long-lived
+  // process's day boundary cannot rot.
+  await deps.boss.work(OPS_ROLLUP_QUEUE, workOptions, async () => {
+    await runDailyRollup({
+      db: deps.db,
+      log: deps.log,
+      wa: deps.wa,
+      opsNumbers: deps.opsNumbers ?? [],
+      now: () => new Date(),
+    });
+  });
+  await scheduleCron(deps.boss, OPS_ROLLUP_QUEUE, ROLLUP_CRON, 'Asia/Kolkata', {
+    singletonKey: 'ops_rollup',
+  });
 
   // ── CH-14a human takeover (coexistence) ─────────────────────────────────
   // Cancel the queued (not-yet-run) debounce job for a paused conversation, so a

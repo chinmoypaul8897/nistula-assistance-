@@ -16,6 +16,7 @@ import type { Db } from '../db/client.js';
 import { insertCostEvents, type NewCostEvent } from '../db/repos.js';
 import { summarizeError } from '../lib/logger.js';
 import { istCalendarDay } from '../lib/time.js';
+import { noteSpend } from '../ops/costMeter.js';
 
 /** Flat conversion — real rate drifts; a fixed constant keeps estimates stable. */
 export const INR_PER_USD = 90;
@@ -96,9 +97,41 @@ export async function recordUsage(
 ): Promise<void> {
   try {
     const day = istCalendarDay(now);
-    const rows: NewCostEvent[] = costEventsFor(usage).map((row) => ({ day, ...row }));
+    const costRows = costEventsFor(usage);
+    const rows: NewCostEvent[] = costRows.map((row) => ({ day, ...row }));
     await insertCostEvents(deps.db, rows);
+    // CH-17: feed the intra-day meter ONLY after a successful commit, so the
+    // in-memory tally can never run ahead of what cost_events would re-seed.
+    noteSpend(
+      day,
+      costRows.reduce((sum, r) => sum + Number(r.inrEstimate), 0),
+    );
   } catch (error) {
     deps.log.warn({ err: summarizeError(error) }, 'cost_events insert failed (telemetry only)');
+  }
+}
+
+/**
+ * The billable cost of ONE template send (plan §8 CH-17 step 4). A placeholder
+ * price until real-number cutover: Meta bills WhatsApp per business-initiated
+ * CONVERSATION, category- and region-specific, and today WA_TEMPLATE_MODE is
+ * `simulate` so no real template actually sends. The point is that the rollup's
+ * cost line is not structurally zero; refine at cutover.
+ */
+export const WA_TEMPLATE_INR = 0.8;
+
+/** Records one wa_template cost_events row + feeds the meter. Best-effort like recordUsage. */
+export async function recordTemplateCost(
+  deps: { db: Db; log: { warn: (obj: Record<string, unknown>, msg?: string) => void } },
+  now: Date,
+): Promise<void> {
+  try {
+    const day = istCalendarDay(now);
+    await insertCostEvents(deps.db, [
+      { day, kind: 'wa_template', quantity: '1', inrEstimate: WA_TEMPLATE_INR.toFixed(4) },
+    ]);
+    noteSpend(day, WA_TEMPLATE_INR);
+  } catch (error) {
+    deps.log.warn({ err: summarizeError(error) }, 'wa_template cost insert failed (telemetry only)');
   }
 }

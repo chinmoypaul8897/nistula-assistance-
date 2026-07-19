@@ -138,6 +138,118 @@ export async function countGuardrailHitsSince(db: Db, since: Date): Promise<numb
   return row?.n ?? 0;
 }
 
+/**
+ * How many AI replies this conversation has sent since `since` — CH-17's
+ * per-conversation daily turn cap (§8 step 4). Counting real AI messages is the
+ * honest answer to "how many turns did this thread get today?" — no counter
+ * table to drift. `sender='ai'` already implies an outbound reply.
+ */
+export async function countAiMessagesSince(
+  db: Db,
+  conversationId: string,
+  since: Date,
+): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.sender, 'ai'),
+        gte(messages.createdAt, since),
+      ),
+    );
+  return row?.n ?? 0;
+}
+
+/**
+ * The two GUEST-FACING traffic timestamps CH-17's quiet-channel monitor needs.
+ * ::text → Date is safe here: a 30-min staleness check does not need the
+ * microsecond precision the cursor guards.
+ *
+ * 🚨 Guard by the CONTRACT ("did a message actually flow to/from a GUEST?"), not
+ * the proxy ("does an out row exist?") — pre-merge review DEFECT. Every ops
+ * alert / digest / SLA nudge writes a `direction='out', sender='system',
+ * conversation_id=null` row, committed 'queued' BEFORE the Graph call — so even
+ * a FAILED ops send left a fresh 'out' row that made the pipe look alive and
+ * silenced the very monitor meant to catch a dropped inbound webhook.
+ */
+export async function lastGuestInboundAt(db: Db): Promise<Date | null> {
+  const [row] = await db
+    .select({ at: sql<string | null>`max(${messages.createdAt})::text` })
+    .from(messages)
+    .where(and(eq(messages.direction, 'in'), eq(messages.sender, 'guest')));
+  return row?.at != null ? new Date(row.at) : null;
+}
+
+/** The newest guest reply we actually DELIVERED (sent/delivered/read) — proof
+ * the Graph link is up. Excludes system ops cards, null-conversation sends, and
+ * 'queued'/'failed' rows (a committed-but-unconfirmed or failed send is NOT
+ * evidence the channel works). */
+export async function lastGuestReplyDeliveredAt(db: Db): Promise<Date | null> {
+  const [row] = await db
+    .select({ at: sql<string | null>`max(${messages.createdAt})::text` })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.direction, 'out'),
+        inArray(messages.sender, ['ai', 'human']),
+        sql`${messages.conversationId} is not null`,
+        inArray(messages.status, ['sent', 'delivered', 'read']),
+      ),
+    );
+  return row?.at != null ? new Date(row.at) : null;
+}
+
+/** Messages in a direction since `since` — CH-17's daily rollup (msgs in/out). */
+export async function countMessagesSince(
+  db: Db,
+  direction: 'in' | 'out',
+  since: Date,
+): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(messages)
+    .where(and(eq(messages.direction, direction), gte(messages.createdAt, since)));
+  return row?.n ?? 0;
+}
+
+/** Distinct conversations that saw a message since `since` — the rollup's
+ * "conversations today" (threads with activity, not first-contact rows). */
+export async function countActiveConversationsSince(db: Db, since: Date): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(distinct ${messages.conversationId})::int` })
+    .from(messages)
+    .where(and(gte(messages.createdAt, since), sql`${messages.conversationId} is not null`));
+  return row?.n ?? 0;
+}
+
+export interface DailyCost {
+  totalInr: number;
+  byKind: Record<string, number>;
+}
+
+/** Sum of cost_events INR for one IST day, and the per-kind breakdown — the
+ * rollup's cost line + the durable raw_events payload. `day` is istCalendarDay. */
+export async function sumCostForDay(db: Db, day: string): Promise<DailyCost> {
+  const rows = await db
+    .select({
+      kind: costEvents.kind,
+      inr: sql<string>`coalesce(sum(${costEvents.inrEstimate}), 0)::text`,
+    })
+    .from(costEvents)
+    .where(eq(costEvents.day, day))
+    .groupBy(costEvents.kind);
+  const byKind: Record<string, number> = {};
+  let totalInr = 0;
+  for (const r of rows) {
+    const v = Number(r.inr);
+    byKind[r.kind] = v;
+    totalInr += v;
+  }
+  return { totalInr, byKind };
+}
+
 export interface GuardrailRuleCount {
   rule: string;
   count: number;
