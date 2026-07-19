@@ -9,7 +9,8 @@ import type { Db } from '../../src/db/client.js';
 import { upsertMirrorRow, type MirrorRowInput } from '../../src/db/bookings.js';
 import { insertGuestFactGuarded, type GuestFactKind } from '../../src/db/guestMemory.js';
 import { touchPhoneWindow } from '../../src/db/windows.js';
-import { guests } from '../../src/db/schema.js';
+import { guests, scheduledMessages } from '../../src/db/schema.js';
+import { LIFECYCLE_TEMPLATES } from '../../src/lifecycle/templates.js';
 import type { Roster } from '../../src/staff/roster.js';
 import { istCalendarDay, nowIST, shiftDay } from '../../src/lib/time.js';
 
@@ -138,4 +139,25 @@ export async function seedFact(
 /** Mark a guest opted in to marketing (S6 win-back precondition). */
 export async function seedMarketingOptIn(db: Db, guestId: string): Promise<void> {
   await db.update(guests).set({ marketingOptIn: true }).where(eq(guests.id, guestId));
+}
+
+/**
+ * Seed one pending win-back scheduled row (S6). CH-12 schedules the win-back at
+ * BOOKING time (75 days ahead); here we insert it directly so S6 can prove the
+ * SEND + the reply memory without a 75-day clock dance. `sendAt` in the past ⇒
+ * due now; in the future ⇒ stays pending (the STOP-cancellation probe).
+ */
+export async function seedWinback(
+  db: Db,
+  opts: { guestId: string; bookingId: string | null; reservationNo: string; firstName: string; sendAt: Date },
+): Promise<void> {
+  await db.insert(scheduledMessages).values({
+    guestId: opts.guestId,
+    bookingId: opts.bookingId,
+    kind: 'winback',
+    templateName: LIFECYCLE_TEMPLATES.winback.name,
+    params: { firstName: opts.firstName, villaType: 'Nistula Villa', locality: 'Assagao' },
+    sendAt: opts.sendAt,
+    dedupeKey: `winback:${opts.reservationNo}`,
+  });
 }

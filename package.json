@@ -15,6 +15,7 @@
     "test": "vitest run",
     "check": "tsc --noEmit && eslint . && vitest run",
     "kb:build": "tsx scripts/kb-build.ts",
+    "replay": "tsx scripts/replay-scenarios.ts",
     "ezee:backfill": "tsx scripts/ezee-backfill.ts",
     "ezee:capture": "tsx scripts/ezee-capture.ts",
     "ezee:reconcile": "tsx scripts/ezee-reconcile.ts",

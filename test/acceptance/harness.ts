@@ -15,10 +15,9 @@
  * and varies only the HOUR (S5's night/morning); date-relative scenarios seed
  * dates relative to today and leave the clock real.
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { vi } from 'vitest';
 import type { PgBoss } from 'pg-boss';
 import type { ConverseFn, ConverseInput, ConverseResult } from '../../src/brain/claude.js';
 import { createDegradedTracker } from '../../src/brain/tools/degraded.js';
@@ -102,6 +101,9 @@ export interface Harness {
   setClockAtHour(hhmm: string): void;
   /** Clear the business clock back to real time. */
   clearClock(): void;
+  /** The concatenated system-prompt text of the LAST model turn — so a scenario
+   * can assert what the model actually SAW (e.g. block [5] carried a fact). */
+  lastSystemText(): string;
   close(): Promise<void>;
 }
 
@@ -114,7 +116,10 @@ export async function buildHarness(): Promise<Harness> {
   const client = postgres(TEST_URL, { max: 6, onnotice: () => {} });
   const db: Db = drizzle(client, { schema });
   const boss = await createTestBoss();
-  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  // A silent logger (no vitest dependency, so the CLI can run under tsx) — the
+  // harness never asserts on logs; SYS outcomes are read from the DB and sends.
+  const noop = () => undefined;
+  const log = { info: noop, warn: noop, error: noop };
   const roster = acceptanceRoster();
   const door: DoorState = { roomId: B3_ROOM_ID, currentStatus: 'Confirmed' };
 
@@ -150,7 +155,9 @@ export async function buildHarness(): Promise<Harness> {
   // converse once per tool round; script() replaces the queue so a turn that
   // called fewer times than scripted cannot leak rounds into the next.
   let scriptQueue: ConverseResult[] = [];
+  let lastSystem = '';
   const converse: ConverseFn = async (input: ConverseInput) => {
+    lastSystem = input.system.map((b) => b.text).join('\n');
     const next = scriptQueue.shift();
     if (process.env.ACC_DEBUG === '1') {
       const lastUser = [...input.messages].reverse().find((m) => m.role === 'user');
@@ -275,6 +282,7 @@ export async function buildHarness(): Promise<Harness> {
       await db.execute(TRUNCATE);
       sends.length = 0;
       scriptQueue = [];
+      lastSystem = '';
       // raw_events is truncated here, so the ingest counter must reset with it —
       // otherwise waitIngested waits for a cumulative count the fresh table can
       // never reach (S3 timed out on exactly this).
@@ -295,6 +303,10 @@ export async function buildHarness(): Promise<Harness> {
 
     clearClock() {
       delete process.env.FAKE_NOW_IST;
+    },
+
+    lastSystemText() {
+      return lastSystem;
     },
 
     script(...rounds) {

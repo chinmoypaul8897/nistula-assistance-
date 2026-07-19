@@ -20,7 +20,7 @@ const RES = 'ACC9001';
 const GUEST = '+917700900102';
 const OTA_RES = 'ACC9002';
 const OTA_GUEST = '+917700900103';
-const KINDS = ['confirmation', 'prearrival', 'welcome', 'poststay', 'winback'];
+const KINDS = ['confirmation', 'prearrival', 'welcome', 'poststay', 'winback'] as const;
 
 export const s2: Scenario = {
   id: 'S2',
@@ -28,7 +28,6 @@ export const s2: Scenario = {
   async run(h) {
     // A direct (Walk-in) booking arriving in 5 days, phone present.
     const checkIn = istDay(5);
-    const checkOut = istDay(7);
     await seedDirectBooking(h.db, RES, 'Rahul Menon', GUEST, 5, 2);
     await h.driveBooking('created', RES);
 

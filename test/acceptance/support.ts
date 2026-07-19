@@ -13,7 +13,6 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { ConverseResult } from '../../src/brain/claude.js';
 import type { EzeeClient, EzeePollOutcome } from '../../src/ezee/client.js';
 import type { EzeeReservation } from '../../src/ezee/types.js';
-import type { HttpRequestOptions } from '../../src/lib/http.js';
 import { createWebsiteClient, type WebsiteClient } from '../../src/brain/tools/websiteApi.js';
 
 const ZERO_USAGE: ConverseResult['usage'] = {
@@ -75,7 +74,7 @@ export function toolUse(
  * dates are echoed back for internal consistency of the tool result.
  */
 export function fixtureWebsite(): WebsiteClient {
-  const http = async (url: string, _options?: HttpRequestOptions): Promise<Response> => {
+  const http = async (url: string): Promise<Response> => {
     const q = new URL(url).searchParams;
     const checkIn = q.get('checkIn') ?? '2026-12-20';
     const checkOut = q.get('checkOut') ?? '2026-12-22';
