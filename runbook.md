@@ -535,6 +535,54 @@ money and creates only an unconfirmed hold (which reserves nothing), so the blas
 radius is unauthenticated writes, not stolen inventory — but it is a website-repo
 pre-launch task (plan §10: "gate `/api/debug/*`").
 
+## Acceptance — the six scenarios (CH-19)
+
+The contract for "working" is the six `docs/product-picture.md` scenarios. CH-19
+proves them two ways: an **automated in-process replay** (green in CI, run anytime)
+and a **live replay on the number** (the parts a deterministic harness cannot
+prove — real Claude's voice, and the legs blocked until real-number cutover).
+
+### The automated replay — `pnpm replay`
+
+Needs only a running Postgres (`docker compose up -d postgres`); it provisions the
+test DB itself. It drives all six scenarios through the REAL pipeline
+(webhook → worker → guardrails → lifecycle/staff/escalation), stubbing ONLY the
+four external boundaries deterministically — Claude (scripted turns), the website
+quote API (fixture), eZee BKG-03 door reads (fixture), and WhatsApp sends
+(captured, never dispatched). It prints a PASS/FAIL line per scenario and exits
+non-zero on any failure. The identical assertions run in `pnpm check` via
+`test/acceptance/replay.test.ts`, so a regression in any earlier chunk that breaks
+a product-picture "SYS:" outcome turns the build red. **This is what "six green
+scenario runs" means (plan §8 CH-19 DoD).** It never calls a live external API.
+
+Two documented refinements the replay pins (contract, not bugs): after a mere SLA
+**nudge** the honest wording is "I've nudged housekeeping" (C1), *not* "on the
+way" (C2 — a nudge moves nobody); and a dev-`simulate` lifecycle message to a
+**closed** window **defers** (there is no approved template yet) — the replay
+drives `WA_TEMPLATE_MODE=send` to prove the production template path instead.
+
+### The live replay (at / after real-number cutover)
+
+These legs are **deferred**, exactly as every prior chunk's live DoD was, because
+they need what dev does not have. Run them during the cutover smoke script (step
+10 of the checklist above):
+
+- **S1 (pre-sales)** — fully runnable now on the test number: quote, discount
+  deflection, booking link, in Nistula's voice.
+- **S2 / S6 (lifecycle + win-back)** — need **approved templates** on the real
+  WABA (`WA_TEMPLATE_MODE=send`); until then a closed-window send correctly
+  defers. Confirm a real confirmation + win-back land after template approval.
+- **S3 (towels DONE) / S4 (staff echo)** — need a **second allowlisted number**
+  (Meta test numbers only message allowlisted recipients) and a **populated
+  roster** whose members have messaged the line (OQ-25). Play staff on the second
+  number: card → `DONE` → guest told; and a human reply pausing the AI.
+- **S5 (night)** — runnable with `FAKE_NOW_IST` for the demo clock; the morning
+  digest leg needs the roster.
+
+Human voice pass: Paul plays all six against real Claude and reviews the
+transcripts against `kb/source/voice-guide.md`. Record the sign-off in
+`progress.md`.
+
 ## WhatsApp webhook + deploy (CH-02)
 
 ### The standing dev workflow (decided in CH-02 — no tunnels)
