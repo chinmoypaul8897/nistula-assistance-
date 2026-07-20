@@ -163,7 +163,7 @@ nistula-assistance/
 
 - Every chunk ships unit tests for its logic + at least one integration test at its seam, using fixtures in `test/fixtures/` (payload shapes from §5, sanitised).
 - One end-to-end "golden path" test exists from CH-03 (echo variant) and is upgraded in CH-04 to fixture-in → mocked-Claude → reply-out; it must stay green in every later chunk.
-- `scripts/replay-scenarios.ts` (CH-19) replays the six acceptance scenarios against a running dev instance.
+- `scripts/replay-scenarios.ts` (CH-19) replays the six acceptance scenarios against a running dev instance. **🚨 SUPERSEDED IN PLACE (CH-19, Paul-approved): it replays them IN-PROCESS, not against a running `pnpm dev`.** A live instance would call real Claude and the live website (which itself hits the LIVE eZee PMS), and there is no boot seam to mock either — which this same §3.5 forbids two lines below ("no test calls a live external API"). The replay boots the REAL pipeline in-process and stubs only the four external boundaries.
 - No test calls a live external API. `lib/http.ts` is the single fetch wrapper — injected in tests.
 
 ### 3.6 Git discipline (exact rules — GitHub is the audit trail of the whole build)
@@ -884,7 +884,7 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 
 **Context.** The product picture is the contract (§2.4). This chunk proves it, end to end, on the test line — then tags v1.0.
 
-**Goal.** `scripts/replay-scenarios.ts` drives all six scenarios against a running instance (seeded mirror data, clock overrides via env) and a human transcript review confirms voice quality.
+**Goal.** `scripts/replay-scenarios.ts` drives all six scenarios against a running instance (seeded mirror data, clock overrides via env) and a human transcript review confirms voice quality. **🚨 SUPERSEDED IN PLACE (CH-19, Paul-approved Q1): "a running instance" is IN-PROCESS** — see §3.5's marked line. Seeded mirror data and `FAKE_NOW_IST` clock control are as written; the human transcript review is the separate LIVE pass, which is what validates voice (invariant #6) because a scripted harness cannot.
 
 **Steps.**
 1. Scenario harness: seed script (guests, mirrored bookings incl. a B3 active stay + a 75-day-old past stay), scripted inbound sequences with expected-outcome assertions (tool calls made, tasks created, messages matching regex sets, timing rows).

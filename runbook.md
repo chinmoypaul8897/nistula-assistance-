@@ -576,8 +576,11 @@ they need what dev does not have. Run them during the cutover smoke script (step
   (Meta test numbers only message allowlisted recipients) and a **populated
   roster** whose members have messaged the line (OQ-25). Play staff on the second
   number: card → `DONE` → guest told; and a human reply pausing the AI.
-- **S5 (night)** — runnable with `FAKE_NOW_IST` for the demo clock; the morning
-  digest leg needs the roster.
+- **S5 (night)** — play it **after 22:00 IST on the real clock.**
+  🚨 Do NOT set `FAKE_NOW_IST` on the deployed service: `config.ts` BOOT-REFUSES it
+  when `NODE_ENV=production` (§3.7), and Railway runs production — setting it would
+  fail the boot and take the service down. The fake clock is a local/dev-only lever
+  (the automated replay uses it in-process). The morning-digest leg needs the roster.
 
 Human voice pass: Paul plays all six against real Claude and reviews the
 transcripts against `kb/source/voice-guide.md`. Record the sign-off in

@@ -3276,12 +3276,49 @@ BLOCKER, real FALSE-GREEN gaps found and FIXED:**
   above). The automated "six green runs" (plan steps 1–2) are DONE.
 - The **LIVE human pass (step 3) and the `v1.0.0` tag (step 4) are DEFERRED pending Paul** — see below.
 
-**FILED (acceptance coverage gaps — covered by unit tests elsewhere; not fixed, per blockers-only):**
-send-failure/retry/terminal paths; the void-door OQ-24 path (`villaRoute`); `WINBACK_CAP` <2/365d
-(lifecycle tests); send-intent retry idempotency; the SLA ladder rungs (`staff-sla-ladder.test.ts`);
-`AI OFF`; IST times beyond prearrival/welcome; confirmation body content; the quirk-from-KB line
-(prompt-level). S1's burst is 500ms-debounce-sensitive (low-probability flake; in-process margins make
-it unlikely).
+**🚨 ROUND-2 adversarial review (3 more agents: fix-regression / completeness critic / hygiene+PII) —
+RED again, and it caught a FALSE-GREEN IN ROUND 1'S OWN FIX. Fixed:**
+- **MAJOR — the S2 STATUS negative did not discriminate.** Round 1 used `status:'unknown'`, which
+  schedules 0 rows **even with `passesStatus` deleted**: `stayView.project()` refuses `unknown` as
+  undescribable, so the scheduler bails BEFORE the gate is consulted. A test that proved nothing.
+  **Fixed to `checked_out`** (describable but off the allowlist) — and **VERIFIED by regressing the gate:
+  with `checked_out` added to `LIFECYCLE_STATUSES`, S2 fails at exactly `a non-live-status booking
+  schedules nothing`** (S5/S6 fail too, since `passesTaskGate` shares `passesStatus`). It bites now.
+- **REVERTED round 1's staff-command clock change** (`jobs/index.ts`): prod-inert, test-inert, its
+  safety rationale did not hold (`setClockAtHour` keeps FAKE > real-now, so a FAKE-stamped
+  `human_active_until` can never read expired against `new Date()`), and it split three clocks that
+  agreed. CH-19's production surface is now the ONE justified change (`repos.ts` dbNow).
+- **CRITICAL (stability) — the replay was load-flaky.** The critic measured 6/6, 2/6, 1/6, 5/6, 1/6.
+  Two causes: (a) it ran concurrently with my own runs — **two vitest/replay processes share
+  `nistula_test` and TRUNCATE each other** (the standing trap, now in CLAUDE.md's Commands); (b) real
+  load-sensitivity at `quietMs:500` + 15s waits — a turn that misses its window cascades (no task ⇒ the
+  SLA nudge and everything after fail). **Fixed** by widening to `quietMs:1000/maxWaitMs:4000` and a
+  40s settle ceiling (120s per test). **5/5 consecutive vitest greens + CLI 6/6 exit 0, solo.** Also made
+  `driveBooking` wait on the SPECIFIC job id rather than queue-quiescence, which raced a cold worker.
+- Tightened the simulate-defer assertion to pin the REASON (`skipReason==='window_closed'`), tagged each
+  captured send with its client `mode`, and annotated S6's win-back check (its type/locality VALUES are
+  seeded, so it proves the TEMPLATE render, not the derivation — S2's confirmation discriminates that).
+- Docs corrected: **runbook §CH-19 told ops to set `FAKE_NOW_IST` for the live S5 leg — that BOOT-REFUSES
+  under `NODE_ENV=production` and would have taken the service DOWN during the cutover smoke script**;
+  now says play it after 22:00 IST on the real clock. `plan.md` §3.5 + §8 CH-19's "running dev instance"
+  marked SUPERSEDED in place; CLAUDE.md given a current-state header + `pnpm replay`.
+
+**🚨 FILED — AN UNBUILT PRODUCT-PICTURE BEAT (found by the completeness critic, NOT a CH-19 defect):**
+`docs/product-picture.md` S2 promises *"STAFF: arrivals digest line the evening before (via
+window-aware send)"*. **There is no evening cron anywhere** — the complete set is `DIGEST_CRON 0 10`
+(morning), `ROLLUP_CRON 30 23` (ops rollup, not arrivals), SLA, watchdog, keep-alive, draft-expiry,
+quality-report. It appears in no chunk's spec and was never built. CH-19 asserts the six SYS lines it
+CAN; this beat is genuinely missing and is now recorded rather than silently signed off. **Decide before
+go-live:** build it (a ~17:00 IST arrivals-tomorrow digest to staff) or amend the product picture.
+
+**FILED (acceptance coverage gaps; the enforcing logic is unit-tested elsewhere):**
+send-failure/retry/terminal paths; the void-door OQ-24 path (`villaRoute` — `h.door` is mutable but no
+scenario flips it); `WINBACK_CAP` <2/365d (asserts the cap fires, pins neither the 365d window nor that
+one prior still sends); send-intent retry idempotency (ordering proven, no crash-window test); the SLA
+ladder rungs (`staff-sla-ladder.test.ts`); `AI OFF`; IST times beyond prearrival/welcome; confirmation
+body content; **the quirk-from-KB line — covered at KB-COMPILE level only (`kb-build.test.ts`), NOT at
+prompt level** (the round-1 wording "prompt-level" was wrong). `turn-clock.test.ts` proves "≈ real now"
+rather than "the DB clock specifically" on its unset branch.
 
 **Open questions:** none new.
 

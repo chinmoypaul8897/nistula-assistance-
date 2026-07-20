@@ -74,6 +74,12 @@ export const s6: Scenario = {
       .from(messages)
       .where(and(eq(messages.conversationId, conversation.id), eq(messages.templateName, 'nst_winback_v1')));
     const body = winbackMsg?.body ?? '';
+    // SCOPE, stated honestly: the RENDER is real (the shipped LIFECYCLE_TEMPLATES
+    // .winback render + its param schema), so the STOP line and the "your {type}
+    // in {locality}" shape ARE proven here. The type/locality VALUES are seeded
+    // (seed.ts seedWinback), so this does NOT prove the derivation — that lives in
+    // plan.ts locality()/typeWithoutPlace and is discriminated by S2's confirmation,
+    // whose params the REAL scheduler derived from the mirror.
     assert(/Nistula Villa/.test(body) && /Assagao/.test(body), 'S6: names the villa TYPE + locality');
     assert(!/\bB3\b|Apartment/.test(body), 'S6: never a house (OQ-19)');
     assert(/STOP/i.test(body), 'S6: carries the STOP opt-out line');

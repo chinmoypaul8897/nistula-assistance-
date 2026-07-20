@@ -775,12 +775,15 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
           // allow).
           const body = await getMessageBody(deps.db, job.data.waMessageId);
           await handleStaffCommand(
-            // nowIST() not new Date(): a DONE's guest close-line checks
-            // human_active_until, which the takeover writer now stamps on the
-            // FAKE-aware clock — so this reader must share it, or the two split
-            // under a dev/test clock. Identical in production (FAKE_NOW is
-            // boot-refused there, §3.7).
-            { db: deps.db, log: deps.log, wa: deps.wa, roster, now: () => nowIST() },
+            // Stays on the real clock, deliberately — a CH-19 round-2 review
+            // reverted a change to nowIST() here. It was prod-inert (FAKE_NOW is
+            // boot-refused, §3.7) and test-inert, its safety rationale did not
+            // hold (setClockAtHour keeps FAKE > real-now, so a FAKE-stamped
+            // human_active_until can never read as expired against `new Date()`),
+            // and it split three clocks that agreed: closed_at would be stamped
+            // on the fake clock while the SLA nudger and morning digest below
+            // still read the real one.
+            { db: deps.db, log: deps.log, wa: deps.wa, roster, now: () => new Date() },
             { phone: job.data.phone, body },
           );
         }

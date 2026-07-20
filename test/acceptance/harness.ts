@@ -54,8 +54,17 @@ import { fixtureEzee, fixtureWebsite, txt, type DoorState, B3_ROOM_ID } from './
 const GRAPH = 'https://graph.test.invalid/v23.0';
 const PHONE_ID = '000000000000000';
 const DISPLAY = '917700900003';
-/** Short debounce windows — same code paths, CI-fast time (golden-path's rig). */
-const WINDOWS = { quietMs: 500, maxWaitMs: 2_000, sweepAfterMs: 3_000, sweepIntervalCron: '*/2 * * * *' };
+/**
+ * Short debounce windows — same code paths, CI-fast time (golden-path's rig).
+ * Deliberately NOT as tight as they could be: at quietMs 500 / 15s waits the
+ * suite flaked under machine load (a turn that misses its window cascades — the
+ * task is never raised, so the SLA nudge and every later assertion fail too).
+ * A green-forever gate must not be load-sensitive, so the margins buy headroom
+ * without changing a single code path or assertion.
+ */
+const WINDOWS = { quietMs: 1_000, maxWaitMs: 4_000, sweepAfterMs: 6_000, sweepIntervalCron: '*/2 * * * *' };
+/** Generous ceiling for a turn to settle — only ever reached on a loaded box. */
+const SETTLE_TIMEOUT_MS = 40_000;
 /** Far past, so every freshly-inserted mirror row clears the epoch gate; the
  * OTA/date negatives exercise the OTHER gates on purpose. */
 export const EPOCH = new Date('2000-01-01T00:00:00Z');
@@ -64,6 +73,8 @@ export interface CapturedSend {
   to: string;
   type: string;
   body: string;
+  /** Which wa client dispatched it — the two share one capture array. */
+  mode: 'send' | 'simulate';
   payload: Record<string, unknown>;
 }
 
@@ -131,20 +142,25 @@ export async function buildHarness(): Promise<Harness> {
   const door: DoorState = { roomId: B3_ROOM_ID, currentStatus: 'Confirmed' };
 
   const sends: CapturedSend[] = [];
-  const captureHttp = async (_url: string, options?: { body?: string }): Promise<Response> => {
-    const payload = JSON.parse(options?.body ?? '{}') as Record<string, unknown>;
-    const to = String(payload.to ?? '');
-    const type = String(payload.type ?? 'text');
-    const body =
-      type === 'text'
-        ? String((payload.text as { body?: string } | undefined)?.body ?? '')
-        : JSON.stringify(payload.template ?? {});
-    sends.push({ to, type, body, payload });
-    return new Response(JSON.stringify({ messages: [{ id: `wamid.OUT-${sends.length}` }] }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  };
+  // Tagged per client: both write to ONE capture, so without `mode` a future
+  // count assertion would silently conflate the send-mode and simulate-mode
+  // transports (a round-2 review flagged the latent trap).
+  const makeCapture =
+    (mode: CapturedSend['mode']) =>
+    async (_url: string, options?: { body?: string }): Promise<Response> => {
+      const payload = JSON.parse(options?.body ?? '{}') as Record<string, unknown>;
+      const to = String(payload.to ?? '');
+      const type = String(payload.type ?? 'text');
+      const body =
+        type === 'text'
+          ? String((payload.text as { body?: string } | undefined)?.body ?? '')
+          : JSON.stringify(payload.template ?? {});
+      sends.push({ to, type, body, mode, payload });
+      return new Response(JSON.stringify({ messages: [{ id: `wamid.OUT-${sends.length}` }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
   const waDeps = {
     db,
     log,
@@ -152,7 +168,6 @@ export async function buildHarness(): Promise<Harness> {
     phoneNumberId: PHONE_ID,
     accessToken: 'test-token',
     now: () => nowIST(),
-    httpImpl: captureHttp,
   };
   // Two clients on ONE capture: 'send' (the post-cutover production path) dispatches
   // a closed-window lifecycle/staff message as a real captured template; 'simulate'
@@ -160,8 +175,12 @@ export async function buildHarness(): Promise<Harness> {
   // because a simulated template is physically free-form and cannot enter a shut
   // window. S2 asserts BOTH: the send-mode confirmation goes, and the simulate-mode
   // confirmation defers (the fail-closed reality holding back real people).
-  const wa = createWaClient({ ...waDeps, templateMode: 'send' });
-  const waSimulate = createWaClient({ ...waDeps, templateMode: 'simulate' });
+  const wa = createWaClient({ ...waDeps, templateMode: 'send', httpImpl: makeCapture('send') });
+  const waSimulate = createWaClient({
+    ...waDeps,
+    templateMode: 'simulate',
+    httpImpl: makeCapture('simulate'),
+  });
 
   // The scripted model: a FIFO of turn-rounds. Each guest/staff turn calls
   // converse once per tool round; script() replaces the queue so a turn that
@@ -276,7 +295,7 @@ export async function buildHarness(): Promise<Harness> {
         .from(schema.rawEvents)
         .where(eq(schema.rawEvents.source, 'whatsapp'));
       return rows.length >= postedCount && rows.every((r) => r.processed);
-    }, 'every webhook fully ingested (enqueue landed)');
+    }, 'every webhook fully ingested (enqueue landed)', SETTLE_TIMEOUT_MS);
   }
 
   async function waitQueueQuiescent(queue: string): Promise<void> {
@@ -285,7 +304,7 @@ export async function buildHarness(): Promise<Harness> {
         SELECT count(*)::int AS pending FROM pgboss.job
         WHERE name = ${queue} AND state::text IN ('created', 'retry', 'active')`);
       return Number(rows[0]?.pending) === 0;
-    }, `${queue} quiescent`);
+    }, `${queue} quiescent`, SETTLE_TIMEOUT_MS);
   }
 
   const harness: Harness = {
@@ -356,8 +375,20 @@ export async function buildHarness(): Promise<Harness> {
 
     async driveBooking(kind, reservationNo) {
       const queue = BOOKING_EVENT_QUEUES[kind];
-      await boss.send(queue, { reservationNo });
-      await waitQueueQuiescent(queue);
+      const jobId = await boss.send(queue, { reservationNo });
+      // Wait for THIS job to settle, not for the queue to look quiescent. The
+      // queue-quiescence check raced a cold worker: with the boss just started
+      // (S2 run in isolation, or reordered scenarios) the poll could read zero
+      // in-flight before the worker picked the job up, and the scenario ran on
+      // an unprocessed booking. Keying on the job id is exact.
+      await waitUntil(async () => {
+        if (jobId === null) return true;
+        const rows = await db.execute<{ state: string }>(
+          sql`SELECT state::text AS state FROM pgboss.job WHERE id = ${jobId}`,
+        );
+        const state = rows[0]?.state;
+        return state === undefined || !['created', 'active', 'retry'].includes(state);
+      }, `booking job settled: ${kind} ${reservationNo}`, SETTLE_TIMEOUT_MS);
     },
 
     runSenderNow() {

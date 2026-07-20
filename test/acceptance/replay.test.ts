@@ -26,7 +26,9 @@ describe('CH-19 acceptance — the six scenarios', () => {
         await h.reset();
         await scenario.run(h);
       },
-      40_000,
+      // Must exceed the harness SETTLE_TIMEOUT_MS ceiling with room for several
+      // turns — a scenario drives multiple debounced turns end to end.
+      120_000,
     );
   }
 });

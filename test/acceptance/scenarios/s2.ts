@@ -133,18 +133,26 @@ export const s2: Scenario = {
     });
     await h.driveBooking('created', 'ACC9004');
     assert.equal((await scheduledForBase(h.db, 'ACC9004')).length, 0, 'S2: a past-date booking schedules nothing');
-    // STATUS — an unconfirmed hold gets nothing (never congratulate a non-booking).
+    // STATUS — a booking outside the confirmed/modified allowlist gets nothing.
+    // 🚨 `checked_out`, NOT `unknown`, and the difference is the whole test: an
+    // `unknown` booking is ALSO undescribable to stayView (DESCRIBABLE_STATUSES),
+    // so the scheduler bails at the describable check BEFORE the status gate is
+    // consulted — it would schedule 0 rows even with `passesStatus` deleted, i.e.
+    // a FALSE-GREEN that proved nothing (a round-2 review caught exactly that).
+    // `checked_out` is describable but off the allowlist, so it isolates GATE 3:
+    // remove the gate and this booking schedules 5 rows. Dates are future so the
+    // date gate cannot be what fails.
     await seedBooking(h.db, {
       reservationNo: 'ACC9005',
-      guestName: 'Unconfirmed',
+      guestName: 'Not Live',
       guestPhone: '+917700900110',
       checkIn: istDay(5),
       checkOut: istDay(7),
       source: 'Walk-in',
-      status: 'unknown',
+      status: 'checked_out',
     });
     await h.driveBooking('created', 'ACC9005');
-    assert.equal((await scheduledForBase(h.db, 'ACC9005')).length, 0, 'S2: an unconfirmed booking schedules nothing');
+    assert.equal((await scheduledForBase(h.db, 'ACC9005')).length, 0, 'S2: a non-live-status booking schedules nothing');
 
     // ── The DEPLOYED reality (WA_TEMPLATE_MODE=simulate — today's Railway
     // default). A confirmation to a guest with a CLOSED window DEFERS: a simulated
@@ -155,9 +163,13 @@ export const s2: Scenario = {
     await seedDirectBooking(h.db, 'ACC9006', 'Sim Defer', '+917700900111', 6, 2);
     await h.driveBooking('created', 'ACC9006');
     const sim = await h.runSenderSimulateNow();
+    assert.equal(sim.attempted, 1, 'S2: exactly the new confirmation was due this tick');
     assert.equal(sim.sent, 0, 'S2: in simulate mode a closed-window confirmation is NOT sent');
-    assert(sim.deferred >= 1, 'S2: it DEFERS (fail-closed) until templates are approved');
+    assert.equal(sim.deferred, 1, 'S2: it DEFERS (fail-closed) until templates are approved');
     const simConf = (await scheduledForBase(h.db, 'ACC9006')).find((r) => r.kind === 'confirmation');
     assert.equal(simConf?.status, 'pending', 'S2: the deferred confirmation stays pending for the next tick');
+    // Pin the REASON, not just the outcome: it must defer because the WINDOW was
+    // shut in simulate mode, never because of quiet hours / no phone / staleness.
+    assert.equal(simConf?.skipReason, 'window_closed', 'S2: deferred for WINDOW_CLOSED_SIMULATED');
   },
 };
