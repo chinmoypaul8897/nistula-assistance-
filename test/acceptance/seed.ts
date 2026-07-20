@@ -14,7 +14,7 @@ import { LIFECYCLE_TEMPLATES } from '../../src/lifecycle/templates.js';
 import type { Roster } from '../../src/staff/roster.js';
 import { istCalendarDay, nowIST, shiftDay } from '../../src/lib/time.js';
 
-/** Reserved test numbers (the +9177009002xx staff/ops block; guests use 001xx). */
+/** Reserved test numbers: the 7700900-2xx staff/ops block (guests use 1xx). */
 export const HOUSEKEEPER_PHONE = '+917700900201';
 export const FRONTDESK_PHONE = '+917700900202';
 export const OPS_PHONE = '+917700900200';

@@ -9,6 +9,13 @@ CREDENTIALS.md
 # ── Dependencies & build output ──
 node_modules/
 dist/
+coverage/
+
+# ── Paul's own working material — NEVER commit ──
+# Personal presentation/deck work that lives in the repo tree for convenience.
+# It was protected only by nobody running `git add -A`; a CH-19 review caught
+# that near-miss (one such commit had to be reverted), so it is ignored now.
+docs/presentation/
 
 # ── Database dumps / backups ──
 # *.dump = the decrypted restore-drill output; backups/ + *.age = the encrypted

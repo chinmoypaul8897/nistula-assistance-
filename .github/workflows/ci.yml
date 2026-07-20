@@ -52,13 +52,19 @@ jobs:
       # plusless wire form Meta actually sends — only the reserved test range
       # (9177009xxxxx) is allowed. The precise per-digit-run check lives in
       # test/fixture-scrub.test.ts; this grep is the CI backstop.
+      #
+      # SCOPE: the two DATA-bearing dirs — test/fixtures/ (recorded payloads) and
+      # test/acceptance/ (CH-19's seeded guests/bookings), which a review found was
+      # outside the guard entirely. Deliberately NOT all of test/: the phone,
+      # scrubber and logger-redaction unit tests legitimately carry synthetic
+      # 91-shaped numbers as their INPUT, and would fire ~30 false positives.
       - name: Fixture PII guard
         run: |
-          if grep -rEn '\+91[0-9]{5,}' test/fixtures/; then
-            echo '::error::Real-looking +91 number found in test/fixtures'
+          if grep -rEn '\+91[0-9]{5,}' test/fixtures/ test/acceptance/ | grep -vE '9177009[0-9]{5}'; then
+            echo '::error::Real-looking +91 number found in test/fixtures or test/acceptance'
             exit 1
           fi
-          if grep -rEn '91[0-9]{10}' test/fixtures/ | grep -vE '9177009[0-9]{5}'; then
-            echo '::error::Real-looking plusless 91 number found in test/fixtures'
+          if grep -rEn '91[0-9]{10}' test/fixtures/ test/acceptance/ | grep -vE '9177009[0-9]{5}'; then
+            echo '::error::Real-looking plusless 91 number found in test/fixtures or test/acceptance'
             exit 1
           fi
