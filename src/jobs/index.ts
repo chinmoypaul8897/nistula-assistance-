@@ -775,7 +775,12 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
           // allow).
           const body = await getMessageBody(deps.db, job.data.waMessageId);
           await handleStaffCommand(
-            { db: deps.db, log: deps.log, wa: deps.wa, roster, now: () => new Date() },
+            // nowIST() not new Date(): a DONE's guest close-line checks
+            // human_active_until, which the takeover writer now stamps on the
+            // FAKE-aware clock — so this reader must share it, or the two split
+            // under a dev/test clock. Identical in production (FAKE_NOW is
+            // boot-refused there, §3.7).
+            { db: deps.db, log: deps.log, wa: deps.wa, roster, now: () => nowIST() },
             { phone: job.data.phone, body },
           );
         }

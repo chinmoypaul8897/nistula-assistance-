@@ -84,5 +84,18 @@ export const s1: Scenario = {
     const afterPoison = textSendsTo(h, GUEST).at(-1)?.body ?? '';
     assert(!afterPoison.includes('9,999'), 'S1: the fabricated ₹ was blocked, never sent');
     assert.equal(afterPoison, PHRASEBOOK.quoteApiDown, 'S1: guardrail-1 deferred with the quote-down line');
+
+    // ── Adversarial: invariant #2 (promise-trace). A pre-sales guest has no task
+    // and no evidence row, so a "the team has been informed" claim (C1) is
+    // licensed by NOTHING — guardrail-2 must regenerate it away. This is the
+    // discriminating negative for the most-regressed guardrail in the repo: a
+    // regression that over-licenses C1/C2/C5 would otherwise keep every scenario
+    // green (all their promises are legitimately licensed). Round 2 is clean.
+    const clean = 'Those dates are open — here is the link whenever you would like.';
+    h.script(txt("I've informed the team to hold your dates for you."), txt(clean));
+    await h.sendGuest(GUEST, 'can you hold 20-22 dec for me?', { name: 'Aditi' });
+    const afterPromise = textSendsTo(h, GUEST).at(-1)?.body ?? '';
+    assert(!/informed the team/i.test(afterPromise), 'S1: the unbacked promise was blocked (guardrail-2)');
+    assert.equal(afterPromise, clean, 'S1: guardrail-2 regenerated to the honest reply');
   },
 };

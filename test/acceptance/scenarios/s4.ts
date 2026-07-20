@@ -51,8 +51,10 @@ export const s4: Scenario = {
     assert(allSendsTo(h, FRONTDESK_PHONE).length >= 1, 'S4: the escalation card reached the front desk');
 
     // The C3 referral was licensed by the successful escalation and went out.
+    // (Whether the model INVENTS a capability is a model-output property, proven
+    // in the human voice pass — a scripted harness cannot assert it, so no
+    // vacuous check is made here.)
     assert.equal(textSendsTo(h, GUEST).at(-1)?.body, reply, 'S4: the referral reply was sent (C3 licensed)');
-    assert(!/₹|decorat/i.test(reply) || /villa team/.test(reply), 'S4: no invented capability, hands to the team');
 
     // ── A human takes the thread over (the dev echo seam).
     const res = await h.simulateHumanReply(GUEST, 'Hi Priya, this is Meera from the villa team — I would love to plan this with you.');

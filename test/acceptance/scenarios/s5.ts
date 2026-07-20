@@ -62,7 +62,12 @@ export const s5: Scenario = {
     assert.equal(allSendsTo(h, FRONTDESK_PHONE).length, 0, 'S5: no front-desk ping at 23:05');
     assert.equal(allSendsTo(h, HOUSEKEEPER_PHONE).length, 0, 'S5: no staff ping at 23:05');
 
-    // The reply is the honest after-10 hold — never "shortly"/"right away".
+    // The reply is the honest after-10 hold. What real code proves here: the C3
+    // referral was LICENSED by the successful night escalation and went out
+    // verbatim (guardrail 2). The after-10 / no-"shortly" WORDING is a block-[4]
+    // prompt rule (OQ-27, prompt-enforced) — so the two regexes below check the
+    // scripted reply's compliance, not a guardrail; the shipped phrasebook night
+    // line carrying the same rule is asserted just after.
     const sent = textSendsTo(h, RAHUL).at(-1)?.body ?? '';
     assert.equal(sent, reply, 'S5: the honest night hold was sent (C3 referral)');
     assert(/after 10/.test(sent), 'S5: the reply states the 10 am reality');

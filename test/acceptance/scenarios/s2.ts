@@ -9,9 +9,12 @@
  * → captured template; the villa TYPE + locality, never a house) · an OTA
  * booking mirrors but is NOT messaged (OQ-20, source gate → 0 rows).
  */
+import { eq } from 'drizzle-orm';
 import { assert, type Scenario } from '../scenario.js';
 import { istWallClockToInstant, shiftDay } from '../../../src/lib/time.js';
 import { getMirrorByReservationNo } from '../../../src/db/bookings.js';
+import { bookingsMirror } from '../../../src/db/schema.js';
+import { EPOCH } from '../harness.js';
 import { istDay, seedDirectBooking, seedOtaBooking, seedBooking } from '../seed.js';
 import { guestByPhone, scheduledForBase, templateSendsTo } from '../query.js';
 
@@ -105,5 +108,56 @@ export const s2: Scenario = {
     const otaRows = await scheduledForBase(h.db, OTA_RES);
     assert.equal(otaRows.length, 0, 'S2: the OTA booking schedules NOTHING (OQ-20)');
     assert.equal(templateSendsTo(h, OTA_GUEST).length, 0, 'S2: the OTA guest receives nothing');
+
+    // ── "The four gates passed" needs a discriminating negative for EACH gate,
+    // not only source — a regression disabling any one must fail S2. (The pure
+    // predicates are table-tested in lifecycle-gates.test.ts; this proves the
+    // gate is wired into the real scheduler path.)
+    // EPOCH — a booking mirrored BEFORE the cutover instant gets nothing (this is
+    // the gate that neutralised 199 pre-epoch production rows).
+    await seedDirectBooking(h.db, 'ACC9003', 'Pre Epoch', '+917700900108', 5, 2);
+    await h.db
+      .update(bookingsMirror)
+      .set({ createdAt: new Date(EPOCH.getTime() - 24 * 3600_000) })
+      .where(eq(bookingsMirror.ezeeReservationNo, 'ACC9003'));
+    await h.driveBooking('created', 'ACC9003');
+    assert.equal((await scheduledForBase(h.db, 'ACC9003')).length, 0, 'S2: a pre-epoch booking schedules nothing');
+    // DATE — a stay already over gets nothing.
+    await seedBooking(h.db, {
+      reservationNo: 'ACC9004',
+      guestName: 'Past Stay',
+      guestPhone: '+917700900109',
+      checkIn: istDay(-5),
+      checkOut: istDay(-3),
+      source: 'Walk-in',
+    });
+    await h.driveBooking('created', 'ACC9004');
+    assert.equal((await scheduledForBase(h.db, 'ACC9004')).length, 0, 'S2: a past-date booking schedules nothing');
+    // STATUS — an unconfirmed hold gets nothing (never congratulate a non-booking).
+    await seedBooking(h.db, {
+      reservationNo: 'ACC9005',
+      guestName: 'Unconfirmed',
+      guestPhone: '+917700900110',
+      checkIn: istDay(5),
+      checkOut: istDay(7),
+      source: 'Walk-in',
+      status: 'unknown',
+    });
+    await h.driveBooking('created', 'ACC9005');
+    assert.equal((await scheduledForBase(h.db, 'ACC9005')).length, 0, 'S2: an unconfirmed booking schedules nothing');
+
+    // ── The DEPLOYED reality (WA_TEMPLATE_MODE=simulate — today's Railway
+    // default). A confirmation to a guest with a CLOSED window DEFERS: a simulated
+    // template is physically free-form and cannot enter a shut window, so NOTHING
+    // is sent until real templates are approved at cutover. This is the
+    // fail-closed behaviour holding back every website/OTA guest who never
+    // messaged us. (The send-mode demo above proves the post-cutover template path.)
+    await seedDirectBooking(h.db, 'ACC9006', 'Sim Defer', '+917700900111', 6, 2);
+    await h.driveBooking('created', 'ACC9006');
+    const sim = await h.runSenderSimulateNow();
+    assert.equal(sim.sent, 0, 'S2: in simulate mode a closed-window confirmation is NOT sent');
+    assert(sim.deferred >= 1, 'S2: it DEFERS (fail-closed) until templates are approved');
+    const simConf = (await scheduledForBase(h.db, 'ACC9006')).find((r) => r.kind === 'confirmation');
+    assert.equal(simConf?.status, 'pending', 'S2: the deferred confirmation stays pending for the next tick');
   },
 };

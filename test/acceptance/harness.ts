@@ -10,10 +10,14 @@
  * make therefore proves the system, not the script.
  *
  * Clock rule (see the per-scenario notes): DB timestamps (message created_at,
- * mirror created_at) use REAL now, while business logic reads FAKE_NOW_IST. To
- * keep the two consistent, a scenario that sets FAKE_NOW keeps its DATE = today
- * and varies only the HOUR (S5's night/morning); date-relative scenarios seed
- * dates relative to today and leave the clock real.
+ * mirror created_at) use REAL now, while business logic reads FAKE_NOW_IST.
+ * `setClockAtHour(hhmm)` picks the NEXT IST hh:mm at/after real-now — which may
+ * be tomorrow's IST date — so FAKE always lands inside (real-now, real-now+24h):
+ * a real-now message stays both "old" (debounce processes it) and inside the 24h
+ * window (the reply sends). Scenarios that set FAKE assert only clock-BAND facts
+ * (night vs day, a due send), never an ordering between two FAKE stamps and a
+ * real one; date-relative scenarios seed dates relative to today and leave the
+ * clock real.
  */
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -83,6 +87,9 @@ export interface Harness {
   driveBooking(kind: BookingEventKind, reservationNo: string): Promise<void>;
   /** One lifecycle sender tick (mode 'send' → templates captured). */
   runSenderNow(): ReturnType<typeof runSender>;
+  /** One lifecycle sender tick in dev-`simulate` mode (today's Railway default):
+   * a closed-window send DEFERS instead of dispatching — the fail-closed reality. */
+  runSenderSimulateNow(): ReturnType<typeof runSender>;
   /** One SLA-nudger tick at the current clock. */
   runSlaNow(): ReturnType<typeof runSlaNudger>;
   /** One morning-digest run at the current clock. */
@@ -124,32 +131,37 @@ export async function buildHarness(): Promise<Harness> {
   const door: DoorState = { roomId: B3_ROOM_ID, currentStatus: 'Confirmed' };
 
   const sends: CapturedSend[] = [];
-  const wa = createWaClient({
+  const captureHttp = async (_url: string, options?: { body?: string }): Promise<Response> => {
+    const payload = JSON.parse(options?.body ?? '{}') as Record<string, unknown>;
+    const to = String(payload.to ?? '');
+    const type = String(payload.type ?? 'text');
+    const body =
+      type === 'text'
+        ? String((payload.text as { body?: string } | undefined)?.body ?? '')
+        : JSON.stringify(payload.template ?? {});
+    sends.push({ to, type, body, payload });
+    return new Response(JSON.stringify({ messages: [{ id: `wamid.OUT-${sends.length}` }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  const waDeps = {
     db,
     log,
     graphBaseUrl: GRAPH,
     phoneNumberId: PHONE_ID,
     accessToken: 'test-token',
-    // 'send' so a closed-window lifecycle/staff message dispatches as a real
-    // (captured) template — the production path. The simulate-defer reality is
-    // asserted explicitly in S2, and is covered by lifecycle-sender.test.ts.
-    templateMode: 'send',
     now: () => nowIST(),
-    httpImpl: async (_url, options) => {
-      const payload = JSON.parse(options?.body ?? '{}') as Record<string, unknown>;
-      const to = String(payload.to ?? '');
-      const type = String(payload.type ?? 'text');
-      const body =
-        type === 'text'
-          ? String((payload.text as { body?: string } | undefined)?.body ?? '')
-          : JSON.stringify(payload.template ?? {});
-      sends.push({ to, type, body, payload });
-      return new Response(JSON.stringify({ messages: [{ id: `wamid.OUT-${sends.length}` }] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    },
-  });
+    httpImpl: captureHttp,
+  };
+  // Two clients on ONE capture: 'send' (the post-cutover production path) dispatches
+  // a closed-window lifecycle/staff message as a real captured template; 'simulate'
+  // (today's Railway default — WA_TEMPLATE_MODE unset) DEFERS a closed-window send,
+  // because a simulated template is physically free-form and cannot enter a shut
+  // window. S2 asserts BOTH: the send-mode confirmation goes, and the simulate-mode
+  // confirmation defers (the fail-closed reality holding back real people).
+  const wa = createWaClient({ ...waDeps, templateMode: 'send' });
+  const waSimulate = createWaClient({ ...waDeps, templateMode: 'simulate' });
 
   // The scripted model: a FIFO of turn-rounds. Each guest/staff turn calls
   // converse once per tool round; script() replaces the queue so a turn that
@@ -173,6 +185,11 @@ export async function buildHarness(): Promise<Harness> {
     wa,
     log,
     converse,
+    // A SEPARATE summariser client (fixed summary text), so a background summarise
+    // — which shares deps.converse by default — can never shift() a scripted round
+    // meant for the next guest turn. No scenario builds a >=20-msg thread today, so
+    // this is a footgun latch, not a live bug.
+    converseLight: async () => txt('Earlier: the guest and the assistant spoke; nothing outstanding.'),
     toolRegistry: buildToolRegistry(),
     website: fixtureWebsite(),
     websiteBaseUrl: 'https://website.test.invalid',
@@ -289,6 +306,10 @@ export async function buildHarness(): Promise<Harness> {
       postedCount = 0;
       // A clock a prior scenario set must never leak into the next.
       delete process.env.FAKE_NOW_IST;
+      // The mutable BKG-03 door handle resets to a live confirmed B3 (a scenario
+      // that flips it to void/cancelled must not bleed into the next).
+      door.roomId = B3_ROOM_ID;
+      door.currentStatus = 'Confirmed';
     },
 
     setClockAtHour(hhmm) {
@@ -344,6 +365,17 @@ export async function buildHarness(): Promise<Harness> {
         db,
         log,
         wa,
+        gates: { sources: ['walk-in', 'internet booking engine'], today: istCalendarDay(nowIST()) },
+        enabled: true,
+        now: () => nowIST(),
+      });
+    },
+
+    runSenderSimulateNow() {
+      return runSender({
+        db,
+        log,
+        wa: waSimulate,
         gates: { sources: ['walk-in', 'internet booking engine'], today: istCalendarDay(nowIST()) },
         enabled: true,
         now: () => nowIST(),

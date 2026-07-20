@@ -76,6 +76,13 @@ export const s3: Scenario = {
     const guestSends = textSendsTo(h, RAHUL);
     assert.equal(guestSends.length, 1, 'S3: one reply to the guest');
     assert.equal(guestSends[0]?.body, reply, 'S3: the promise was sent (guardrail 2 licensed it)');
+    // OQ-15 (no house to a guest) is enforced at the PROMPT + TRUST_EZEE_ROOM_
+    // ASSIGNMENT=false, not by a hard guardrail on arbitrary phrasing — so this
+    // checks the scripted reply's COMPLIANCE (a prompt property, human-pass
+    // territory), not a guardrail. The guard that DOES catch a bound unit
+    // assertion ("you're in Villa B3") is scanUnitAssertions, unit-tested in
+    // stay-guards.test.ts. What IS proven here by real code: the CARD names the
+    // house (fresh BKG-03) while the reply, on the same turn, does not.
     assert(!/Villa B3|\bB3\b|Apartment/.test(guestSends[0]?.body ?? ''), 'S3: the reply names NO house (OQ-15)');
 
     // ── 32 minutes on, the task is overdue (housekeeping SLA 30m) → the nudger
