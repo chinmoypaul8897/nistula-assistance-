@@ -37,7 +37,18 @@ Event: a **direct** booking (website / walk-in) appears in eZee for Rahul M, 3BH
 - A (17 Dec 10:00 IST) — pre-arrival: check-in from 3 pm, **asks for the expected arrival time and promises the accurate location pin in reply**, offers to help before travel.
 - A (20 Dec 09:00 IST) — welcome: villa ready from 3 pm, "message us right here for anything."
 
-STAFF: arrivals digest line the evening before (via window-aware send). SYS: poller mirrored the booking ≤60s · guest row auto-created from booking phone · **five** `scheduled_messages` rows (confirmation, pre-arrival, welcome, thank-you, win-back) with correct IST times + dedupe keys · date-change **reschedules** rows (never duplicates), cancellation clears the pending ones · templates used when window closed (dev: `raw.devTemplate=true`) · **the four gates passed: in-epoch, arriving, confirmed, sanctioned source.**
+STAFF: ~~arrivals digest line the evening before (via window-aware send)~~.
+> **⚠️ AMENDED 2026-07-21 (CH-19), Paul-approved (option b).** The **evening
+> "arriving tomorrow" digest was never built** in any chunk — the lifecycle ships
+> a morning (10:00) staff digest and a 23:30 ops rollup, but no evening arrivals
+> line. It is **deferred to a post-v1.0.0 fast-follow** (a small ~17:00-IST cron
+> mirroring `staff/digest.ts`): a staff-convenience beat, not a guest-facing gap,
+> and the pre-arrival guest message + morning digest already cover the core. So
+> v1.0.0 ships against this honest contract; CH-19 does NOT assert this beat.
+> Filed as a post-v1 fast-follow in `progress.md` (CH-19 entry). Original text
+> preserved in git history.
+
+SYS: poller mirrored the booking ≤60s · guest row auto-created from booking phone · **five** `scheduled_messages` rows (confirmation, pre-arrival, welcome, thank-you, win-back) with correct IST times + dedupe keys · date-change **reschedules** rows (never duplicates), cancellation clears the pending ones · templates used when window closed (dev: `raw.devTemplate=true`) · **the four gates passed: in-epoch, arriving, confirmed, sanctioned source.**
 
 ## S3 · Two towels (in-stay service + honest follow-up)
 
