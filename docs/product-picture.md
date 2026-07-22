@@ -1,5 +1,14 @@
 # Nistula Assistance — Product Picture (the six acceptance scenarios)
-*The contract for what "working" means. CH-19's replay harness asserts against these scripts; the build ships when all six pass on the test line. Copied into the repo as `docs/product-picture.md`.*
+*The contract for what "working" means. CH-19's replay harness asserts against these scripts; the build shipped when all six passed via the in-process replay harness. Copied into the repo as `docs/product-picture.md`.*
+
+> ## ✅ ACCEPTANCE PASSED — v1.0.0 (2026-07-21)
+> All six scenarios replay green via the **in-process deterministic** harness (`pnpm replay` 6/6;
+> `test/acceptance/replay.test.ts` kept green in `pnpm check`; full suite 1777; CI green). That harness is
+> scripted Claude + fixture website/eZee + captured WhatsApp sends — **NOT a live `pnpm dev`** (Paul-approved).
+> Paul signed off the **LIVE voice pass for S1** on the test line vs real Claude (voice invariant #6, which
+> a scripted harness cannot prove). The S2/S6 lifecycle-send and S3/S4 staff-loop LIVE legs are deliberately
+> DEFERRED to real-number cutover (runbook §CH-19). One beat below is struck as a post-v1 fast-follow — see
+> the S2 amendment.
 
 Legend: **G** = guest's WhatsApp · **A** = the AI (Nistula voice) · **H** = human staff (from the normal app) · **STAFF** = what the team's phones receive · **SYS** = what the system must have done (assertable).
 

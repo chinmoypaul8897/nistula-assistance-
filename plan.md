@@ -86,7 +86,7 @@ Guest WhatsApp ⇄ Meta Cloud API (coexistence with front-desk app)
 
 1. **Midnight enquiry:** 23:42 "3bhk 20–22 dec rate?" → exact website price in seconds, discount ask deflected with pride, booking link. No human involved.
 2. **Booking made:** a **direct** (website/walk-in) booking appears in eZee → confirmation immediately, pre-arrival T−3, welcome on the day — untouched by staff. *(CH-12 amendment, Paul-approved: **OTA bookings are mirrored but NOT messaged** until the business answers Q13 — "may we WhatsApp Airbnb/Booking.com guests?". `LIFECYCLE_SOURCES` is the gate. Production holds 12 real OTA guests with unmasked numbers, so this is not hypothetical.)*
-3. **Two towels:** in-stay request → staff task "Villa B3 · Rahul · 2 towels" → guest follow-up 30 min later understood in context; honest status wording ("I've nudged housekeeping"), never "checked with housekeeping" when it only checked the task record.
+3. **Two towels:** in-stay request → staff task "~~Villa B3~~ · Rahul · 2 towels" (🚨 the house is DERIVED server-side from a fresh BKG-03 read at task time, not named by the model — OQ-19; the reply to the GUEST names no house at all — OQ-15; `docs/product-picture.md` S3, the contract CH-19 asserts against, is amended off "Villa B3") → guest follow-up 30 min later understood in context; honest status wording ("I've nudged housekeeping" — a nudge licenses C1 not C2, so NOT "on the way"), never "checked with housekeeping" when it only checked the task record.
 4. **Special request (proposal décor):** outside KB → escalation card to front desk with summary → staff reply from the app pauses the AI; SLA timer re-pings staff if nobody replies in 10 min.
 5. **Night issue (weak AC, 23:05):** honest hold ("the team comes in at 10"), villa-quirks tip if the KB has one, morning digest carries it.
 6. **Three months later:** win-back template → reply opens live conversation → remembers stay, preference, past issue; price from live tool; auto-task to verify the past issue before the new arrival.
@@ -323,6 +323,13 @@ Sends (`POST {GRAPH_BASE_URL}/{WA_PHONE_NUMBER_ID}/messages`, bearer `WA_ACCESS_
 **Dev vs prod:** development uses Meta's free **test number** against Paul's own WhatsApp (no BSP needed, template `hello_world` pre-approved). Production = the real number via BSP coexistence — same API, different env values. Nothing in code may branch on dev/prod beyond env values.
 
 ### 5.4 Villa identity map (constant `src/lib/villas.ts` — from the website codebase, verified)
+
+> **⚠️ OBSERVED-LIVE CAVEAT (2026-07-21, CH-19 close-out): the villa/3BHK IDs may have DRIFTED.** On the
+> live test line, `get_quote` returned real prices for the APARTMENT IDs (₹59,000 quoted correctly) but
+> the website returned **`villa_map_drift` 404s for the villa/3BHK IDs** (B1/B3/C1/C3/Siolim). The website
+> rebuild (branch `v2`, OQ-19) likely changed those IDs. **Do not treat the villa/3BHK rows below as
+> live-verified until the drift is resolved** — a wrong "villas are taken" can result from a 404, not a
+> real 409. Tracked as a non-blocking clean-up in progress.md (CH-19 entry); apartment rows are fine.
 
 | Villa label | Website villaId (= eZee RoomID) | RoomTypeID | Type name |
 |---|---|---|---|
@@ -889,10 +896,10 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 **Steps.**
 1. Scenario harness: seed script (guests, mirrored bookings incl. a B3 active stay + a 75-day-old past stay), scripted inbound sequences with expected-outcome assertions (tool calls made, tasks created, messages matching regex sets, timing rows).
 2. Run all six (assertions authored from `docs/product-picture.md`, the in-repo scenario scripts); fix whatever fails (fixes may touch earlier chunks — with tests). Clock control via `FAKE_NOW_IST`.
-3. Human pass: Paul plays all six scenarios manually; transcript reviewed against the voice guide (checklist).
+3. Human pass: Paul plays all six scenarios manually; transcript reviewed against the voice guide (checklist). **🚨 SUPERSEDED IN PLACE (CH-19 close-out 2026-07-21): the live human pass ran S1 (+ discount / bot probes) against REAL Claude on the test line and confirmed voice invariant #6 (accurate live ₹ quote + graceful same-type alternative, verbatim no-discount phrasebook line, verbatim identity line). The S3/S4 live legs (2nd allowlisted number + a populated `STAFF_ROSTER_JSON`) and the S2/S6 lifecycle sends (Meta-approved WA templates) are DEFERRED to real-number cutover — the deferred live-replay checklist is in runbook §CH-19. All six pass DETERMINISTICALLY via the in-process harness (`pnpm replay` 6/6 + `pnpm check` 1777 + CI).**
 4. Freeze: tag `v1.0.0`; write the acceptance report into progress.md. (Paul updates STATE.md on the planning side — not reachable from this repo.)
 
-**Done when.** Six green scenario runs · Paul's sign-off line in progress.md · tag pushed.
+**Done when.** Six green scenario runs · Paul's sign-off line in progress.md · tag pushed. **✅ ALL MET 2026-07-21: `v1.0.0` tagged on `ba30398`; Paul's sign-off recorded in progress.md; CI green on the code (`19ce832`).**
 
 ---
 
