@@ -4311,3 +4311,156 @@ planning history via the architect; every other status is a routing fact, not a 
 
 Refs: docs
 
+---
+
+## Ops + docs note — Paul's six decisions recorded; cost/quiet knobs set to 500/240 (2026-07-28)
+
+Docs + ops session on the architect's instruction. **No `src/` change, no test run needed.** Two
+things happened: **six of Paul's open questions were decided** and are now recorded in the register,
+and **two Railway knobs that had been running on their code defaults were given real values.**
+
+### 1 · The six decisions — `docs/questions-for-paul.md`
+
+Every question's text, `Owner:` line, *Today/Why* context and option list is **unchanged and
+verbatim**. What changed is the **Status** line, the **Answer** line and the index-table column. A new
+status vocabulary entry, **ANSWERED — PAUL 28 Jul**, distinguishes Paul's own decisions from the
+three answered on 28 Jul by the architect out of planning history.
+
+| # | Question | Decision |
+|---|---|---|
+| **P5** (90) | Will the number be used once a fortnight? | **ANSWERED (architect, planning history).** It is Nistula's **main booking channel** — ~**10–20 enquiries/day**. The 13-quiet-day cut-off is **not a practical risk**. |
+| **P6–P8** (91–93) | Day-one posture, and who approves | **DRAFTS FOR EVERYTHING** on day one: `AUTO_SEND_TYPES` **empty**, `DRAFT_MODE` **true**. Approver = **the front desk team**; **Paul is backup approver**. |
+| **P12** (97 = **OQ-20**) | May we message Airbnb / Booking.com guests? | **YES — at cutover, not before.** `LIFECYCLE_SOURCES` gains the OTA source labels then. |
+| **P13 / P14** (98/99) | Import the existing chats? Anything off-limits? | **Import at cutover**, with threads Paul or the team name as off-limits **excluded**. **The import never triggers a send.** |
+| **P16** (101) | Retention | **Indefinite**, with **`DELETE_GUEST` on request**. **Revisit 12 months post-launch.** |
+| **P17–P20** (102–105) | What may be remembered about a guest | **Remember all three, neutrally.** Allergies and mobility needs **as-is**; religious dietary needs **re-expressed as neutral food preferences** ("prefers jain vegetarian meals"), **never as religion**. **Staff task cards unchanged.** |
+
+**P5's status was changed, not just filled in.** It read *MOVED TO TEAM — Part Two Q100*. The previous
+entry in this file flagged that Q100 as sent **does not visibly ask the frequency question**, so a
+silent answer could never have closed it. It is answered here instead; the team's Q100 answer is now
+corroboration rather than the source.
+
+**P6–P8 carry a rationale worth keeping, because it is the reason the posture is not just caution.**
+The desk catches wrong messages before a guest sees them — but the load-bearing half is that **the
+desk's edits are the correction signal**. What they change is exactly what the assistant got wrong, in
+their own words, folded into the prompt and phrasebook at a **weekly review**. Automatic
+self-learning from those edits stays **future work (F7)**; the loop is human-run. Presales flips to
+auto after **one clean week**, the rest on the same evidence.
+
+**One sub-point stayed open on purpose, for the 2b live test:** what happens to a draft raised
+**outside desk hours**. A draft expires after 30 minutes (`TD-51`), which at 02:00 means the guest
+gets **silence** and nobody learns. Under drafts-for-everything that stops being a corner case and
+becomes **the night behaviour of the whole system**. A backup approver shortens the odds; it does not
+change the failure mode.
+
+### 2 · Recording a decision is NOT shipping it — three things are deliberately UNCHANGED
+
+1. **`src/brain/factScreens.ts` was NOT touched.** P17–P20 are decided; the implementation waits for
+   the architect's **Step-4 batch**. `SENSITIVE_RES` still refuses `allerg*`, `wheelchair`, `disab*`
+   and the religious-dietary terms, so **live behaviour is still the old fail-closed refusal**. Do not
+   read those four register entries as a description of what the code does today. *(What Step-4 has to
+   get right: the screen currently has **one** verdict where the decision needs **three** — pass
+   as-is, pass **re-expressed**, still refuse. The re-expression arm would be the first screen that
+   **transforms** a fact rather than admitting or refusing it, and a transform that silently drops the
+   guest's meaning is the failure mode to test for.)*
+2. **`AUTO_SEND_TYPES` and `DRAFT_MODE` were NOT touched.** P6's decision is for the **real number at
+   cutover**. Production today auto-sends everything, which is **correct for a test line** — a draft
+   queue in front of a line nobody is watching would simply stop every test send.
+
+   ⚠️ **And this session's boot summary showed there is only ONE lever, not two.** `DRAFT_MODE`
+   **defaults to `'true'` in code** (`config.ts:106`) and is **unset on Railway**, so production is
+   **already** `DRAFT_MODE=true` — the boot line says so verbatim. What makes it auto-send anyway is
+   `AUTO_SEND_TYPES=presales,arrival,instay,poststay`, which **unlocks each type to bypass draft
+   mode** (`config.ts:313-330`). So at cutover **the operative change is emptying `AUTO_SEND_TYPES`**;
+   setting `DRAFT_MODE=true` beside it is belt-and-braces and does nothing on its own. **An operator
+   who sets only `DRAFT_MODE=true` and stops will believe they have switched approvals on and will
+   have switched on nothing** — a variable that is already at its target value is indistinguishable
+   from a variable that did the work.
+3. **`LIFECYCLE_SOURCES` was NOT touched** — still `Internet Booking Engine,Walk-in,WEB`. P12 is a
+   decision plus a **pre-flip checklist**, not a flip.
+
+**P12's checklist, and a flag on it.** Before the OTA labels go in: (a) a **platform-terms check** —
+Airbnb's and Booking.com's own rules on contacting a guest off-platform, the item that can veto the
+decision; and (b) **the team's answer to Part Two Q97**, as the architect worded it. ⚠️ **Part Two's
+Q97 is the cancellations question** ("of the 62 bookings eZee has sent us, 40 are cancellations…"),
+which is not obviously the OTA gate; Part Two carries **no OTA-messaging question at all**, its
+nearest being **Q91** (whether an eZee amount on an Airbnb booking is what the guest paid or what the
+platform pays us). Recorded **exactly as given rather than silently swapped**, because the old
+**Paul-register Q97 is P12 itself** — the very collision that forced the renumbering. Confirm which is
+meant before the flip.
+
+**And when the flip does come, the label strings are eZee's, not ours.** Observed in production as
+`Airbnb` and `Booking.com`. A near-miss label **fails closed and silently sends nothing**, which looks
+identical to the decision never having been taken.
+
+### 3 · `docs/defaults-sweep.md` committed as-is
+
+The sweep table (TD-01 … TD-61) was produced read-only on 28 Jul and pasted back by Paul; it is
+committed **verbatim, unedited**, which is the point — **`TD-` ids referenced from this repo now
+resolve in-repo.** The previous entry recorded `TD-30` as a **dangling pointer** (the P17–P20
+send-side rider); that pointer now resolves, and the decision above answers it: cards unchanged, the
+memory half was the half that was wrong.
+
+⚠️ One pointer inside the sweep is itself dangling and was **left alone**: its disposition summary
+cites `team-questions-part-two-source.md`, which does not exist here — the in-repo register is
+`docs/team-questions-part-two.md`. Not corrected, because "commit it as-is" was the instruction and
+an edited sweep stops being the artifact it is cited as.
+
+### 4 · Two Railway knobs — verified derived, then set
+
+**a. The hard stop is DERIVED — verified in source before touching anything.** `src/ops/costMeter.ts`
+holds `SOFT_MULTIPLIER = 2` and `HARD_MULTIPLIER = 4` (lines 23–24), applied against the single
+configured threshold at line 63. `src/config.ts:119` declares **`COST_ALERT_INR_PER_DAY`** and there
+is **no second variable** for the stop. So one value sets all three rungs:
+
+| Rung | Derivation | At ₹500 |
+|---|---|---|
+| Alert | `COST_ALERT_INR_PER_DAY` | **₹500/day** |
+| SOFT — alert once, keep serving | 2× | **₹1,000** |
+| HARD — stop calling Anthropic, guest hold line + ops page | 4× | **₹2,000** |
+
+**No explicit hard-stop variable was set**, per the instruction's derived branch. ₹500 ⇒ ₹2,000 stop,
+confirmed against the code above.
+
+**b. Set on the app service, production, and nothing else.**
+
+| Variable | Was | Now |
+|---|---|---|
+| `COST_ALERT_INR_PER_DAY` | **unset** → code default 1000 | **500** |
+| `QUIET_STALE_MINUTES` | **unset** → code default 180 | **240** |
+
+Both were previously **absent from Railway entirely**, running on their `config.ts` defaults —
+exactly as `TD-54` and `TD-55` in the new sweep record. The variable-key list was captured before and
+after: **32 keys, identical apart from the two above.** Setting them auto-triggered a redeploy of the
+then-current `main` commit.
+
+**Two knobs, two different kinds of decision, and they are not interchangeable.** `QUIET_STALE_MINUTES`
+raises the webhook-silence threshold 180 → **240 min**, which makes the monitor **quieter**; note that
+`watchdog.ts` deliberately caps the re-warn gap in absolute terms **because** raising this tunable
+would otherwise buy a business day with zero alerts about a dead webhook. `COST_ALERT_INR_PER_DAY`
+moves the other way: **500 is half the old default**, so both rungs come **down** (stop 4000 → 2000)
+and the kill-switch is now **tighter**, not looser. The hard rung ends with the AI refusing to answer
+guests, auto-resuming at IST midnight.
+
+**c. Verified live, not assumed.** Deployment `f969f2b8` reached **SUCCESS** (auto-triggered by the
+variable change, on `main` at `aacbc2a`), `/health` returned **`ok:true`** on a fresh boot
+(`uptime` ≈ 15 s, `db:true`, `boss:true`, `degraded:false`), and the **boot config summary** carries
+both new values verbatim — `QUIET_STALE_MINUTES=240 · COST_ALERT_INR_PER_DAY=500`. Read the
+deployment's **`status`**, never its `queuedReason`: a SUCCESS deployment still carries
+`"queuedReason": "Processing deployment..."` and *reads* as stuck.
+
+**Auto-deploy from `main` IS connected** — contrary to the ⚠️ note still standing in `CLAUDE.md`
+(§Commands) and the CH-19 clean-ups. The commit `aacbc2a` had already deployed on its own at 23:04
+before this session touched anything. That note is stale; leaving it in place is a live invitation to
+"reconnect" a source that is not disconnected.
+
+### Still open after this session
+
+- **P6's night-draft sub-point** — 2b live test.
+- **P12's platform-terms check** and the **Q97-or-Q91** ambiguity above.
+- **P17–P20 implementation** — architect's Step-4 batch.
+- **P16's 12-month retention review** — the substance of that answer, not a footnote.
+- `TD-54`/`TD-55` are now **set** rather than defaulted, but neither number has been put to the
+  business; they are the architect's and Paul's values, not the desk's.
+
+Refs: docs, ops
