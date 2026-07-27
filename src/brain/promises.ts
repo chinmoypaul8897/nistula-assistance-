@@ -239,9 +239,12 @@ export const CONTEXT_KIND_CLAIMS: Readonly<Record<string, readonly ClaimClass[]>
   //
   // The residual, accepted and recorded: right after a DONE the model saying
   // "that's sorted" (C5, and TRUE) regenerates and then defers. Rare — the
-  // deterministic close line has already told the guest "That is done — 2 extra
-  // towels", so the model has little reason to repeat it — and it fails toward
-  // an escalation, not a lie. A finer split (anaphoric "that's sorted", whose
+  // deterministic close line has already told the guest the work is done
+  // ("Housekeeping have taken care of that for you"), so the model has little
+  // reason to repeat it — and it fails toward an escalation, not a lie. (That
+  // line no longer quotes the task summary: it was staff-facing model prose and
+  // reached guests verbatim — see staff/commands.ts CLOSE_LINE.) A finer split
+  // (anaphoric "that's sorted", whose
   // object is the discourse topic, vs named-object "the transfer has been
   // booked") is the real answer and is logged for the planning chat rather than
   // invented under merge pressure.

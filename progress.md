@@ -3449,3 +3449,77 @@ instants, because relative offsets silently invent a new silence and reset the l
   change would make the system consistent, but it confirms there is no night emergency path at all.
   Whether a 2am water leak waits until 10am is the villa team's call, not ours: it decides which kinds
   defer, whether an override exists, and what the guest is told. Going to them as a scenario.
+
+---
+
+### FIX-2 · The DONE close line leaked the internal staff summary — DONE 2026-07-27
+
+**Branch** `fix/close-message-wording`. Second of the three MECHANICAL rows of the 25–26 Jul live-UAT
+backlog.
+
+**The symptom, seen live three times.** Closing a task sent the guest
+`That is done — ${task.summary}` — and `task.summary` is the MODEL's line, authored FOR STAFF:
+> "That is done — Guest needs office location and address…"
+> "That is done — Guest waiting for two extra towels, chased twice, now asking if anyone is here"
+
+**The false premise.** The code carried a comment claiming the summary was *"the guest's own words
+coming back to them"*, and the file header said the line works by *"naming the task's own summary"*.
+`create_staff_task`'s tool description ASKS the model for the summary "in the guest's terms" — and that
+request had been mistaken for a guarantee. It is not one. The second example above is the reason this
+is worse than a register slip: that task was raised off stale context and its narrative was INVENTED
+(the guest had asked about a dietary preference; nobody was waiting for towels and nobody had chased
+twice), so the close line served a fabrication back to the guest as established fact.
+
+**Built.** The line is now composed ENTIRELY from `task.kind` — a closed enum fixed by the tool call,
+never model prose — via a `Readonly<Record<TaskKind, string>>` table. Exhaustive by type: a 6th kind
+fails typecheck rather than interpolating `undefined`. No sanitiser is needed because nothing dynamic
+remains in the string. Deliberately no "all": a guest may hold up to
+`MAX_OPEN_TASKS_PER_CONVERSATION`, and "that's all sorted" would silently claim the others too.
+
+**🚨 THE SIBLING, and it is only MITIGATED — do not read this entry as "the leak is closed".**
+A leak has siblings, and this one arrives by a different door: `brain/profileBlock.ts` renders THE SAME
+staff-authored summary, verbatim and in quotes, into block [5] on every guest turn. Code no longer
+SENDS it; the model still READS it and can paraphrase it straight back, for the whole life of the open
+task. `db/tasks.ts` already excludes `origin='system'` tasks from that block with exactly this argument
+— guest-origin summaries were exempted on the premise this fix just demolished. The block framing was
+hardened to name the wording as internal and forbid quoting it, which is a PROMPT instruction and
+therefore soft (the S5 night failure is this codebase's proof that the model ignores those). **The
+deterministic cure — stop rendering model prose there at all — changes what the model can say about a
+request older than the transcript window, so it is filed with the phantom-task work rather than guessed
+at mid-fix.** The §6.3 budget test caught the first, wordier framing at 1280 tokens against a 1250 cap;
+tightened rather than raising the budget.
+
+**Two residuals ACCEPTED and recorded in the code, both for the villa team:**
+1. **Ambiguity.** Two open tasks of one kind are reachable (GATE 3 merges only on kind + villa + a
+   similar summary), so closing each sends a byte-identical line. The old line disambiguated — using
+   the very text that was leaking. Nothing we hold is both guest-safe and specific: the summary is
+   model prose and the short id is ticket language the voice guide bans. If the team wants
+   concreteness back, the honest source is the GUEST's own words (`requestKey` carries the triggering
+   message id), never the model's.
+2. **The voice guide already has an opinion and this default sits against it.** §6 in-stay says
+   "brisk, gracious, concrete… name the villa, stop", and §8's rewrite table puts "Two towels on their
+   way to Villa B3" on the Nistula side of this exact contrast. Concreteness was traded for safety
+   deliberately, pending their answer. The wording lives in ONE table so that answer is a one-line edit.
+
+**`escalation` and `night_queue` MUST stay identical strings** — `convertNightQueueTasks` rewrites the
+kind at the 10:00 digest, so a 23:00 task is read here under a kind it was never raised with. Editing
+one alone is the trap; now pinned by a test.
+
+**Review found two PRE-EXISTING defects, logged NOT fixed (out of this fix's scope):**
+- `brain/stayGuards.ts` `scanUnitAssertions` does not catch the DISPATCH shape: *"Two towels are on
+  their way to Villa B3"* PASSES (no `you`, no possession, no echo cue), which OQ-19 forbids. The cause
+  was fixed at CH-13a (the voice exemplar was de-villa'd); the guard gap was deferred and is still open.
+- `brain/leakGuards.ts` `TRIPWIRES` never gained `create_staff_task` or `escalate_to_human` — every
+  earlier tool name is blocked, those two are not; nor is the `#A3F2K9` short-id shape.
+
+**Tests.** Two EXISTING tests asserted the leak and were inverted, not merely added to — the close test
+(`toContain('2 extra towels')`) and the transaction-rollback retry test, which used the summary as its
+proxy for "the guest was told". New tests use the worst real UAT fixture verbatim and assert no
+third-person `\bGuest\b` survives; the multi-task test was rewritten after review showed it passed on
+BOTH sides of the fix (it checked only for "all"/"AC", neither of which the old line contained).
+
+**PROCESS NOTE (my error, recorded because it cost a run):** the first full gate on this branch came
+back with failures scattered across erasure/lifecycle/db-stays. None were real — a review agent was
+running vitest concurrently, and the suites share `nistula_test` and TRUNCATE each other. **The
+standing "never two vitest at once" rule now has a second face: review AGENTS run tests too.** Do not
+start the gate while one is live.
