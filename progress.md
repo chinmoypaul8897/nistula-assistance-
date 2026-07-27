@@ -3969,3 +3969,17 @@ would stop any future failing step from silently skipping it. It is one line, it
 recurrence of the five-day blind spot, and the general form applies to *every* step after a failing one —
 two of which are security backstops. It changes CI semantics beyond the issued fix, so it is the
 architect's call.
+
+**Post-merge addendum (2026-07-27, 19:0x IST) — a THIRD "read the message, not the label" instance, in
+CI this time.** The `main` run for the CH-20 merge commit `fb69743` came back **red** minutes after the
+PR run for the identical tree came back green. It was **GitHub infrastructure**, not the code:
+`Initialize containers: failure` — the Postgres service container never started on the Node 24 runner —
+and every real step (`pnpm check`, the audit, the PII guard) shows `skipped`, with the Node 22 job
+`cancelled` by fail-fast. Re-run via `gh run rerun <id> --failed`: **green**.
+
+**Final CI state on `main`, all three runs green with `Fixture PII guard: success` on both Node 22 and
+24:** `92fe267` (FIX-4) · `fb69743` (CH-20, `vCH-20`) · `89f0940` (this entry).
+
+The pattern is now three-for-three this session — a suite failure named after a pure function, and a CI
+failure named after a merge — where **the failing STEP and the failing SUBJECT were different things.**
+Before diagnosing a red run, read which step failed and what it said.
