@@ -4226,3 +4226,88 @@ append-only), corrected here:
 
 The surviving half of that item is its closing sentence — that `channel_quiet` is the only thing that
 would report a dead webhook. That is still true, and the section above says why.
+
+---
+
+## Docs note — Part Two sent to team; Paul-question register renumbered and updated (2026-07-28)
+
+Docs-only session, no code changes, no test run needed. Three things happened outside the repo and are
+recorded here: a **Part Two** questions document went to the villa team, several questions moved off
+Paul's plate onto the team's, and **three of Paul's questions were answered** from planning history.
+
+### The collision, and the fix
+
+Part Two is numbered **Q86–Q102**, continuing the **24 Jul team document's Q1–Q85**. That is a direct
+collision with `docs/questions-for-paul.md`, whose own questions were numbered **Q86–Q108**. Two live
+documents, two different meanings for "Q97". **Fix: the Paul register is renumbered `P1`–`P23`** in
+original order (86 → P1 … 108 → P23), with **the original number kept in every heading** so an older
+note citing "Q97" still resolves (it is P12).
+
+⚠️ **A third numbering run exists and was NOT touched:** `docs/team-questions.md` in this repo is the
+**13 Jul** sweep, Q1–Q78 — *not* the 24 Jul document Part Two continues. So Part Two's Q86–Q102 sit
+above the 24 Jul run, and the 13 Jul file's Q1–Q78 are a separate series that happens to share low
+numbers. Both new files say so explicitly; do not reconcile them by renumbering the 13 Jul file, which
+was already sent.
+
+### What changed in the repo
+
+- **NEW `docs/team-questions-part-two.md`** — one line per question, Q86–Q102 in three parts:
+  **G · money** (Q86 ★ amenity/services truth · Q87 ★ adults in the base price + the two eZee
+  settings · Q88 infant/cot · Q89 ★ the cancellation ladder at exactly 15 and exactly 7 days ·
+  Q90 minimum stay · Q91 may we read paid/owed from eZee · Q92 the 2 a.m. confirmation and the 9 a.m.
+  welcome), **H · front desk** (Q93 ★ the walk-in name typed into eZee · Q94 ★ direct-booking entry ·
+  Q95 overnight holds and hand-taken transfers · Q96 booker ≠ messenger · Q97 the 40-of-62
+  cancellations · Q98 non-guest messages · Q99 the group-of-six playbook), **I · phone and people**
+  (Q100 ★ the real-number handset · Q101 mistake reporting + the Sunday summary · Q102 the evening
+  arrivals list + which contact details may be handed out). It also carries the
+  supersede map and the restated-elsewhere map (Q87→OQ-10, Q99→OQ-30, Q102→OQ-12/OQ-23, plus seven
+  13 Jul items).
+- **`docs/questions-for-paul.md` REWORKED, not deleted** — renumbering banner, an index table, and a
+  **Status** line on all 23. Every question's text, `Owner:` line, *Today/Why* context and option
+  lists are unchanged, verbatim.
+- **`docs/team-questions.md`** — one banner line at the top pointing at Part Two and naming the Paul
+  register as the live register for Paul's questions. Nothing else in that file touched.
+
+### The register after this pass
+
+| Status | Items |
+|---|---|
+| **MOVED TO TEAM — Part Two Q100** | P1 (86) · P2 (87) · P3 (88) · P4 (89) · P5 (90) · P15 (100) |
+| **MOVED TO TEAM — Part Two Q101** | P9 (94) · P10 (95) · P11 (96) |
+| **✅ ANSWERED 28 Jul (architect, planning history)** | P21 (106) · P22 (107) · P23 (108) |
+| **OPEN — PAUL** (recommendation due at Step 5) | P6 (91) · P7 (92) · P8 (93) · P12 (97 = OQ-20) · P13 (98) · P14 (99) · P16 (101) · P17 (102) · P18 (103) · P19 (104) · P20 (105) |
+
+**The three answers, as recorded:**
+1. **P21 (106) — who is Ash?** *"Ash is Nistula's founder — Paul's partner in the business."*
+2. **P22 (107) — may Ash still change how the assistant speaks?** *"No — voice authority is Paul
+   alone; voice guide v1.1 was locked by Paul with Ash explicitly not involved."*
+3. **P23 (108) — who owns the assistant's wording?** *"Paul owns the assistant's wording, by decision
+   not default."*
+
+**P22 settles a live ambiguity in a locked artifact:** `kb/source/voice-guide.md` v1.1 names two
+people who may change the voice. Only one of them may. The voice guide itself was **not edited** this
+session (it is locked, and editing it is a `kb:build` + byte-compare change, not a docs note) — but
+anyone reading that line should read this answer with it.
+
+### Two things flagged rather than silently accepted
+
+1. 🚨 **`TD-30` does not exist in this repo.** The rider added to P17–P20 was issued verbatim and says
+   *"see progress sweep TD-30"*. A repo-wide search finds **no `TD-30`, and no `TD-<n>` id of any
+   kind** — the pointer is dangling until that sweep lands here. **The rider's substance is real and
+   is already recorded in-repo**, at this file's CH-13a "Open questions" item 2: `tasks.summary` is a
+   deliberately **UNSCREENED** store of guest words, shipped that way on purpose because *"may we
+   REMEMBER this for ever?"* and *"does a human need this to do the work NOW?"* are different
+   predicates — so `factScreens` refuses "allergic to shellfish" into `guest_facts` while the same
+   sentence rides a staff task card. That is the send-side variant P17–P20 point at. Cite the CH-13a
+   entry until TD-30 is in the tree.
+2. **P5 (90) — "will that number be used at least once a fortnight?" — was moved into Part Two Q100
+   as directed, but Q100 as sent does not visibly ask the fortnight question** (it asks whose handset,
+   same person daily, what else is on it, history depth, WhatsApp Web). The 13-quiet-day coexistence
+   cut-off is the reason P5 existed. Recorded so the answer to Q100 is not read as covering it; if it
+   comes back silent on frequency, P5 is still open in substance whatever its status line says.
+
+**Nothing was answered on the team's behalf and nothing was invented.** The three answers came from
+planning history via the architect; every other status is a routing fact, not a decision.
+
+Refs: docs
+

@@ -1,5 +1,7 @@
 # Questions for the Nistula team
 
+> **28 Jul:** a Part Two (Q86–Q102) went to the team — see [`docs/team-questions-part-two.md`](team-questions-part-two.md). Several owner-section questions were superseded or moved; [`docs/questions-for-paul.md`](questions-for-paul.md) (now P-numbered) is the live register for Paul's.
+
 > **Generated 2026-07-13** by sweeping the entire codebase, plan, knowledge base and build log for every place we had to make a decision about the business *without being told the answer.*
 
 ## Please read this first
