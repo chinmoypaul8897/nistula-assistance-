@@ -103,6 +103,14 @@ function weekBucket(istDay: string): string {
 export type LeadOutcome =
   | 'scheduled'
   | 'skipped_no_type'
+  /** CH-20: the guest enquired about the RETIRED three-bedroom Assagao product.
+   * Distinct from `skipped_no_type` on purpose — both fail closed, but they are
+   * different facts and only one of them is permanent. Collapsing them would
+   * make this a PROXY: "unresolvable" happens to coincide with "retired" today
+   * and would stop coinciding the moment the resolver changes, and an operator
+   * reading `skipped_no_type` would go hunting for a resolver bug that is not
+   * there. */
+  | 'skipped_inventory_retired'
   | 'skipped_no_name'
   | 'skipped_cap'
   | 'skipped_invalid_params';
@@ -126,6 +134,11 @@ export async function scheduleLeadFollowup(
   const { db, now } = deps;
 
   const resolution = resolveVilla(args.quote.villaLabel);
+  // A lead who asked about a house we no longer let must never be followed up:
+  // the body invites them back to that product. No row is created at all, so
+  // this is the earlier of the two fail-closed gates (sendGuards.marketingBlock
+  // is the send-time backstop for rows that already exist).
+  if (resolution.kind === 'retired') return 'skipped_inventory_retired';
   const villaType =
     resolution.kind === 'match'
       ? resolution.villa.typeName
