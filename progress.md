@@ -3722,3 +3722,250 @@ Only the live probe below tests that.
   that is a deployment decision, not a CH-20 one, and it is the other half of state-report §8.2.
 - The four departed labels remain in `test/lifecycle-review-fixes.test.ts`'s template-escaping cases on
   purpose — they prove a house name in a param is REJECTED, which the retirement does not affect.
+
+#### CH-20 · post-deploy live verification (2026-07-27, 18:40 IST)
+
+**Deploy confirmed.** Railway auto-deployed the merge: deployment
+`b5cd1dbf-8af3-4f67-a576-2ebee619f020`, `SUCCESS`, `meta.commitHash =
+fb69743e93d5ff85fd8755e7145ee13fc9c6719e` = HEAD of `main`; `/health` uptime reset to 29 s and both
+tickers came back (`pollerAgeMs`/`senderAgeMs` non-null).
+
+**🚨 THE WHATSAPP LEG OF THE PROBE WAS NOT RUN, AND CANNOT BE RUN FROM HERE.** The architect asked for
+one live probe on the test line. A probe needs an INBOUND WhatsApp message, and that can only come from
+a handset on the Meta test app's recipient allowlist. This session has no WhatsApp client and no
+handset. **The alternative — forging a signed webhook POST at production — was deliberately NOT
+done:** it fabricates a guest message no human sent, writes it into the production DB as if real, and
+then sends a real WhatsApp to a real person. "Never hand-edit prod data you intend to cite" applies to
+manufacturing it too. **What Paul must do is written out at the end of this entry; it takes about a
+minute.**
+
+**What WAS verified live, and it is the thing actually at risk.** The villa map was driven through the
+REAL `get_quote` tool against the REAL website API on production's own `WEBSITE_BASE_URL` — read-only
+GETs, no PMS write, no WhatsApp. This is precisely the leg `pnpm replay` **cannot** cover: its fixture
+website echoes back any `villaId` with constant amounts, so 6/6 says nothing about whether the map
+matches reality.
+
+```
+CH-20 live villa-map probe
+WEBSITE_BASE_URL: https://nistula-website.vercel.app
+dates: 2026-08-17 → 2026-08-19 · 4 adults        (a NEAR date, three weeks out)
+
+── RETIRED  (villa_label: "3bhk") ──
+   ok            : false
+   error         : INVENTORY_RETIRED
+   message       : Nistula no longer lets the three-bedroom villas in Assagao. Do not quote, name,
+                   describe or price them, and do not blame the dates. Tell the guest we no longer
+                   let the three-bedroom houses in Assagao, and offer what we do have — the Assagao
+                   apartments and the four-bedroom villa in Siolim.
+   degraded recs : []            ← no health signal recorded (correct: a retirement is not an outage)
+
+── RETIRED  (villa_label: "B3") ──        identical: INVENTORY_RETIRED, degraded recs []
+── RETIRED  (villa_label: "villa c1") ──  identical: INVENTORY_RETIRED, degraded recs []
+
+── LIVE apartments type  (villa_label: "apartment") ──
+   ok            : true
+   data          : {"type":"Nistula Apartment","total":13650,"averagePerNight":6825,
+                    "perNight":[{"date":"2026-08-17","amount":6825},{"date":"2026-08-18","amount":6825}],
+                    "minNights":{"average":2,"meetsRequirement":true},
+                    "available":true,"availableCount":3,"unitCount":3}
+   degraded recs : ["up"]
+
+── LIVE Siolim  (villa_label: "siolim") ──
+   ok            : false
+   error         : UNAVAILABLE          ← a REAL "those dates are taken", not a 404 (see below)
+   degraded recs : ["up"]
+```
+
+Raw website API, to tell a 404 apart from a genuine 409 — the distinction the whole chunk turns on:
+
+```
+GET /api/quote?villaId=5220300000000000015 (Siolim 4BHK)  → HTTP 409
+     {"ok":false,"kind":"unavailable","message":"No availability for those dates."}
+GET /api/quote?villaId=5220300000000000001 (Apartment 11) → HTTP 200  … total 13650 …
+GET /api/quote?villaId=5220300000000000011 (Villa B3)     → HTTP 404
+     {"ok":false,"kind":"input","message":"Unknown villa."}
+```
+
+**Read that last line against the first.** `Villa B3` is **`404 Unknown villa`** at the website. Before
+CH-20 that 404 went through `websiteApi` and surfaced to the model as unavailable/upstream_down — which
+is exactly how *"I'm afraid those dates have gone"* became a reachable answer about a house that does
+not exist. It now never reaches the website at all.
+
+**🚨 A CORRECTION TO THE RECORD, found by this probe: SIOLIM WAS NEVER DRIFTED.** plan.md §5.4's
+2026-07-21 caveat listed the broken ids as "B1/B3/C1/C3/**Siolim**". Siolim returns a clean **409 with a
+real availability answer** — its id is valid and live. Only the four retired ids 404. This matters
+because the approved retirement line **offers the Siolim villa by name**: if Siolim were also broken,
+the honest refusal would have pointed the guest at a second thing we could not quote. It is not, and it
+does. *(The 409 is simply those two nights being booked — `availableCount` for the apartments was 3/3 on
+the same dates, so the site is answering normally.)*
+
+**What this probe does NOT prove**, stated plainly: it exercises the tool layer, not the model's words.
+Voice invariant #6 — that the AI actually SAYS the approved line and does not paraphrase a
+date-blaming version of it — is the one thing only a live handset can confirm, exactly as at CH-19.
+
+**For Paul — the one-minute probe (please run and paste the reply here):**
+1. From the allowlisted handset, message the test line: **"is a 3bhk villa available 17-19 aug? what
+   will be the rate"**
+2. Expect: we no longer let the three-bedroom houses in Assagao · an offer of the Assagao apartments
+   and the four-bedroom Siolim villa · **no ₹ figure** · **no B1/B3/C1/C3 named**.
+3. **The failure to watch for is a reply blaming the dates** — "those dates have gone", "fully booked",
+   "not available". That is the exact defect CH-20 removed, and the only place it could still appear is
+   the model's wording.
+4. Then reply **"the apartments then"** — expect a real ₹ figure (≈₹13,650 for those two nights, from
+   the live site) and a booking link.
+
+---
+
+## Step-1 answers for the architect (2026-07-27)
+
+Facts from code, live probes and the Railway API. **UNKNOWN** where not established this session. No
+secret VALUES appear — variable names and lengths only.
+
+### Q1 · Deployed commit and production `/health`
+
+**Both merges landed and BOTH auto-deployed.** Deployment `b5cd1dbf-8af3-4f67-a576-2ebee619f020`,
+status `SUCCESS`, `meta.branch = main`, **`meta.commitHash = fb69743e93d5ff85fd8755e7145ee13fc9c6719e`**
+— identical to `git rev-parse HEAD` on `main` (`fb69743`, "Merge CH-20"). The FIX-4 merge deployed
+before it as `540d6a47-…` at 17:26 IST.
+
+```json
+{"ok":true,"version":"0.1.0","uptime":194.763495851,"db":true,"boss":true,
+ "degraded":false,"pollerAgeMs":74086,"senderAgeMs":74069}
+```
+`https://nistula-assistance-production.up.railway.app/health` · 18:43 IST. Uptime reset from 3329 s to
+29 s at the deploy and both tickers came back, so the poller and lifecycle sender are live on the new
+build.
+
+**`/health` still does not expose the commit** (state-report §1.3 noted this). It was read from the
+Railway deployment API instead. **Worth a one-line change**: echoing `RAILWAY_GIT_COMMIT_SHA` into
+`/health` would make "did this merge actually ship?" answerable without the CLI. Not done — outside the
+two issued tasks.
+
+### Q2 · The exact `STAFF_ROSTER_JSON` shape after CH-20
+
+Schema: `src/config.ts:34-39`; canonicalisation `canonicaliseRosterVillas` `src/config.ts:407`.
+A JSON **array**; every field required; unknown keys rejected.
+
+```json
+[
+  {"name":"Asha",  "phone":"+919999900001","role":"housekeeping","villas":["Apartment 06","Apartment 09"]},
+  {"name":"Ravi",  "phone":"+919999900002","role":"maintenance", "villas":["Apartment 11","Siolim 4BHK"]},
+  {"name":"Meera", "phone":"+919999900003","role":"frontdesk",   "villas":[]}
+]
+```
+*(placeholder numbers — replace with the real handsets)*
+
+Set it as **one line**, e.g.
+`[{"name":"Asha","phone":"+919999900001","role":"housekeeping","villas":["Apartment 06","Apartment 09"]},{"name":"Meera","phone":"+919999900003","role":"frontdesk","villas":[]}]`
+
+Rules that will refuse boot if broken — all deliberate, all fail-fast:
+- `role` is a **fixed enum**: `housekeeping` | `maintenance` | `frontdesk`. Nothing else boots.
+- **`villas` now has exactly four legal values** (this is the CH-20 change):
+  **`Apartment 06` · `Apartment 09` · `Apartment 11` · `Siolim 4BHK`**.
+  Aliases are canonicalised at boot, so `"apt 6"`, `"a9"`, `"solim"` are all accepted and STORED as the
+  canonical label — `assignFor` matches canonical-to-canonical.
+- **`"B1"/"B3"/"C1"/"C3"` (or `"Villa B3"`) now REFUSE BOOT** with
+  *"names a three-bedroom Assagao villa Nistula no longer lets — routing to it is impossible"*. Intended:
+  there is no door to send anyone to, and boot is the last place a human is watching.
+- A villa **TYPE** (`"apartment"`, `"Nistula Apartment"`) also refuses boot — it names three houses and
+  we will not guess.
+- `villas: []` is **legal** and means "no specific round" (NOT a wildcard) — that member is reached only
+  via the frontdesk-lead fallback.
+- **The frontdesk LEAD is the FIRST `frontdesk` member — roster order is a contract.**
+- Two members may not share a phone; phones normalise to E.164.
+
+### Q3 · Environment checklist for Step 2's live tests
+
+Read from the Railway API this session (names + lengths only). Defaults are the zod defaults in
+`src/config.ts`.
+
+| var | current on Railway | needed for Step 2 | why |
+|---|---|---|---|
+| `STAFF_ROSTER_JSON` | **ABSENT** | **SET** (Q2 shape) | Without it there is no roster: every card falls back to the frontdesk lead, then to `OPS_NUMBERS[0]`. This is the single highest-leverage unblock — it gates the live DoD of CH-11/13a/13b/14a/14b/16. |
+| `OPS_NUMBERS` | **SET — 1 entry** (13 chars, E.164-shaped) | add the 2nd handset | **Corrects the record: it is NOT empty.** state-report §10 runner-up and the session memory both carry an "empty `OPS_NUMBERS`" risk; it has one number. Still worth a second: with one, that person is alerts + digests + draft approvals + the roster fallback. |
+| `WA_TEMPLATE_MODE` | **ABSENT ⇒ `simulate`** | **leave as-is** | `simulate` sends the identical body as free-form. Real templates belong to the real number's WABA, which does not exist yet. Flipping to `send` now would fail every lifecycle send. |
+| `DRAFT_MODE` | **ABSENT ⇒ `true`** | leave `true` | Neutralised in practice by `AUTO_SEND_TYPES` below — see the note. |
+| `AUTO_SEND_TYPES` | **SET = `presales,arrival,instay,poststay`** | **set to `` (empty) to test the draft loop** | All four types auto-send today, so `DRAFT_MODE=true` is inert and **no draft card is ever raised**. To exercise CH-16 live, clear this (or drop one type) — otherwise the draft leg cannot be tested at all. |
+| `NIGHT_START` / `NIGHT_END` | **ABSENT ⇒ `20:00` / `10:00`** | set explicitly ONLY to test the night path off-hours | Defaults are the real staff hours. To test S5 during the day, temporarily widen the night window; remember it also gates `escalate_to_human`. |
+| `LIFECYCLE_SEND_ENABLED` | **SET = `1`** (armed) | leave `1` | Already live. |
+| `LIFECYCLE_SOURCES` | **SET = `Internet Booking Engine,Walk-in,WEB`** | leave | **Delta:** state-report §6 recorded two values; there are three — `WEB` was added. Still direct-only, still fail-closed against OQ-20. |
+| `EZEE_POLLER_ENABLED` | **SET = `1`** | leave | BINDING: only Railway may set this. |
+| `WEBSITE_BASE_URL` | **SET = `https://nistula-website.vercel.app`** | decision needed | Still the Vercel preview, not `nistula.life`. It quotes correctly (probe above), so it is not blocking — but it is a live-money path pointed at a preview deployment. |
+| `HEALTHCHECKS_URL` | **ABSENT** | set if the dead-man's switch is wanted | Without it `channel_quiet` is the ONLY thing that reports a dead webhook. |
+| `ADMIN_ROUTES_ENABLED` / `ADMIN_BEARER_TOKEN` | **ABSENT ⇒ routes 404** | set only if a live admin probe is wanted | `POST /admin/simulate-human-reply` (CH-14a) is unreachable in prod without them. |
+| `MODEL_ID` | **ABSENT ⇒ `claude-sonnet-4-5`** | leave | Production runs the default. |
+| `QUIET_STALE_MINUTES` | **ABSENT ⇒ 180** | leave | FIX-1's knob. On the TEST line 3 h of nobody messaging will now alert honestly. |
+| all `BACKUP_*`, `COEXISTENCE_*`, `COST_ALERT_INR_PER_DAY` | **ABSENT** | out of scope for Step 2 | Off-by-default ops infra. |
+
+**Meta test-app allowlist slots: UNKNOWN as of this session — not re-verified.** They live in the App
+Dashboard, which has no API this session could read, and I did not guess. **The last recorded state is
+1 used / 4 free** (state-report §8.7, and the session-memory note from the pilot-prep work). Treat that
+as the record, not as a fresh reading, and confirm in the dashboard before relying on it.
+
+**One trap for Step 2 that is not an env var:** a staff number quiet for 24 h **cannot receive a
+free-form task card**. Every roster handset must message the line once before it can be routed to
+(OQ-25). Otherwise the card fails, and — correctly — the guest is promised nothing.
+
+### Q4 · Deltas to state-report §8 (stuck list) and §9 (questions)
+
+**§8.1 CH-20 — CLOSED.** Merged (PR #35), tagged `vCH-20`, deployed as `fb69743`. `pnpm check` exit 0
+(106 files / 1813 tests), `pnpm replay` 6/6.
+
+**§8.3 `fast-uri` CI — CLOSED, but the entry understated it.** There were **four** HIGH advisories by
+today, not one (`fast-uri`, `find-my-way`, `postcss`, `brace-expansion`) — the advisory DB moved after
+22 Jul. Fixed in FIX-4, tagged `vFIX-4`. **The finding worth carrying is not the advisories:** the
+`Fixture PII guard` step had been **skipped on every run for five days**, because the audit step aborts
+the job before it. Both `main` runs since are green with that step `completed/success`.
+
+**§8.2 villa-map drift — mostly CLOSED, and its stated CAUSE was wrong.**
+- The four ids 404 because the houses were **retired**, not because the website renumbered them. Fix =
+  deletion. plan.md §5.4 and CLAUDE.md now say so, including *do not hunt replacement ids*.
+- **🚨 SIOLIM WAS NEVER DRIFTED.** The old caveat listed "B1/B3/C1/C3/Siolim". Probed live today:
+  Siolim (`…015`) returns **HTTP 409 with a real availability answer**, apartments return **200 with
+  real money**, only the four retired ids return **404 `Unknown villa`**. This matters because the
+  approved retirement line offers the Siolim villa by name.
+- **What remains of §8.2 is only the deployment question**: `WEBSITE_BASE_URL` still points at the
+  Vercel preview rather than `nistula.life`.
+
+**§8 (implicit) auto-deploy — NOT disconnected. CLAUDE.md and the state report are wrong on this.**
+Both of today's merges auto-deployed from `main` within minutes (`540d6a47-…` for FIX-4, `b5cd1dbf-…`
+for CH-20, both `SUCCESS`, the latter carrying `commitHash fb69743`). The CH-19-era observation
+("the prod box was still on CH-18c, uptime never reset") did not reproduce. The guidance to VERIFY the
+deployed commit after a merge is still good practice — but the connection itself is fine, and
+`railway service source connect` is not needed.
+
+**§7 quality table — one row moves.** "Fixture PII scrub: **PARTIAL** … the CI step has been skipped on
+every run since 2026-07-22" → the step now executes. The scrubber itself was never at fault.
+
+**NEW for §8 — a test-infrastructure flake worth listing.** On this box the DB `beforeEach` TRUNCATE can
+exceed vitest's 10 s hook timeout under load. It surfaced as
+`test/consent-stop-optin.test.ts > rejects "yes but not this time"` failing — a **pure string function**
+that cannot touch the DB. The message was `Hook timed out in 10000ms`, the assertion never ran, and the
+re-run was 1813/1813. **Read the failure MESSAGE before believing the test name.**
+
+**§9 [ARCHITECT] Q5 (CH-20 sequencing) — ANSWERED AND EXECUTED.** Merged before the other pending fixes,
+per the ruling. Every later fix now rebases onto it.
+
+**§9 [PAUL] Q27 (confirm the two CH-20 wordings) — ANSWERED AND SHIPPED.** The reworded
+`PHRASEBOOK.datesUnavailable` (false availability claim removed) and the retained "boutique villa
+company in Goa" identity line are in as written.
+
+**§9 [PAUL] Q17 (populated `STAFF_ROSTER_JSON`) — STILL OPEN, and CH-20 changed what a valid answer looks
+like.** Any roster drafted before 24 Jul that names B1/B3/C1/C3 will now **refuse boot**. Use the Q2
+shape above.
+
+**§9 [PAUL] Q20 / OQ-19 business half — SHARPER, not closed.** New entries **OQ-29** and **OQ-30** in
+`docs/open-questions.md`. The apartments were one of two multi-unit types and are now the **only** one,
+so "are Apartment 06/09/11 genuinely interchangeable?" now carries every multi-unit behaviour in the
+system. OQ-30 records the accepted gap: a group of six in Assagao has no product.
+
+**Unchanged and still stuck:** §8.4 FIX-3 night handling (villa team), §8.5 phantom tasks / the block-[5]
+sibling leak (still only prompt-mitigated), §8.6 evening arrivals digest, §8.7 the second allowlisted
+handset, §8.8 template approval, §8.9 `HEALTHCHECKS_URL`, §8.10 no production backups, §8.11 provisional
+coexistence fixtures, §8.12 OQ-24 voids, §8.13 the unproven eZee "modify" shape.
+
+**One thing I did NOT do, raised rather than taken.** Giving the `Fixture PII guard` step `if: always()`
+would stop any future failing step from silently skipping it. It is one line, it directly prevents a
+recurrence of the five-day blind spot, and the general form applies to *every* step after a failing one —
+two of which are security backstops. It changes CI semantics beyond the issued fix, so it is the
+architect's call.
