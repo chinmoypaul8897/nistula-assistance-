@@ -227,6 +227,7 @@ async function main(): Promise<void> {
     knowledge: kb,
     opsNumbers: config.opsNumbers,
     healthchecksUrl: config.healthchecksUrl,
+    quietStaleMinutes: config.quietStaleMinutes,
     keepAlive: {
       active: config.coexistenceActive,
       maxDays: config.coexistenceKeepaliveMaxDays,

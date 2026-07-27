@@ -223,7 +223,7 @@ Ops & platform (`src/ops/*`):
 | kind | Meaning / what to do |
 |---|---|
 | `watchdog_unhealthy` | The 5-min internal probe failed (detail names db/boss/poller/sender). |
-| `channel_quiet` | No traffic either way for 30 min in business hours — verify the Meta webhook subscription (see Incidents: webhook silent). |
+| `channel_quiet` | Nothing ARRIVED through the webhook (no guest inbound, no echo) for `QUIET_STALE_MINUTES` (default 3h) of business-hours time — verify the Meta webhook subscription (see Incidents: webhook silent). `warnCount` in the detail says how many times this one silence has been reported; it returns to 1 only after something genuinely reaches us. |
 | `rollup_undelivered` | The 23:30 rollup reached no ops number (dev's standing state; harmless). |
 | `admin_auth_failed` | A failed bearer on `/admin/*` (count + ip). On a service where admin is disabled/unused, treat as a probe. |
 | ⭐ `coexistence_keepalive_reminder` | PRE-cutover weekly nudge: send one message from the business line to keep it warm (Meta drops the API link after ~14 days app-offline). |
@@ -240,8 +240,12 @@ on almost all of them: `curl -s $BASE/health | jq` returns
 stale age is the signal, not the status code.
 
 ### Webhook silent — no inbound reaching us
-- **Observe:** `channel_quiet` alert (30 min, no traffic either way, business
-  hours); guests report no replies; `messages` table shows no new inbound.
+- **Observe:** `channel_quiet` alert (`QUIET_STALE_MINUTES`, default 3h — no
+  GUEST traffic either way, business hours); guests report no replies; `messages`
+  table shows no new inbound. The alert carries `warnCount`: **1 = the first
+  warning about this silence**, higher = the same unbroken silence being
+  re-reported on a widening backoff (6h, then 12h). It does NOT re-fire every
+  tick, so a second card means genuinely more silence, not a retry.
 - **Diagnose:** confirm where the pipe breaks. (1) Service up and receiver
   reachable? `curl "$BASE/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=x"`
   → **403** (reachable, token check works). (2) `railway logs` — any
@@ -254,8 +258,11 @@ stale age is the signal, not the status code.
   `messages` field + app link and re-`POST` it (the CH-02 fix); if code-200,
   clear the flag in the Meta dashboard; if a bad app secret, re-sync the correct
   value and redeploy.
-- **Recovers when:** an inbound reaches `messages` again; `channel_quiet` stops
-  re-firing. (Full detail: "Incident: test line goes silent" under CH-04 below.)
+- **Recovers when:** a GUEST inbound reaches `messages` again (or a coexistence
+  echo lands) — a staff/ops number messaging the line does NOT count, the monitor
+  filters `sender='guest'`; `channel_quiet` stops re-firing. Do not read our own
+  outbound as recovery: lifecycle sends keep going out while the webhook is dead.
+  (Full detail: "Incident: test line goes silent" under CH-04 below.)
 
 ### eZee down — the mirror stops updating
 - **Observe:** `ezee_auth_failed` (creds) or `ezee_poll_failing` (5 bad cycles);
@@ -1533,8 +1540,28 @@ SELECT kind, status, skip_reason, send_at FROM scheduled_messages
   healthy** (boss responsive, DB round-trip <1s, poller last success <5 min, sender last run
   <5 min). Unhealthy ⇒ it does NOT ping (healthchecks.io's dead-man timeout raises the external
   alert) and ALSO raises a direct ops WhatsApp alert (`watchdog_unhealthy`). Same tick runs the
-  **quiet-channel monitor**: in business hours (08:00–23:00 IST) with NO message in OR out for
-  30 min, warns ops once (`channel_quiet` — "verify webhook subscription").
+  **quiet-channel monitor**: in business hours (08:00–23:00 IST) with NOTHING ARRIVING through the
+  webhook — no guest inbound and no coexistence echo — for `QUIET_STALE_MINUTES` (**default
+  180 = 3h**; tune per business), warns ops (`channel_quiet` — "verify webhook subscription").
+  Our OWN sends deliberately do not count: an unprompted lifecycle message is driven by the eZee
+  poller and keeps flowing while the webhook is dead, so treating it as proof of life would hide
+  the outage. Staleness accrues only while the window is OPEN, so the shut 23:00–08:00 stretch
+  never trips the 08:00 tick.
+  **Tuning it:** this is not a secret, so the sync script is not required — a bare
+  `railway variables --set QUIET_STALE_MINUTES=<minutes>` is fine here (the "never bare" rule
+  under *Secret rotation* is about values the CLI would echo). **It is read once at boot, so it
+  takes effect on the NEXT DEPLOY** — which also clears the in-memory backoff. Lower = earlier
+  warning + more false alarms on a quiet line; higher = less noise + a dead webhook noticed later.
+  It must be a positive whole number of minutes: 0, a negative, a fraction or a non-number is
+  refused at BOOT. Keep it well under 15h — the monitor only accrues staleness inside the
+  08:00–23:00 window, so a threshold near or above that window's length can never trip.
+  **Re-warn backoff:** one uninterrupted silence warns at the threshold, then not for 2× it, then
+  every 4× it, and never more than 12h apart whatever the threshold — so a dead channel produces
+  ~1–2 alerts a day, not one every 30 minutes (the live rehearsal measured ~18–30/day before
+  this). The backoff lives in `ops/watchdog.ts` and is keyed on the instant of the last ARRIVAL,
+  so it resets when — and only when — something genuinely reaches us, including overnight while
+  the monitor is shut. A clock rolling over never resets it: overnight silence is not evidence the
+  webhook recovered. It is in-memory, so a deploy resets it (errs toward more delivery).
 - **Ops alerts** (`alertOps`) now WhatsApp-deliver to `OPS_NUMBERS` via the `nst_digest` template,
   deduped to **once per 30 min per alert kind** (in memory; a deploy resets it, which errs toward
   more delivery). The log line always fires too. **`wa_token_expired` is log-only by design** — a
@@ -1584,7 +1611,7 @@ which is correct in dev where the poller never runs).
 
 ### Alerts you may see
 - `watchdog_unhealthy` — internals failed the probe (detail lists which: db/boss/poller/sender).
-- `channel_quiet` — no traffic either way for 30 min in business hours; verify the Meta webhook sub.
+- `channel_quiet` — nothing arrived through the webhook for `QUIET_STALE_MINUTES` (default 3h) of business-hours time; verify the Meta webhook sub.
 - `cost_soft_alarm` / `cost_kill_switch` — 2× / 4× the daily budget.
 - `wa_token_expired` — rotate the WA token (above). `rollup_undelivered` — the 23:30 line reached no
   ops number (dev's standing state; harmless).

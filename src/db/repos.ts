@@ -230,8 +230,13 @@ export async function countAiMessagesSince(
 
 /**
  * The two GUEST-FACING traffic timestamps CH-17's quiet-channel monitor needs.
- * ::text → Date is safe here: a 30-min staleness check does not need the
- * microsecond precision the cursor guards.
+ * ::text → Date is safe here: a multi-hour staleness check (`QUIET_STALE_MINUTES`,
+ * default 180) does not need the microsecond precision the cursor guards.
+ *
+ * NOTE: the monitor now pairs `lastGuestInboundAt` with `lastEchoAt`, NOT with
+ * `lastGuestReplyDeliveredAt` below — it asks "is the INBOUND webhook alive",
+ * and our own unprompted lifecycle sends answer a different question. See the
+ * header of `ops/watchdog.ts`.
  *
  * 🚨 Guard by the CONTRACT ("did a message actually flow to/from a GUEST?"), not
  * the proxy ("does an out row exist?") — pre-merge review DEFECT. Every ops

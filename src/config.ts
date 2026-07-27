@@ -110,6 +110,12 @@ const envSchema = z.object({
   ADMIN_BEARER_TOKEN: z.string().optional(),
   ADMIN_ROUTES_ENABLED: z.enum(['0', '1']).default('0'),
   HEALTHCHECKS_URL: z.url().optional(),
+  // How long BOTH directions must be silent in business hours before the
+  // quiet-channel monitor warns ops. New §3.7 registry var (recorded deviation).
+  // WHY it is a knob and not a constant: 30 min was hardcoded and produced
+  // ~18–30 false alerts/day on the live line — "how long does this business
+  // legitimately go quiet?" is a property of the BUSINESS, not of the code.
+  QUIET_STALE_MINUTES: z.coerce.number().int().positive().default(180),
   COST_ALERT_INR_PER_DAY: z.coerce.number().positive().default(1000),
   // ── CH-18a-2 coexistence keep-alive. New §3.7 registry vars. ──────────────
   // OFF pre-cutover: the daily keep-alive is a weekly ops REMINDER to warm the
@@ -183,6 +189,7 @@ export interface Config {
   adminBearerToken: string | undefined;
   adminRoutesEnabled: boolean;
   healthchecksUrl: string | undefined;
+  quietStaleMinutes: number;
   costAlertInrPerDay: number;
   coexistenceActive: boolean;
   coexistenceKeepaliveMaxDays: number;
@@ -287,6 +294,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     adminBearerToken: raw.ADMIN_BEARER_TOKEN,
     adminRoutesEnabled: raw.ADMIN_ROUTES_ENABLED === '1',
     healthchecksUrl: raw.HEALTHCHECKS_URL,
+    quietStaleMinutes: raw.QUIET_STALE_MINUTES,
     costAlertInrPerDay: raw.COST_ALERT_INR_PER_DAY,
     coexistenceActive: raw.COEXISTENCE_ACTIVE === '1',
     coexistenceKeepaliveMaxDays: raw.COEXISTENCE_KEEPALIVE_MAX_DAYS,
@@ -451,6 +459,7 @@ export function configSummary(config: Config): string {
     `ADMIN_BEARER_TOKEN=${presence(config.adminBearerToken)}`,
     `ADMIN_ROUTES_ENABLED=${config.adminRoutesEnabled}`,
     `HEALTHCHECKS_URL=${presence(config.healthchecksUrl)}`,
+    `QUIET_STALE_MINUTES=${config.quietStaleMinutes}`,
     `COST_ALERT_INR_PER_DAY=${config.costAlertInrPerDay}`,
     `COEXISTENCE_ACTIVE=${config.coexistenceActive}`,
     `COEXISTENCE_KEEPALIVE_MAX_DAYS=${config.coexistenceKeepaliveMaxDays}`,

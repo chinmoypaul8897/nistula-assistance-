@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigError, configSummary, loadConfig } from '../src/config.js';
+import { DEFAULT_QUIET_STALE_MINUTES } from '../src/ops/watchdog.js';
 
 const minimalEnv = { NODE_ENV: 'test', PORT: '3000' };
 
@@ -197,5 +198,25 @@ describe('EZEE_POLLER_ENABLED (CH-10 split-brain guard)', () => {
     expect(on.ezeePollerEnabled).toBe(true);
     expect(configSummary(on)).toContain('EZEE_POLLER_ENABLED=true');
     expect(() => loadConfig({ ...minimalEnv, EZEE_POLLER_ENABLED: 'yes' })).toThrow(ConfigError);
+  });
+});
+
+describe('QUIET_STALE_MINUTES (quiet-channel threshold)', () => {
+  it('defaults to 3h, is tunable, and refuses a nonsense value at BOOT', () => {
+    expect(loadConfig(minimalEnv).quietStaleMinutes).toBe(180);
+    // 🚨 The default is written TWICE — zod's `.default(180)` here and
+    // DEFAULT_QUIET_STALE_MINUTES in the watchdog (its fallback when no deps
+    // value is injected). Config wins in production, so a divergence would not
+    // change behaviour — it would make the watchdog's own tests describe a
+    // threshold production never uses. Pin them together.
+    expect(loadConfig(minimalEnv).quietStaleMinutes).toBe(DEFAULT_QUIET_STALE_MINUTES);
+    const tuned = loadConfig({ ...minimalEnv, QUIET_STALE_MINUTES: '45' });
+    expect(tuned.quietStaleMinutes).toBe(45);
+    expect(configSummary(tuned)).toContain('QUIET_STALE_MINUTES=45');
+    // A zero or negative threshold would make EVERY tick stale — that must fail
+    // loudly at boot, not turn the ops number into a firehose at 08:00.
+    expect(() => loadConfig({ ...minimalEnv, QUIET_STALE_MINUTES: '0' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...minimalEnv, QUIET_STALE_MINUTES: '-5' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...minimalEnv, QUIET_STALE_MINUTES: 'soon' })).toThrow(ConfigError);
   });
 });
