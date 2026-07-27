@@ -3983,3 +3983,128 @@ and every real step (`pnpm check`, the audit, the PII guard) shows `skipped`, wi
 The pattern is now three-for-three this session — a suite failure named after a pure function, and a CI
 failure named after a merge — where **the failing STEP and the failing SUBJECT were different things.**
 Before diagnosing a red run, read which step failed and what it said.
+
+---
+
+## Ops note — roster variable applied (Step 2) — 2026-07-28
+
+Ops-only session, no code changes. Two things were asked: audit the "run failed" emails, and get the
+new `STAFF_ROSTER_JSON` into a running container. **The headline is that the second one had already
+happened by itself, and the first has no unexplained item in it.**
+
+### The audit — nothing unexplained
+
+**GitHub Actions, last 15 runs on `main`: 13 green, 2 red, and BOTH are the advisory redness already
+recorded.**
+
+| run | commit | verdict |
+|---|---|---|
+| `30243293336` · 27 Jul 06:36 UTC · *Merge FIX-2* | `19016a4` | **failure — `pnpm audit --audit-level high`**, `fast-uri` HIGH (9 paths) + siblings. Node 24 job failed, Node 22 cancelled by fail-fast. **EXPLAINED** — the 22–27 Jul advisory window; closed by FIX-4 (`92fe267`). |
+| `29889227897` · 22 Jul 03:44 UTC · *CH-19 consistency pass* | `46ed7f4` | **failure — same step, same cause. EXPLAINED**, same window. |
+
+Two amplifiers that also generated emails and are the SAME two failures wearing different names:
+- **Tag-ref runs.** `vFIX-2` (`30243302520`), `vFIX-1` (`30243302521`) and `v1.0.0` (`29889235305`)
+  each ran on the same commits and each died on step 8 `pnpm audit`. Three extra emails, zero extra
+  causes. *(A tag push re-runs CI; the failure count a mailbox sees is not the failure count `main`
+  has.)*
+- **The CH-20 merge run `30268722034` reads `success` today at `run_attempt=2`.** Attempt 1 was the
+  container-init flake recorded in `27f3b50`. Anyone reading only the mailbox saw "CH-20 merge
+  failed"; the list API shows only the surviving attempt. **EXPLAINED.**
+
+**Nothing has gone red since 27 Jul 13:06 UTC.** The four newest `main` runs — `92fe267` (FIX-4),
+`fb69743` (CH-20), `89f0940`, `27f3b50` — are all green.
+
+**Railway, last 10 deployments on the app service: zero failures.** One `SUCCESS` (the live one) and
+nine `REMOVED`. `REMOVED` is Railway's word for *superseded by a newer deployment*, not for *broke* —
+worth writing down, because a dashboard column of nine REMOVEDs reads like damage and is not.
+
+**Verdict: nothing unexplained, on either side.**
+
+### The deployment was not stuck — it had already landed
+
+The brief described `1b2950e3` as sitting in QUEUED with a healthy older container in front of it
+(uptime ~7 h ⇒ the 18:36 IST CH-20 deploy). By the time this session read the API:
+
+```
+1b2950e3-61f7-41ca-b2ac-9950f92d801e   SUCCESS   created 2026-07-28 01:31:56 IST   commit 27f3b50
+```
+
+It queued for ~28 minutes and then started its container at **2026-07-27 20:30:01 UTC = 02:00:01
+IST**. `/health` uptime independently puts process start at `20:30:00 UTC` — same instant, and
+growing monotonically across two readings, so there is no restart loop behind the number.
+
+**The tell that this deployment IS the variable save.** `1b2950e3` carries commit `27f3b50` — the
+*same* commit `fca38047` already deployed at 18:47 IST, and `27f3b50` was the last push (13:17 UTC).
+No new commit, therefore no source trigger. Railway redeploys on a variable change, so the 20:01:56
+UTC creation timestamp **is** the moment the roster variable was saved. `meta.queuedReason` still
+reads `"Processing deployment..."` on the record even though the deployment succeeded — **a stale
+`queuedReason` on a SUCCESS row is not a stuck deployment**, and that field is very likely what the
+dashboard was rendering when the brief was written.
+
+### What was done: nothing. Deliberately.
+
+**No redeploy was triggered — 0 of the 1 permitted.** The instruction's own goal was *"get ONE
+deployment through so the current variable set goes live"*. One already had. Restarting a healthy
+production container that is serving guests, to reproduce a state it is already in, is churn with a
+real (if small) downside and no upside. Nothing was cancelled either, because there was nothing
+queued to cancel. No variable was created, modified or deleted.
+
+### Verification
+
+**The variable, by name and length only:**
+
+```
+STAFF_ROSTER_JSON   len=72     ← present on nistula-assistance- / production
+```
+
+29 variables total on the service. Structure of the roster, name and phone deliberately withheld:
+**1 member · `role=frontdesk` · `villas=[]` (count 0) · phone E.164-shaped, 13 chars · keys exactly
+`name,phone,role,villas`.** `villas: []` is legal and means *no specific round* — that member is
+reached only through the frontdesk-lead fallback, which is the correct shape for a single-handset
+pilot.
+
+**`/health` (2026-07-28 02:10:41 IST):**
+
+```json
+{"ok":true,"version":"0.1.0","uptime":640.299233764,"db":true,"boss":true,
+ "degraded":false,"pollerAgeMs":9404,"senderAgeMs":9402}
+```
+
+`ok:true` · `db:true` · `degraded:false` · both tickers well inside their 60 s cadence. **`uptime` is
+640 s, not `<300`** — that criterion assumed a redeploy triggered during this session; the deploy
+actually completed ~10 minutes before the reading. The load-bearing check is not the number, it is
+that the process start it implies (20:30:00 UTC) equals the deploy's own container-start log line.
+
+**The boot proof, from `1b2950e3`'s own deploy logs — the roster is IN the running container:**
+
+```
+config: NODE_ENV=production · … · OPS_NUMBERS=1 number(s) · STAFF_ROSTER_JSON=1 member(s) ·
+        DRAFT_MODE=true · AUTO_SEND_TYPES=presales,arrival,instay,poststay · …
+staff tasks ENABLED (SLA nudger every 5 min; morning digest 10:00)   {"roster":1,"ops":1}
+```
+
+Boot is otherwise clean: `eZee poller ENABLED (60s cron)`, `lifecycle ENABLED — scheduled messages
+WILL be sent`, `knowledge base loaded`, `Server listening`, `[watchdog] healthy`. No config
+validation error, so the roster passed every fail-fast screen in `src/config.ts` — the role enum, the
+four-value villa canonicaliser CH-20 rewrote, E.164 normalisation, the duplicate-phone check.
+
+**What this proves and what it does not.** It proves the container booted with a one-member roster
+and that the live variable is a one-member `frontdesk` roster. It does not prove byte-identity
+between the string that booted and the string readable now — the boot log prints a *count*, by
+design, because printing the roster would print a staff phone number into the log. If the variable is
+edited again, re-read the boot line rather than assuming.
+
+### Two things worth carrying forward
+
+1. **`AUTO_SEND_TYPES` still lists all four types**, so `DRAFT_MODE=true` remains inert and no draft
+   card can be raised — unchanged from the Step-1 table, and still the thing to clear before anyone
+   tries to exercise CH-16 live.
+2. **OQ-25 still gates the live task-card test.** A staff handset quiet for 24 h cannot receive a
+   free-form card. The one roster member must message the line before any card can route to them —
+   otherwise the send fails and, correctly, the guest is promised nothing. Nothing in this session
+   changed that.
+
+**And a fourth instance of this session's pattern:** *the failing name was not the failing thing.*
+Twice in CI (a pure function named by a DB hook timeout, a merge named by a container-init flake),
+once on Railway (a `SUCCESS` deployment named QUEUED by a stale `meta.queuedReason`). Before acting
+on a red or stuck label, read the underlying record.
