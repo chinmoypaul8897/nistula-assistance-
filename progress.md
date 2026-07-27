@@ -4108,3 +4108,121 @@ edited again, re-read the boot line rather than assuming.
 Twice in CI (a pure function named by a DB hook timeout, a merge named by a container-init flake),
 once on Railway (a `SUCCESS` deployment named QUEUED by a stale `meta.queuedReason`). Before acting
 on a red or stuck label, read the underlying record.
+
+---
+
+## Ops note — dead-man's switch armed (2026-07-28, follow-on to Step 2)
+
+Docs-only, no code changes. **`HEALTHCHECKS_URL` is now SET on the app service (production)**, applied
+by Paul through the Railway dashboard. The last inert half of CH-17 step 1 is live.
+
+**The value is not written here and must never be.** It is the ping URL of a healthchecks.io check
+named `nistula-assistance` (Simple schedule · period 10 min · grace 10 min). Anyone holding that URL
+can **fake liveness** — a forged ping keeps the dashboard green over a dead service, which is worse
+than having no switch at all, because it converts *"nobody is watching"* into *"somebody believes
+they are watching"*. Env-only, like every other §3.3 secret.
+
+### What is proven
+
+- The variable-apply deploy reached **SUCCESS**, and the check turned **GREEN** — *"last ping 6 s
+  ago"*, observed by Paul on the healthchecks.io dashboard. That is the load-bearing proof: outbound
+  pings work end to end out of the Railway container (DNS, egress, TLS, and the URL itself).
+- Alert path: healthchecks.io emails when pings stay quiet past period + grace ≈ **20 min**.
+- **`/health`, read twice read-only this session** (21:30:47 and 21:32:27 UTC = **2026-07-28 03:00:47
+  and 03:02:27 IST**); the fresh reading:
+
+```json
+{"ok":true,"version":"0.1.0","uptime":596.451931282,"db":true,"boss":true,
+ "degraded":false,"pollerAgeMs":25617,"senderAgeMs":25618}
+```
+
+  `ok:true` · `db:true` · `boss:true` · `degraded:false` · both tickers ~26 s, well inside their 60 s
+  cadence. `uptime` grew 496.06 → 596.45 across a 100 s gap, so the process is stable, not looping.
+
+**A restart DID happen, and the obvious attribution for it is wrong — or at least unproven.** The
+uptime implies process start at **21:22:30 UTC = 02:52:31 IST**, ~52 min after the 20:30:00 UTC start
+recorded in the Step-2 note. The tempting reading is *"that is the variable save applying"*. But the
+Step-2 commit `9271d19` was pushed at **02:25:08 IST**, `railway.json` sets no watch patterns, and
+the Step-2 note measured a **~28 minute queue** on this service — 02:25 + 28 min lands on 02:53.
+**A docs-only push explains this restart at least as well as the variable save does**, and this
+session cannot separate them without the Railway deployment API. It does not matter to the
+conclusion: Railway variables are service-scoped, so every deployment created after the save carries
+`HEALTHCHECKS_URL` regardless of which one is running — and the green check proves the running one
+does. Recorded because attributing a restart to the coincident action is exactly the inference this
+session's ledger has now caught out five times.
+
+### Where the ping is implemented, and its real cadence
+
+| what | where |
+|---|---|
+| The ping call | `src/ops/watchdog.ts:187` — `await (deps.ping ?? defaultPing)(deps.healthchecksUrl)` |
+| The ping itself | `src/ops/watchdog.ts:174-176` — `defaultPing`, a plain `GET` through the §3.5 `http()` wrapper |
+| Its guard | `src/ops/watchdog.ts:184-193` — inside `if (healthy)`, skipped silently when the URL is unset or empty |
+| Cadence constant | `src/ops/watchdog.ts:78` — `WATCHDOG_CRON = '*/5 * * * *'` |
+| Scheduled | `src/jobs/index.ts:858` (`scheduleCron(..., 'Asia/Kolkata', {singletonKey:'watchdog'})`), worker `src/jobs/index.ts:849-857`, URL threaded at `:853` |
+| Config path | `src/config.ts:112` (`z.url().optional()`) → `:296` → `JobsDeps.healthchecksUrl` (`src/jobs/index.ts:439`) |
+
+**Actual cadence: every 5 minutes, Asia/Kolkata, and ONLY on a healthy tick.** The skip is the
+mechanism, not a gap: `isHealthy` (`src/ops/health.ts:103-110`) requires db reachable with a
+round-trip under 1 s, boss responsive, and poller/sender heartbeats under 5 min. A `null` heartbeat
+age is N/A and never a fault (`:105-106`), so a fresh boot pings instead of false-alarming; and
+`degraded` is deliberately EXCLUDED (`:6-13`), so a website outage cannot silence the switch.
+
+**Nominal is not measured, so the arithmetic below uses the real spacing.** pg-boss evaluates cron
+every `cronMonitorIntervalSeconds` — **default 30 s**, and we set neither it nor
+`cronWorkerIntervalSeconds` (`src/jobs/index.ts:163-172` sets only `monitorIntervalSeconds` and
+`queueCacheIntervalSeconds`) — plus ~2 s of queue poll. **So healthy pings land roughly 5:00–5:45
+apart, not exactly 5:00.** A failed ping is swallowed (`src/ops/watchdog.ts:189-192`), but `http()`
+has already retried 3× with jittered backoff on 5xx/network at a 10 s timeout each
+(`src/lib/http.ts:9-11, 36-56`), so a single flaky ping self-heals inside the tick.
+
+### On tightening period/grace — the arithmetic, and why I would leave it alone
+
+Current 10 + 10 alerts at ~20 min, tolerating **three** consecutive missed pings.
+
+- **`period` could safely go to 6 min.** It must clear the real 5:00–5:45 spacing with margin. 6 does;
+  **5 does not** — a period equal to the cadence makes the check flap "late" for ever on ordinary
+  jitter. Going late is not an alert, so this costs nothing.
+- **`grace` should NOT drop below ~10 min.** Two things legitimately open a one-slot hole: a redeploy
+  (the container restarts and the schedule resumes at the next `*/5` boundary, so a boot crossing a
+  boundary is a ~10 min gap), and a single transient unhealthy tick — which is a **designed** skip,
+  e.g. one slow eZee poll pushing `pollerAgeMs` past `STALE_MS`. Grace is what buys the difference
+  between a blip and an outage.
+
+Net: **6 + 10 → alert at ~16 min instead of ~20.** Safe, and recorded as available.
+**Recommendation: change nothing.** A four-minute gain on a monitor that wakes a human at 3 a.m. does
+not justify re-touching a config that just went green, and three-tick tolerance is the right posture
+for the failure this detects. If it ever produces a false alert, move `period` first and `grace`
+never. **Nothing was changed.**
+
+### What this switch does NOT cover — read before treating CH-17 as closed
+
+`src/ops/watchdog.ts:106-113` already argues it, and it matters more now the dashboard is green:
+**the ping reports the health of OUR internals — db, boss, poller, sender.** A Meta webhook
+subscription that silently drops leaves all four healthy, so we keep pinging and healthchecks.io
+stays green through a channel that has been stone dead all day. `channel_quiet` (the watchdog's
+second leg, `:209-264`) is still the ONLY thing that reports that; the 23:30 rollup carries no
+channel field and fail-quiets on zero counters. **An armed dead-man switch is not an armed webhook
+monitor.** One is now real; the other was already real and is unchanged.
+
+### The URL cannot leak through our own logs — checked, not assumed
+
+- `src/lib/logger.ts:22` and `:32` redact both spellings (`HEALTHCHECKS_URL`, `healthchecksUrl`),
+  including one level deep, so logging a whole config object is safe.
+- `src/config.ts:463` prints **presence only** in the boot summary — never the value.
+- `src/config.ts:112` is `z.url()`, so a malformed value boot-refuses loudly. Note the limit: a
+  well-formed but WRONG URL would still fail silently, and only the green check disproves that.
+
+### Records now superseded
+
+Three places state the variable is absent and the ping leg inert. Left in place (this file is
+append-only), corrected here:
+
+- `progress.md:3894` — the go-live table row marking `HEALTHCHECKS_URL` **ABSENT**.
+- `docs/state-report.md:171` — "**`HEALTHCHECKS_URL` is absent from Railway**, so the dead-man's-switch
+  half of step 1 is inert in production".
+- `docs/state-report.md:310` — item 9, "*needs an external account/asset*". The account now exists and
+  the asset is set.
+
+The surviving half of that item is its closing sentence — that `channel_quiet` is the only thing that
+would report a dead webhook. That is still true, and the section above says why.
