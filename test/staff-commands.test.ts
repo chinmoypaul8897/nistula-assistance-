@@ -167,13 +167,89 @@ describe('DONE — the close', () => {
     expect(after?.closedBy).toBe(ANITA);
     expect(after?.closedAt).not.toBeNull();
 
-    // The guest hears about it, on their conversation, in voice.
+    // The guest hears about it, on their conversation, in voice — and NOT the
+    // internal summary (see the leak test below).
     const toGuest = sent.find((s) => s.to === GUEST);
     expect(toGuest?.conversationId).toBe(conversationId);
-    expect(toGuest?.body).toContain('2 extra towels');
+    expect(toGuest?.body).toContain('Housekeeping');
+    expect(toGuest?.body).not.toContain('2 extra towels');
     expect(toGuest?.body).not.toContain('!');
     // And the staff member gets an acknowledgement.
     expect(sent.find((s) => s.to === ANITA)?.body).toContain(task.shortId);
+  });
+
+  it('🚨 the close line NEVER echoes the internal staff summary to the guest', async () => {
+    // Seen live three times in the 25–26 Jul UAT. `task.summary` is the MODEL's
+    // line, written FOR STAFF — third-person ops prose — and it went to the
+    // guest verbatim behind "That is done — ".
+    //
+    // This fixture is the WORST real one, and it is why this is not merely a
+    // register slip: the task was raised off stale context and its narrative was
+    // INVENTED (the guest had asked about a dietary preference; nobody was
+    // waiting for towels and nobody had chased twice). The close line served
+    // that fabrication back to the guest as established fact.
+    const task = await seedTask({
+      summary: 'Guest waiting for two extra towels, chased twice, now asking if anyone is here',
+    });
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });
+
+    const body = sent.find((s) => s.to === GUEST)?.body ?? '';
+    expect(body).not.toContain('Guest waiting');
+    expect(body).not.toContain('chased twice');
+    expect(body).not.toContain('asking if anyone is here');
+    // Third-person references to the guest are the tell for staff phrasing.
+    expect(body).not.toMatch(/\bGuest\b/);
+    // It still SAYS something — silence would be a different regression.
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain('Housekeeping');
+  });
+
+  it('🚨 with several requests open, the close line leaks none of them and over-claims none', async () => {
+    // A guest may hold up to MAX_OPEN_TASKS_PER_CONVERSATION. Two things must
+    // hold at once: no summary leaks (the closed one OR a sibling), and the line
+    // must not say "that's all sorted" while two requests are still outstanding.
+    const towels = await seedTask();
+    await seedTask({ kind: 'maintenance', summary: 'AC in the master bedroom is weak' });
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${towels.shortId}` });
+
+    const body = sent.find((s) => s.to === GUEST)?.body ?? '';
+    // Discriminating: the OLD line emitted the closed task's summary here.
+    expect(body).not.toContain('2 extra towels');
+    expect(body).not.toContain('AC');
+    expect(body).not.toMatch(/\ball\b/i);
+    expect(body).toContain('Housekeeping');
+  });
+
+  it('🚨 a NIGHT-raised task reads the same as a day escalation after the digest rewrites its kind', async () => {
+    // convertNightQueueTasks flips kind night_queue -> escalation at 10:00, so a
+    // task raised at 23:00 is read here under a kind it was never raised with.
+    // The two CLOSE_LINE entries must therefore stay identical; editing one
+    // alone would silently give night-raised requests the day wording.
+    const atNight = await seedTask({ kind: 'night_queue', summary: 'AC weak, guest asked at 23:05' });
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${atNight.shortId}` });
+    const nightBody = sent.find((s) => s.to === GUEST)?.body ?? '';
+
+    sent.length = 0;
+    await db.execute(sql`TRUNCATE tasks CASCADE`);
+    const byDay = await seedTask({ kind: 'escalation', summary: 'guest wants a person' });
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${byDay.shortId}` });
+    const dayBody = sent.find((s) => s.to === GUEST)?.body ?? '';
+
+    expect(nightBody).toBe(dayBody);
+    expect(nightBody).not.toContain('AC weak');
+    expect(nightBody).not.toContain('23:05');
+  });
+
+  it('the close line is written from the task KIND, not from model text', async () => {
+    // The kind is a closed enum we set; the summary is model prose. Only the
+    // former may reach a guest, so a maintenance close reads as maintenance.
+    const task = await seedTask({ kind: 'maintenance', summary: 'Guest reports the AC is weak' });
+    await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });
+
+    const body = sent.find((s) => s.to === GUEST)?.body ?? '';
+    expect(body).toContain('Maintenance');
+    expect(body).not.toContain('Guest reports');
+    expect(body).not.toContain('!');
   });
 
   it('🚨 CH-13b · DONE on a SYSTEM task closes it SILENTLY — no guest line, no task_done row', async () => {
@@ -477,7 +553,10 @@ describe('🚨 CH-13a · the DONE transaction rolls back as one (real Postgres)'
 
     await handleStaffCommand(deps(), { phone: ANITA, body: `DONE ${task.shortId}` });
     expect((await findTaskByShortId(db, task.shortId))?.status).toBe('done');
-    expect(sent.find((s) => s.to === GUEST)?.body).toContain('2 extra towels');
+    // The guest IS told on the retry. Asserted on the close line's own wording,
+    // not on the task summary: the summary is staff-facing model prose and no
+    // longer reaches the guest at all (see the close-line leak test above).
+    expect(sent.find((s) => s.to === GUEST)?.body).toContain('Housekeeping');
     const rows = [
       ...(await db.execute(
         sql`SELECT raw->>'contextKind' AS kind FROM messages WHERE conversation_id = ${conversationId} AND sender = 'system'`,

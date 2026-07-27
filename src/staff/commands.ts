@@ -21,12 +21,14 @@
  * there is no unprocessed GUEST message, and the whole turn (debounce, policy,
  * model, claim) is keyed on one. The worker cannot do a turn nobody prompted.
  *
- * So the close line is written here, in voice, naming the task's own summary.
- * It costs no model call, opens no new entry point in worker.ts (which CH-14
- * must touch again for takeover), and — the part that matters — it is TRUE BY
- * CONSTRUCTION: the DONE that triggers it just landed, so there is no gap
- * between the claim and the fact for a guardrail to have to police. Recorded
- * as a §8-step-3 deviation.
+ * So the close line is written here, in voice. It costs no model call, opens no
+ * new entry point in worker.ts (which CH-14 must touch again for takeover), and
+ * — the part that matters — it is TRUE BY CONSTRUCTION: the DONE that triggers
+ * it just landed, so there is no gap between the claim and the fact for a
+ * guardrail to have to police. Recorded as a §8-step-3 deviation.
+ *
+ * 🚨 THIS PARAGRAPH USED TO END "naming the task's own summary", AND IT NO
+ * LONGER DOES — see CLOSE_LINE below for why that was the bug, not the design.
  */
 import {
   cancelLiveEscalationsForConversation,
@@ -34,6 +36,7 @@ import {
   findTaskByShortId,
   getLiveTasksForPhone,
   type Task,
+  type TaskKind,
 } from '../db/tasks.js';
 import type { Db, DbLike } from '../db/client.js';
 import {
@@ -100,9 +103,60 @@ export function parseStaffCommand(body: string | null): StaffCommand {
  * the honest decay the fact_saved row already uses. */
 export const TASK_DONE_CONTEXT_KIND = 'task_done';
 
-/** The guest's own words come back to them in the close line; capped so a long
- * request cannot make the reply breach the voice guide's length rule. */
-const CLOSE_LINE_SUMMARY_MAX = 80;
+/**
+ * What the GUEST hears when their task closes, keyed on the task's KIND.
+ *
+ * 🚨 IT USED TO BE `That is done — ${task.summary}`, AND THE COMMENT HERE
+ * CLAIMED THE SUMMARY WAS "the guest's own words coming back to them". IT IS
+ * NOT. It is the MODEL's line, authored FOR STAFF — `create_staff_task` asks for
+ * it "in the guest's terms", and that request was mistaken for a guarantee. The
+ * live UAT (25–26 Jul 2026) showed what the model actually writes, sent verbatim
+ * to the guest three times:
+ *   "That is done — Guest needs office location and address…"
+ *   "That is done — Guest waiting for two extra towels, chased twice, now
+ *    asking if anyone is here"
+ * The second is worse than a register slip. That task was raised off stale
+ * context and its narrative was invented, so the close line echoed a FABRICATED
+ * account of the guest's own behaviour back to them as established fact.
+ *
+ * The kind is OURS: a closed enum fixed by the tool call, never model prose. So
+ * the line can stay concrete (voice guide, in-stay: "confirm the action… stop")
+ * while carrying nothing the model wrote.
+ *
+ * 🚨 DELIBERATELY NO "ALL". A guest may hold up to
+ * MAX_OPEN_TASKS_PER_CONVERSATION open requests, and "that's all sorted" would
+ * silently claim the other two are done as well.
+ *
+ * 🚨 `escalation` AND `night_queue` MUST STAY IDENTICAL. `convertNightQueueTasks`
+ * REWRITES kind night_queue → escalation at the 10:00 digest, so a task raised
+ * at 23:00 and closed at 14:00 is read here under a kind it was not raised with.
+ * Editing one of the two alone is the trap — a night-raised request would
+ * silently acquire the day wording. Pinned by a test.
+ *
+ * 🚨 TWO ACCEPTED RESIDUALS, recorded rather than hidden, both for the villa
+ * team to settle (the defect fixed here is the LEAK, not the phrasing):
+ *  1. AMBIGUITY. Two open tasks of one kind are reachable (createStaffTask
+ *     GATE 3 merges only on kind + villa + a similar summary), so closing each
+ *     sends a byte-identical line and the guest cannot tell which. The old line
+ *     disambiguated — using the very text that was leaking. Nothing we hold is
+ *     both guest-safe and specific: the summary is model prose, and the short id
+ *     is ticket language the voice guide bans.
+ *  2. The voice guide already HAS an opinion, and this default sits against it.
+ *     §6 in-stay says "brisk, gracious, concrete… name the villa, stop", and §8's
+ *     rewrite table puts "Two towels on their way to Villa B3" on the Nistula
+ *     side of exactly this contrast. Concreteness was traded for safety on
+ *     purpose. If the team wants it back, the honest source is the GUEST's own
+ *     words — `requestKey` carries the triggering message id — never the model's.
+ * Kept in one table so their answer is a one-line edit.
+ */
+const CLOSE_LINE: Readonly<Record<TaskKind, string>> = {
+  housekeeping: 'Housekeeping have taken care of that for you.',
+  maintenance: 'Maintenance have seen to that for you.',
+  frontdesk: 'The front desk have taken care of that for you.',
+  escalation: 'The team have taken care of that for you.',
+  // MUST equal `escalation` — see the kind-rewrite note above.
+  night_queue: 'The team have taken care of that for you.',
+};
 
 export async function handleStaffCommand(
   deps: StaffCommandDeps,
@@ -362,10 +416,11 @@ async function tellGuest(deps: StaffCommandDeps, task: Task): Promise<void> {
     );
     return;
   }
-  // Voice guide: British English, no exclamation marks, 1–3 sentences. The
-  // summary is the guest's own words coming back to them, which is what makes
-  // this readable as a reply rather than a receipt.
-  const line = `That is done — ${sanitiseInline(task.summary, CLOSE_LINE_SUMMARY_MAX)}. Anything else we can help with?`;
+  // Voice guide: British English, no exclamation marks, 1–3 sentences, and
+  // never ticket language. Built ENTIRELY from the kind — see CLOSE_LINE. No
+  // model-authored text reaches the guest here, so no sanitiser is needed: there
+  // is nothing guest- or model-supplied left in the string to sanitise.
+  const line = `${CLOSE_LINE[task.kind]} Anything else we can help with?`;
   // A shut window means the guest has been silent >24h; sendText refuses
   // locally rather than earning a 131047. That is correct: there is no
   // template for "your towels arrived", and inventing one for a day-old

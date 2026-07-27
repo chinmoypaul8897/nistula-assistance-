@@ -141,7 +141,21 @@ export function buildGuestBlock(profile: GuestProfileInput): string | null {
 function taskLines(tasks: readonly ProfileTask[]): string[] {
   if (tasks.length === 0) return ['Open requests: none recorded.'];
   const lines = [
-    'Open requests on file (RECORDED, not proof anyone has acted — do not claim progress from this list):',
+    // 🚨 THE SECOND CLAUSE IS THE CLOSE-LINE LEAK'S SIBLING, ARRIVING BY A
+    // DIFFERENT DOOR. These summaries are the MODEL's own words written FOR
+    // STAFF — `create_staff_task` asks for them "in the guest's terms", and the
+    // live UAT showed what actually gets written ("Guest waiting for two extra
+    // towels, chased twice, now asking if anyone is here"). `staff/commands.ts`
+    // stopped SENDING that text to guests; this block still shows it to the
+    // model, which can paraphrase it straight back — and when the task was
+    // raised off stale context, the narrative it would repeat is invented.
+    // Naming the wording as internal is a MITIGATION, not a cure: the honest
+    // fix is to stop rendering model prose here at all, which changes what the
+    // model can say about a request older than the transcript window and is
+    // therefore filed with the phantom-task work rather than guessed at now.
+    // Kept TIGHT on purpose: this block renders every turn, and the §6.3 budget
+    // test caught the first, wordier cut at 1280 tokens against a 1250 cap.
+    'Open requests on file (RECORDED, not proof anyone has acted — do not claim progress from this list). Wording is INTERNAL staff shorthand: never quote it back; the guest’s own words are above:',
   ];
   for (const task of tasks) {
     const summary = quoteSafe(sanitiseInline(task.summary, TASK_RENDER_MAX));
