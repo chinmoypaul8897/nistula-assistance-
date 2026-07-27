@@ -3370,3 +3370,82 @@ the *apartment* IDs quote fine live (₹59,000 proved it), but the *villa* (3bhk
 AI could wrongly say "taken" — verify `src/lib/villas.ts` villa IDs against the v2 website. (2)
 Auto-deploy from `main` looks disconnected (uptime showed the box on CH-18c after the CH-19 merge) —
 reconnect so merges ship.
+---
+
+### FIX-1 · Quiet-channel alert noise (post-v1.0.0 UAT fix pass) — DONE 2026-07-27
+
+**Branch** `fix/watchdog-alert-noise`. First of the three MECHANICAL rows of the 25–26 Jul live-UAT
+backlog. Paul's scoping call this session: fix only what is unambiguous now, and take everything that
+turns on a business judgement to the team as a scenario document instead of guessing. **FIX-3 (night
+handling) was therefore NOT built** — see the hold note at the end.
+
+**The symptom.** The live rehearsal measured **~18–30 false `channel_quiet` alerts per day** on the ops
+handset. `QUIET_STALE_MS` was a hardcoded 30 minutes, and half an hour of silence on a boutique villa
+line is normal, not a dead webhook.
+
+**Built:**
+- `QUIET_STALE_MINUTES` (new §3.7 registry var, default **180**) — `env → config → server → jobs →
+  runWatchdog`, boot-refusing 0/negative/fractional/non-numeric. **REQUIRED on `JobsDeps`**, not
+  optional: `runWatchdog` defaults a missing value, so an optional prop could be dropped by a refactor
+  and still typecheck, lint and pass — ops would tune the var, see it in the boot summary, and never
+  learn the watchdog was still on the default. That is the inert-config failure; `tsc` now closes it.
+- A **real re-warn backoff** in `ops/watchdog.ts`: one silence warns at the threshold, then 2×, then
+  4×, and never more than a HARD 12h apart (`MAX_REWARN_GAP_MS`) whatever the threshold.
+- Silence measured in **OPEN-MONITOR TIME** and the backoff keyed on the **last ARRIVAL instant**.
+- The second leg is now `lastEchoAt`, not `lastGuestReplyDeliveredAt`.
+
+**🚨 THE RECORD CORRECTION — this entry SUPERSEDES the CH-17 entry above (the `ops/watchdog.ts` bullet,
+which reads "BOTH directions silent 30 min ⇒ `channel_quiet` once (dedupe = the backoff)").**
+**The alertOps dedupe was never capable of being the backoff.** It suppresses only a *repeat within*
+its own 30-min window, so it could never space warnings further apart — a persistently quiet channel
+re-warned every 30-min window all business day — and the moment the threshold exceeds 30 min the dedupe
+stops gating `channel_quiet` at all. That is the house failure class again: **a PROXY that happened to
+coincide with the requirement at one specific parameter value, and silently stopped coinciding the
+moment the parameter moved.** The threshold is the symptom; this is the lesson.
+
+**A 6-agent adversarial review went RED and changed the fix substantially. Three findings mattered,
+and two meant the first cut did not achieve its own goal:**
+1. **A GUARANTEED daily false alert survived.** Staleness was measured on the wall clock while the
+   monitor is shut 23:00–08:00, so the 08:00 tick inherited the whole night and fired for any line
+   quiet since 05:00 — every day, and **no value of the knob could suppress it** (below ~9h it fires;
+   at ≥9h the daytime monitor is dead). Fixed by clamping the silence to start no earlier than today's
+   `MONITOR_START`. This is what takes a healthy line to ZERO false alerts rather than one a day.
+2. **The fix WIDENED a detection hole 6×.** The old second leg counted "a delivered guest reply", which
+   an **unprompted lifecycle send satisfies** (`lifecycle/sender.ts` writes `sender:'ai'` + a
+   conversationId) — and those are driven by the eZee poller, which runs happily while the webhook is
+   stone dead. At 30 min you needed a masking send every half hour; at 3h routine lifecycle traffic
+   covers most of a business day. A genuine AI *reply* cannot mask anything (it only exists downstream
+   of an inbound, which the first leg already sees), so the leg only ever fired to HIDE a real outage.
+   Both legs now test ONE fact — *did something ARRIVE through the webhook* — which is the contract
+   `ops/keepalive.ts` already used and `repos.lastEchoAt`'s own docstring already argued.
+3. **The comment justifying the backoff cap named two safety nets that DO NOT EXIST.** Checked, not
+   assumed: healthchecks.io fires only when the INTERNAL probe fails (`ops/health.ts` reads
+   db/boss/poller/sender) and a dropped Meta subscription leaves all four healthy — so we keep pinging
+   and the dead-man dashboard stays green; and `ops/rollup.ts` carries no channel field AND fail-quiets
+   when its six counters are zero, which is exactly what a dead webhook produces. **`channel_quiet` is
+   the ONLY thing that reports this failure**, which is why the cap had to become absolute.
+
+Also fixed: the backoff previously could not be reset outside business hours (the gate returns before
+the traffic read), so a guest messaging at 23:30 left the ladder untouched and a webhook dying at 03:00
+inherited yesterday's 12h gap — a real outage suppressed for ~3h while the card claimed a high
+`warnCount` about a channel that had just worked. Keying identity on the arrival instant fixes it with
+no out-of-hours DB read.
+
+**Tests** 45 → 49, with the weak ones REPLACED rather than added to. The "threshold is tunable" test
+used a 31-minute silence — stale under the *old hardcoded 30* too, so the one test whose job was
+"the knob is honoured" would have passed with the knob ignored. The backoff loop stopped 60 minutes
+short of its own 360-minute fence. `armOps`'s alertOps clock was frozen at 0, so only the FIRST alert
+per test could ever reach a handset and nothing could assert a re-warn is DELIVERED — due-ness, not
+outcome, the exact trap CLAUDE.md names. All four closed; the fixture helper now takes ABSOLUTE arrival
+instants, because relative offsets silently invent a new silence and reset the ladder.
+
+**Open / carried:**
+- **On the TEST line the corrected monitor will alert after 3h of nobody messaging**, because that is
+  now honestly what it measures. Tunable per service via `QUIET_STALE_MINUTES`. On the real line, 3h of
+  no guest contact in business hours is genuinely unusual. Keep it well under 15h — staleness only
+  accrues inside the 08:00–23:00 window, so a threshold near that window's length can never trip.
+- **FIX-3 (night handling for `create_staff_task`) is HELD, not dropped.** Deferring at night means no
+  card reaches anyone 20:00–10:00 for ANY kind — `escalate_to_human` already behaves that way, so the
+  change would make the system consistent, but it confirms there is no night emergency path at all.
+  Whether a 2am water leak waits until 10am is the villa team's call, not ours: it decides which kinds
+  defer, whether an override exists, and what the guest is told. Going to them as a scenario.

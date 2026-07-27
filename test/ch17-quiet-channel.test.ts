@@ -1,10 +1,20 @@
 /**
- * CH-17 (pre-merge review fix) — the quiet-channel monitor must guard on
+ * CH-17 (pre-merge review fix) — a traffic timestamp must be computed from
  * GUEST-FACING traffic, not "any out row exists". Every ops alert / digest / SLA
  * nudge writes a direction='out', sender='system', conversation_id=null row
  * (committed 'queued' before the Graph call, so even a FAILED send leaves one) —
  * which used to mask a dropped inbound webhook from the very monitor built to
  * catch it. Assert the two helpers ignore system/failed/null-conversation rows.
+ *
+ * 🚨 SUPERSEDED IN PART (quiet-channel noise fix): the monitor NO LONGER reads
+ * `lastGuestReplyDeliveredAt` at all. Narrowing "any out row" to "a delivered
+ * GUEST reply" was the right direction but stopped one step short — an
+ * UNPROMPTED lifecycle send is a delivered guest reply by every one of these
+ * filters, and it is driven by the eZee poller, so it stays fresh while the
+ * webhook is dead. The monitor now pairs `lastGuestInboundAt` with `lastEchoAt`:
+ * both test the one fact it actually needs, that something ARRIVED through the
+ * webhook. These assertions still pin the helper's own contract, which is
+ * correct and worth keeping; they no longer describe the monitor's inputs.
  */
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';

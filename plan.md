@@ -80,7 +80,7 @@ Guest WhatsApp ⇄ Meta Cloud API (coexistence with front-desk app)
 - Task SLA nudger: every 5 min — open tasks past `sla_deadline` → re-ping staff + record in conversation context.
 - Morning digest: 10:00 — overnight queue + open tasks → ops number.
 - Nightly: conversation summariser (idle threads), pg_dump backup, cost rollup.
-- Watchdog: every 5 min ping healthchecks.io; alert if no inbound webhook for 30 min between 08:00–23:00.
+- Watchdog: every 5 min ping healthchecks.io; alert if NOTHING has arrived through the webhook (a guest inbound or a coexistence echo) for `QUIET_STALE_MINUTES` (default 180 = 3h) between 08:00–23:00, on a re-warn backoff. Silence is counted in OPEN-monitor time, so the shut 23:00–08:00 window never accrues staleness.
 
 ### 2.4 The six acceptance scenarios (condensed — full versions live in the product picture)
 
@@ -223,6 +223,8 @@ DRAFT_MODE=true · AUTO_SEND_TYPES=            # csv: presales,instay,… unlock
 NIGHT_START=20:00 · NIGHT_END=10:00
 ADMIN_BEARER_TOKEN · ADMIN_ROUTES_ENABLED=0
 HEALTHCHECKS_URL · COST_ALERT_INR_PER_DAY=1000
+QUIET_STALE_MINUTES=180       # business-hours minutes with NOTHING arriving through the webhook before
+                              # the quiet-channel alert. Was a hardcoded 30 min → ~18–30 false/day live.
 COEXISTENCE_ACTIVE=0          # CH-18a-2. 0 pre-cutover (keep-alive = weekly ops reminder); flip to 1 at
                              # real-number cutover, when it becomes the daily "link alive in 13d?" check.
 COEXISTENCE_KEEPALIVE_MAX_DAYS=13   # one day of margin under Meta's ~14-day app-offline API-link drop.
@@ -855,7 +857,7 @@ Build order is the index order; CH-10 may run any time after CH-03 (parallel tra
 
 **Steps.**
 1. healthchecks.io pings: `watchdog` cron (5 min) pings `HEALTHCHECKS_URL` ONLY when internals are healthy: boss responsive, DB round-trip <1s, poller's last success <5 min, sender's last run <5 min. Unhealthy → skip ping (healthchecks fires the external alert) + attempt direct ops WhatsApp alert with reason.
-2. Last-inbound monitor: no guest webhook 08:00–23:00 for >30 min AND last outbound Graph call also stale → warn ops once ("channel quiet — verify webhook subscription"), with backoff.
+2. Last-inbound monitor: no guest webhook 08:00–23:00 for >`QUIET_STALE_MINUTES` (default 180; the original hardcoded 30 min produced ~18–30 false alerts/day on the live line) AND last outbound Graph call also stale → warn ops once ("channel quiet — verify webhook subscription"), with backoff. **The backoff is real state in `ops/watchdog.ts`, NOT the alertOps dedupe** — that dedupe only suppresses a repeat within 30 min, so it cannot space warnings any further apart, and it stops gating this alert entirely once the threshold exceeds its window.
 3. Failure alerting: consolidated `ops/alerts.ts` — dedupe window (same alert max 1/30min), all callers (poller, sender, guardrail-critical, degraded flips) route through it. Dedicated Graph 401/OAuthException alert: "WA token expired — rotate per runbook" (distinct from the quiet-channel warning).
 4. Cost meter: running intra-day counter (memory + cost_events) — at 2× `COST_ALERT_INR_PER_DAY` alert immediately; at 4× STOP calling Anthropic (fallback line + ops page) until manual reset; per-conversation cap 60 AI turns/day → cool-off line. Daily 23:30 rollup → ops digest line (msgs in/out, conversations, escalations, cost, guardrail hits).
 5. `/health` deepened: `{db, boss, poller_age, sender_age, degraded}` (used by Railway healthcheck).

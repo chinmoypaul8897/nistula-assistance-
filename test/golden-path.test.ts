@@ -25,6 +25,7 @@ import { loadKnowledge } from '../src/brain/knowledge.js';
 import type { Db } from '../src/db/client.js';
 import * as schema from '../src/db/schema.js';
 import { CONVERSATION_PROCESS_QUEUE, makeEnqueue, registerJobs } from '../src/jobs/index.js';
+import { DEFAULT_QUIET_STALE_MINUTES } from '../src/ops/watchdog.js';
 import { createWaClient } from '../src/wa/client.js';
 import { noToolDeps, textResult } from './helpers/brain.js';
 import { createTestBoss, waitUntil, TEST_URL } from './helpers/boss.js';
@@ -142,6 +143,7 @@ describe('golden path — burst in, exactly one reply out', () => {
         knowledge: loadKnowledge(),
         windows: WINDOWS,
         pollingIntervalSeconds: 0.5,
+        quietStaleMinutes: DEFAULT_QUIET_STALE_MINUTES,
       });
 
       const outbound = () =>

@@ -42,6 +42,7 @@ import type { BookingEventKind } from '../../src/lifecycle/scheduler.js';
 import { runSender } from '../../src/lifecycle/sender.js';
 import { runSlaNudger } from '../../src/staff/sla.js';
 import { runMorningDigest } from '../../src/staff/digest.js';
+import { DEFAULT_QUIET_STALE_MINUTES } from '../../src/ops/watchdog.js';
 import { isStaffPhone } from '../../src/staff/roster.js';
 import { atISTHour, istCalendarDay, nowIST, shiftDay } from '../../src/lib/time.js';
 import { createWaClient } from '../../src/wa/client.js';
@@ -210,6 +211,7 @@ export async function buildHarness(): Promise<Harness> {
     // this is a footgun latch, not a live bug.
     converseLight: async () => txt('Earlier: the guest and the assistant spoke; nothing outstanding.'),
     toolRegistry: buildToolRegistry(),
+    quietStaleMinutes: DEFAULT_QUIET_STALE_MINUTES,
     website: fixtureWebsite(),
     websiteBaseUrl: 'https://website.test.invalid',
     degraded: createDegradedTracker({ log }),

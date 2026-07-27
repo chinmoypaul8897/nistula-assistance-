@@ -437,6 +437,18 @@ export interface JobsDeps {
   /** CH-17: HEALTHCHECKS_URL — the watchdog pings it when healthy. Unset ⇒ the
    * ping leg is skipped (dev); the quiet-channel + alert legs still run. */
   healthchecksUrl?: string;
+  /**
+   * QUIET_STALE_MINUTES — how long the webhook must deliver nothing, in business
+   * hours, before the quiet-channel monitor warns.
+   *
+   * 🚨 REQUIRED, unlike its neighbours, and deliberately so. `runWatchdog`
+   * defaults a missing value to 3h, so an OPTIONAL prop here could be dropped by
+   * a refactor of this (large) deps object and everything would still typecheck,
+   * lint and pass: ops would tune the var on Railway, see it echoed in the boot
+   * summary, and never learn the watchdog was still on the default. That is the
+   * documented inert-config failure, and `tsc` closes it for one keystroke.
+   */
+  quietStaleMinutes: number;
   /** CH-18a-2 coexistence keep-alive. `active` = COEXISTENCE_ACTIVE (weekly
    * reminder pre-cutover / daily staleness check post-cutover); `maxDays` =
    * COEXISTENCE_KEEPALIVE_MAX_DAYS. Absent ⇒ pre-cutover reminder mode with the
@@ -839,6 +851,7 @@ export async function registerJobs(deps: JobsDeps): Promise<Jobs> {
       db: deps.db,
       log: deps.log,
       healthchecksUrl: deps.healthchecksUrl,
+      quietStaleMinutes: deps.quietStaleMinutes,
       now: () => new Date(),
     });
   });
