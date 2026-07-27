@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Nistula Assistance** — a WhatsApp AI host (Claude as the brain) for Nistula, a boutique villa company in Goa (8 villas, eZee PMS, ~60% of bookings direct on one WhatsApp number). It will run the full guest conversation: pre-sales with live website-identical prices, in-stay requests routed to staff as tasks, automatic lifecycle messages, per-guest persistent memory, and graceful human takeover via Meta coexistence.
+**Nistula Assistance** — a WhatsApp AI host (Claude as the brain) for Nistula, a boutique villa company in Goa (**4 houses in 2 room types** — three Assagao apartments + the Siolim 4BHK; eZee PMS, ~60% of bookings direct on one WhatsApp number). *(Was "8 villas" until CH-20, 2026-07-27: the four three-bedroom Assagao villas were retired 2026-07-24.)* It will run the full guest conversation: pre-sales with live website-identical prices, in-stay requests routed to staff as tasks, automatic lifecycle messages, per-guest persistent memory, and graceful human takeover via Meta coexistence.
 
 > ## ✅ CURRENT STATE (2026-07-21) — THE BUILD IS COMPLETE. There is NO next chunk.
 > **CH-00 → CH-19 are DONE. `v1.0.0` is TAGGED** (annotated tag, on `ba30398` = HEAD of `main`). `pnpm
@@ -16,8 +16,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > the verbatim identity line (voice invariant #6, the one a scripted harness cannot prove — confirmed live).
 > **Remaining work is real-number CUTOVER (an ops event, not a chunk):** the S3/S4 live legs need a 2nd
 > allowlisted number + a populated `STAFF_ROSTER_JSON`; the S2/S6 lifecycle sends need Meta-approved WA
-> templates — runbook §CH-19. **Two non-blocking clean-ups tracked in `progress.md`:** the
-> `WEBSITE_BASE_URL` villa-map drift (villa/3bhk IDs 404 live, apartments quote fine) and auto-deploy from
+> templates — runbook §CH-19. **Clean-ups tracked in `progress.md`:** ~~the `WEBSITE_BASE_URL` villa-map
+> drift (villa/3bhk IDs 404 live, apartments quote fine)~~ — **RESOLVED by CH-20, and the old reading was
+> wrong: those four ids 404 because the houses were RETIRED on 2026-07-24, not because the website
+> renumbered them. The fix was DELETION. Do NOT hunt for replacement ids, and do not re-add the rows to
+> silence a `task_unmapped_room_id` alert — that re-creates the product.** Still open: auto-deploy from
 > `main` appearing disconnected. **One post-v1 fast-follow** (Paul amended the contract, not a v1 gap): the
 > S2 "evening arrivals digest" beat was never built — struck in `docs/product-picture.md`, spec in the
 > progress.md CH-19 entry.
@@ -28,6 +31,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Current state: CH-00 → CH-12 are DONE, merged, tagged (`vCH-00`…`vCH-12`) and LIVE on Railway (CH-09 merged via PR #27 after a 24-agent pre-push audit fixed a money BLOCKER; its live three-probe demo passed 2026-07-13 with real facts saved in the production DB).** The service takes real WhatsApp messages on the Meta test number, replies in Nistula's voice through Claude, quotes live website-identical prices via tools, answers villa/policy/FAQ questions from the compiled knowledge base (prompt block [3]), brackets every model turn with deterministic code (§6.7 policy routing before, the complete §6.5 guardrail pipeline after — every hit persisted to `raw_events`), carries §6.3 short-term memory (token-budgeted transcript window + the `[EARLIER CONTEXT]` rolling summary + the nightly 04:00 IST summariser), and now has §6.4 long-term memory: `remember_fact` saves durable guest facts behind deterministic sensitive/instruction/entitlement screens (any rate or authority claim refused fail-closed), block [5] GUEST CONTEXT renders the full profile (name + detected register/lang prefs + newest 15 facts; stays/tasks stubbed for CH-11/13), memory promises need a real save (guardrail-2 class C4 + the `fact_saved` evidence row), and `POST /admin/guest-lookup` peeks a guest's memory (bearer + flag; enabled in local dev only — Railway carries no admin vars). **CH-10 (eZee mirror) is DONE and LIVE (2026-07-13, 761 tests):** the 60s poller mirrors eZee bookings into `bookings_mirror`, ACKs only what committed, and emits `booking.*` events for CH-12. Its live run drained the property's whole un-ACKed backlog — 62 items, 0 errors — and the pre-push audit's BLOCKER (multi-room full-cancels arriving as suffixed `-1/-2/-3` entries with no bare entry) turned out to be **sitting in production waiting**. **BINDING: local `.env` NEVER sets `EZEE_POLLER_ENABLED=1`** — only Railway may run the poller, or dev would ACK-consume real bookings prod never sees (runbook §CH-10). Move secrets to Railway with **Node**, never a PowerShell pipe (it prepends a UTF-8 BOM into the stored value). BKG-20 "ReadBooking" is broken — never used; `InsertBooking` needs POST + per-night comma-separated rates (the vendor docs are wrong). Website (Internet Booking Engine) bookings **DO** reach the queue — verified end to end (booking 953: create → mirror → cancel → mirror, dates/amount verbatim). An earlier "they don't" reading was a queue-BATCHING artifact; **a poll against a backlogged eZee queue proves nothing — only test against a drained queue.** **CH-12's backlog precondition is DISCHARGED** — the `booking.*` queue was purged 85→0 at the 2026-07-16 cutover and CH-12's workers now consume it live. **Do NOT re-run the purge: `DELETE FROM pgboss.job WHERE name LIKE 'booking.%'` now destroys real arriving guests' events.** The date gate shipped on both legs (`reconcile.ts` GATE 2 + `gates.ts passesDate`), so the mirror's 123 historical bookings schedule nothing — proven live at 199 pre-epoch rows → **0**. **Next chunk: CH-13 (Staff tasks) — read the OQ-19 section below FIRST. The task card is UNBLOCKED (the website abolished house-choice, 2026-07-16), but route it off a FRESH `BKG-03 tran.RoomID` read at task time, NEVER off `bookings_mirror.physical_room_label` — a snapshot frozen at CH-11's 14 Jul reconcile. plan.md §8 CH-13 carries the same note; **progress.md, runbook.md, docs/product-picture.md and the `TODO(CH-13)` in `src/ezee/normalize.ts` were written BEFORE the answer — treat every "blocked on the PMS re-model" line as superseded.** `progress.md` is authoritative for exactly what exists and what each chunk learned — read it, not this paragraph, for detail.
 
 ## OQ-19 — the house problem: SYMPTOM CLOSED 2026-07-16. Read this before naming a villa.
+
+> ## ⚠️ AMENDED 2026-07-27 (CH-20) — the ARITHMETIC below changed; the REASONING did not.
+> **The four three-bedroom Assagao villas (B1, B3, C1, C3 — the whole "Nistula Villa" room type) were
+> retired 2026-07-24: contract ended, removed from eZee and from the website.** Everywhere this
+> section says *"8 houses inside only 3 room types"*, read **4 houses inside 2 room types** — three
+> Assagao apartments (one type) plus the Siolim 4BHK (its own type). Nothing else here is revised:
+> eZee is still configured as a hotel, `InsertBooking` still has no field for a house, eZee still
+> auto-assigns lowest-number-first, and the website still sells types rather than houses.
+>
+> **Three consequences that are NOT obvious from the arithmetic:**
+> 1. **The business question at the bottom of this section got SHARPER, not resolved.** "Are
+>    Apartment 06/09/11 genuinely interchangeable?" was one of two multi-unit types; **it is now the
+>    only one.** Every multi-unit behaviour in the system rests on that single answer.
+> 2. **A retired name still RESOLVES — to `retired`, never a match.** `resolveVilla("B3")` and
+>    `resolveVilla("3bhk")` return `{kind:'retired'}`; the price tools return `INVENTORY_RETIRED`;
+>    `namesPhysicalHouse` still counts "Villa B3" as naming a house. *"What may we SELL?"* lost them;
+>    *"does this text NAME a house?"* did not. **Do not "simplify" these into a `none`** — bare
+>    `none` on `"3bhk"` records a false `degraded('down')` and stops quoting for every guest.
+> 3. **`TRUST_EZEE_ROOM_ASSIGNMENT` still stays `false`**, unchanged and for the unchanged reason
+>    (OQ-15 + staleness). The retirement removes a product, not a policy.
 
 **Found 2026-07-14 (CH-11); answered 2026-07-16 by a website-side re-audit — and the answer INVERTS
 the old conclusion, so do not act on any older note.**

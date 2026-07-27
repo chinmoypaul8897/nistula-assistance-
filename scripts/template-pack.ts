@@ -34,16 +34,21 @@ function section(title: string, group: Record<string, TemplateDef>): void {
   }
 }
 
-/** Meta rejects a template whose sample values look like placeholders. */
+/** Meta rejects a template whose sample values look like placeholders.
+ *
+ * 🚨 These strings are submitted to Meta for approval and then live for the life
+ * of the template, so they must name a product Nistula actually lets. The three-
+ * bedroom Assagao villas ("Nistula Villa") were retired 2026-07-24 (CH-20) —
+ * advertising a departed type in the approval pack would bake it into the WABA. */
 const EXAMPLES: Record<string, string> = {
   firstName: 'Rahul',
-  villaType: 'Nistula Villa',
+  villaType: 'Nistula Apartment',
   locality: 'Assagao',
   dates: '20–22 December 2026',
   reference: '953',
   checkInDay: 'Sunday 20 December',
   shortId: 'K7Q2ZP',
-  villa: 'Nistula Villa',
+  villa: 'Apartment 09',
   guestName: 'Rahul',
   summary: 'two extra towels',
   reason: 'outside knowledge base',
