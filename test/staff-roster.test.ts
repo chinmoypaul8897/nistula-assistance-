@@ -12,7 +12,7 @@ const HOUSE = member({
   name: 'Anita',
   phone: '+917700900401',
   role: 'housekeeping',
-  villas: ['Villa B3'],
+  villas: ['Apartment 09'],
 });
 const HOUSE_OTHER = member({
   name: 'Priya',
@@ -24,7 +24,7 @@ const MAINT = member({
   name: 'Ravi',
   phone: '+917700900403',
   role: 'maintenance',
-  villas: ['Villa B3'],
+  villas: ['Apartment 09'],
 });
 const DESK = member({ name: 'Meera', phone: '+917700900404', role: 'frontdesk' });
 const DESK_TWO = member({ name: 'Sunil', phone: '+917700900405', role: 'frontdesk' });
@@ -34,17 +34,17 @@ const roster = (members: StaffMember[], opsNumbers: string[] = []): Roster => ({
 describe('assignFor — the §8 ladder', () => {
   it('routes to the member whose role does the work and whose round has the house', () => {
     const r = roster([HOUSE_OTHER, HOUSE, MAINT, DESK]);
-    expect(assignFor(r, 'housekeeping', 'Villa B3')).toEqual({
+    expect(assignFor(r, 'housekeeping', 'Apartment 09')).toEqual({
       phone: HOUSE.phone,
       member: HOUSE,
       via: 'role_and_villa',
     });
   });
 
-  it('keys on the ROLE, not just the villa — B3 maintenance is not B3 housekeeping', () => {
+  it('keys on the ROLE, not just the villa — Apartment 09 maintenance is not Apartment 09 housekeeping', () => {
     const r = roster([HOUSE, MAINT, DESK]);
-    expect(assignFor(r, 'maintenance', 'Villa B3')?.member).toBe(MAINT);
-    expect(assignFor(r, 'housekeeping', 'Villa B3')?.member).toBe(HOUSE);
+    expect(assignFor(r, 'maintenance', 'Apartment 09')?.member).toBe(MAINT);
+    expect(assignFor(r, 'housekeeping', 'Apartment 09')?.member).toBe(HOUSE);
   });
 
   it('falls to the frontdesk lead when the role covers no such house', () => {
@@ -58,7 +58,7 @@ describe('assignFor — the §8 ladder', () => {
 
   it('🚨 an UNRESOLVED villa never matches a round — it goes to the front desk', () => {
     // The fail-closed default that matters: "we do not know which house" must
-    // never resolve to "send whoever cleans B3".
+    // never resolve to "send whoever cleans Apartment 09".
     const r = roster([HOUSE, DESK]);
     const assignment = assignFor(r, 'housekeeping', null);
     expect(assignment?.via).toBe('frontdesk_lead');
@@ -80,20 +80,20 @@ describe('assignFor — the §8 ladder', () => {
   });
 
   it('returns null — never an invented recipient — when no rung has anybody', () => {
-    expect(assignFor(roster([]), 'housekeeping', 'Villa B3')).toBeNull();
+    expect(assignFor(roster([]), 'housekeeping', 'Apartment 09')).toBeNull();
     expect(assignFor(roster([HOUSE]), 'housekeeping', 'Villa C1')).toBeNull();
   });
 
   it('an empty villas list is not a wildcard — it only ever answers as a fallback', () => {
     const floating = member({ name: 'Floater', phone: '+917700900406', role: 'housekeeping' });
     const r = roster([floating, DESK]);
-    expect(assignFor(r, 'housekeeping', 'Villa B3')?.via).toBe('frontdesk_lead');
+    expect(assignFor(r, 'housekeeping', 'Apartment 09')?.via).toBe('frontdesk_lead');
   });
 
   it('escalation and night_queue are front-desk work, not housekeeping', () => {
     const r = roster([HOUSE, DESK]);
-    expect(assignFor(r, 'escalation', 'Villa B3')?.member).toBe(DESK);
-    expect(assignFor(r, 'night_queue', 'Villa B3')?.member).toBe(DESK);
+    expect(assignFor(r, 'escalation', 'Apartment 09')?.member).toBe(DESK);
+    expect(assignFor(r, 'night_queue', 'Apartment 09')?.member).toBe(DESK);
   });
 
   it('the frontdesk LEAD is the first frontdesk member — roster order is the contract', () => {
@@ -128,10 +128,26 @@ describe('STAFF_ROSTER_JSON villa canonicalisation (§3.3 applied to the field i
       ]),
     });
 
-  it('stores the CANONICAL label, so "B3" and "b3" both match eZee\'s "Villa B3"', () => {
-    expect(load(['B3']).staffRoster[0]?.villas).toEqual(['Villa B3']);
-    expect(load(['b3']).staffRoster[0]?.villas).toEqual(['Villa B3']);
-    expect(load(['Villa B3']).staffRoster[0]?.villas).toEqual(['Villa B3']);
+  it('stores the CANONICAL label, so "apt 9" and "a9" both match eZee\'s "Apartment 09"', () => {
+    // CH-20: this used to canonicalise "B3"/"b3" → "Villa B3". That house was
+    // retired 2026-07-24, so a roster naming it now refuses boot (below) — which
+    // means the old fixture asserted canonicalisation on an input production can
+    // no longer accept. Same contract, on a house we still let.
+    expect(load(['apt 9']).staffRoster[0]?.villas).toEqual(['Apartment 09']);
+    expect(load(['a9']).staffRoster[0]?.villas).toEqual(['Apartment 09']);
+    expect(load(['Apartment 09']).staffRoster[0]?.villas).toEqual(['Apartment 09']);
+  });
+
+  it('🚨 REFUSES BOOT on a RETIRED villa, and says WHY — routing to it is impossible', () => {
+    // The four three-bedroom Assagao houses went 2026-07-24 (CH-20). A roster
+    // naming one is not a typo to be canonicalised and not a house to route to —
+    // there is no door. Boot is the last place a human is still watching, so it
+    // fails there rather than silently falling back to the frontdesk lead for
+    // ever. The message must name the CAUSE: "not a villa we know" would send an
+    // operator hunting for a typo that is not there.
+    for (const label of ['B1', 'Villa B3', 'c1', 'Villa C3']) {
+      expect(() => load([label])).toThrow(/no longer lets/);
+    }
   });
 
   it('canonicalises apartments and Siolim the same way', () => {
@@ -145,9 +161,13 @@ describe('STAFF_ROSTER_JSON villa canonicalisation (§3.3 applied to the field i
     expect(() => load(['B33'])).toThrow(/villa "B33" for "Anita" is not a villa we know/);
   });
 
-  it('REFUSES BOOT on a villa TYPE — it names four houses, and we will not guess', () => {
-    expect(() => load(['Nistula Villa'])).toThrow(/names a villa TYPE/);
-    expect(() => load(['3bhk'])).toThrow(/names a villa TYPE/);
+  it('REFUSES BOOT on a villa TYPE — it names three houses, and we will not guess', () => {
+    // CH-20: "Nistula Villa"/"3bhk" named the retired TYPE and now refuse boot
+    // for the retirement reason instead (covered above). The apartments are the
+    // ONLY multi-unit type left, so they are the only place this rule can still
+    // be exercised — which is exactly why it must keep being exercised.
+    expect(() => load(['apartment'])).toThrow(/names a villa TYPE/);
+    expect(() => load(['Nistula Apartment'])).toThrow(/names a villa TYPE/);
   });
 
   it('an empty villas list is legal — a member with no specific round', () => {

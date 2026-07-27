@@ -22,6 +22,7 @@ import {
   seedMarketingOptIn,
   seedWinback,
 } from '../seed.js';
+import { PHRASEBOOK } from '../../../src/brain/prompt.js';
 import { FIXTURE_TOTAL, toolUse, txt } from '../support.js';
 import { conversationFor, tasksAll, templateSendsTo, textSendsTo } from '../query.js';
 
@@ -50,7 +51,7 @@ export const s6: Scenario = {
     });
     await linkStaysByPhone(h.db, guest.id, RAHUL);
     await seedFact(h.db, guest.id, 'preference', 'early check-in matters to this guest');
-    await seedFact(h.db, guest.id, 'past_issue', 'AC weak in B3 master bedroom — resolved');
+    await seedFact(h.db, guest.id, 'past_issue', 'AC weak in the apartment master bedroom — resolved');
     await openStaffWindow(h.db, FRONTDESK_PHONE);
 
     // ── The win-back SEND (opt-in gated, marketing template, closed window).
@@ -80,19 +81,44 @@ export const s6: Scenario = {
     // (seed.ts seedWinback), so this does NOT prove the derivation — that lives in
     // plan.ts locality()/typeWithoutPlace and is discriminated by S2's confirmation,
     // whose params the REAL scheduler derived from the mirror.
-    assert(/Nistula Villa/.test(body) && /Assagao/.test(body), 'S6: names the villa TYPE + locality');
-    assert(!/\bB3\b|Apartment/.test(body), 'S6: never a house (OQ-19)');
+    assert(/Nistula Apartment/.test(body) && /Assagao/.test(body), 'S6: names the villa TYPE + locality');
+    // CH-20: the TYPE is now literally "Nistula Apartment", so the old bare
+    // /Apartment/ ban would contradict the line above. The rule is unchanged —
+    // never a UNIT — so the ban is on a unit-shaped reference, which is what
+    // OQ-19 was ever about.
+    assert(
+      !/\bB[13]\b|\bC[13]\b|Apartment \d/.test(body),
+      'S6: never a house (OQ-19)',
+    );
     assert(/STOP/i.test(body), 'S6: carries the STOP opt-out line');
 
-    // ── The reply opens a window, quotes a live ₹, and the model SEES both facts.
+    // ── CH-20: a returning guest asks for the RETIRED three-bedroom. This is the
+    // likeliest way a real past guest meets the retirement, and it puts the
+    // refusal on the MEMORY path as well as S1's pre-sales one.
+    h.script(
+      toolUse('get_quote', { villa_label: '3bhk', check_in: '2026-10-12', check_out: '2026-10-14', adults: 2 }),
+      txt(PHRASEBOOK.inventoryRetired),
+    );
+    await h.sendGuest(RAHUL, 'good timing. is the 3bhk free 12-14 oct?', { name: 'Rahul' });
+    const retiredReply = textSendsTo(h, RAHUL).at(-1)?.body ?? '';
+    assert(!/₹/.test(retiredReply), 'S6: no ₹ for a product we cannot quote');
+    // Bans the availability CLAIM, not the word "dates" — see the note in s1.ts.
+    assert(
+      !/\btaken\b|\bunavailable\b|fully booked|booked out|just gone|have gone|not free/i.test(
+        retiredReply,
+      ),
+      'S6: the retirement is NOT attributed to the dates',
+    );
+
+    // ── The guest takes an apartment: live ₹, and the model SEES both facts.
     const reply =
-      `Lovely to hear from you, Rahul. Your Nistula Villa in Assagao is ₹${FIXTURE_TOTAL.toLocaleString('en-IN')} ` +
+      `Lovely to hear from you, Rahul. Your Nistula Apartment in Assagao is ₹${FIXTURE_TOTAL.toLocaleString('en-IN')} ` +
       `all-inclusive for 12–14 Oct — and I remember early check-in matters to you. Shall I send the link?`;
     h.script(
-      toolUse('get_quote', { villa_label: 'b3', check_in: '2026-10-12', check_out: '2026-10-14', adults: 2 }, { text: reply }),
+      toolUse('get_quote', { villa_label: 'apartment', check_in: '2026-10-12', check_out: '2026-10-14', adults: 2 }, { text: reply }),
       txt(''),
     );
-    await h.sendGuest(RAHUL, 'good timing. is b3 free 12-14 oct?', { name: 'Rahul' });
+    await h.sendGuest(RAHUL, 'ok the apartment then', { name: 'Rahul' });
 
     const guestReply = textSendsTo(h, RAHUL).at(-1)?.body ?? '';
     assert(guestReply.includes(FIXTURE_TOTAL.toLocaleString('en-IN')), 'S6: a live ₹ was quoted from get_quote');

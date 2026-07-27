@@ -50,7 +50,7 @@ import { createTestBoss, waitUntil, TEST_URL } from '../helpers/boss.js';
 import { buildWaApp, signBody } from '../helpers/wa.js';
 import { buildAdminApp, TEST_ADMIN_TOKEN } from '../helpers/admin.js';
 import { acceptanceRoster } from './seed.js';
-import { fixtureEzee, fixtureWebsite, txt, type DoorState, B3_ROOM_ID } from './support.js';
+import { fixtureEzee, fixtureWebsite, txt, type DoorState, DOOR_ROOM_ID } from './support.js';
 
 const GRAPH = 'https://graph.test.invalid/v23.0';
 const PHONE_ID = '000000000000000';
@@ -140,7 +140,7 @@ export async function buildHarness(): Promise<Harness> {
   const noop = () => undefined;
   const log = { info: noop, warn: noop, error: noop };
   const roster = acceptanceRoster();
-  const door: DoorState = { roomId: B3_ROOM_ID, currentStatus: 'Confirmed' };
+  const door: DoorState = { roomId: DOOR_ROOM_ID, currentStatus: 'Confirmed' };
 
   const sends: CapturedSend[] = [];
   // Tagged per client: both write to ONE capture, so without `mode` a future
@@ -329,7 +329,7 @@ export async function buildHarness(): Promise<Harness> {
       delete process.env.FAKE_NOW_IST;
       // The mutable BKG-03 door handle resets to a live confirmed B3 (a scenario
       // that flips it to void/cancelled must not bleed into the next).
-      door.roomId = B3_ROOM_ID;
+      door.roomId = DOOR_ROOM_ID;
       door.currentStatus = 'Confirmed';
     },
 

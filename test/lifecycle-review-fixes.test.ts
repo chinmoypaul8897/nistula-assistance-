@@ -101,7 +101,7 @@ async function seed(over: Partial<BookingMirror> = {}): Promise<string> {
       ezeeReservationNo: '953',
       guestName: 'Rahul Mehta',
       guestPhone: PHONE,
-      roomTypeName: 'Nistula Villa',
+      roomTypeName: 'Nistula Apartment',
       checkIn: '2026-12-20',
       checkOut: '2026-12-22',
       status: 'confirmed',
@@ -409,7 +409,7 @@ describe('guest-facing text', () => {
   it('title-cases a SHOUTING OTA name and refuses a placeholder one', () => {
     const base = {
       ezeeReservationNo: '999',
-      roomTypeName: 'Nistula Villa',
+      roomTypeName: 'Nistula Apartment',
       checkIn: '2026-12-20',
       checkOut: '2026-12-22',
       status: 'confirmed',

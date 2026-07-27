@@ -62,11 +62,26 @@ describe('resolveDoor — the resolved path', () => {
       okWith(
         reservation({
           CurrentStatus: 'Some Word eZee Invented Today',
-          RoomID: '5220300000000000011',
+          // CH-20: was Villa B3's id (…011). That house went 2026-07-24, so it no
+          // longer maps and this test would have been proving the retirement
+          // rather than the undocumented-status tolerance it exists for.
+          RoomID: '5220300000000000010',
         }),
       ),
     );
-    expect(await resolveDoor(deps, '900')).toMatchObject({ resolved: true, label: 'Villa B3' });
+    expect(await resolveDoor(deps, '900')).toMatchObject({ resolved: true, label: 'Apartment 09' });
+  });
+
+  it('🚨 a RETIRED villa RoomID does NOT resolve a door — it pages ops instead', async () => {
+    // A stay in a departed house can still be read out of eZee (history exists),
+    // but there is no round to send anyone to. Routing must FAIL LOUDLY rather
+    // than fall back to eZee's RoomName, which would put "B3" on a staff card as
+    // if it were a door we service. This is the same contract as an unmapped id
+    // below — deliberately, because that is exactly what a retired id now is.
+    const { deps } = routeWith(
+      okWith(reservation({ CurrentStatus: 'Confirmed Reservation', RoomID: '5220300000000000011' })),
+    );
+    expect(await resolveDoor(deps, '900')).toMatchObject({ resolved: false });
   });
 
   it('falls back to RentalInfo[0].RoomID when the tran carries none', async () => {

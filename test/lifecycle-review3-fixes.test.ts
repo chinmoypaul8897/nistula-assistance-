@@ -110,7 +110,7 @@ async function seed(over: Partial<BookingMirror> = {}): Promise<string> {
       ezeeReservationNo: '953',
       guestName: 'Rahul Mehta',
       guestPhone: PHONE,
-      roomTypeName: 'Nistula Villa',
+      roomTypeName: 'Nistula Apartment',
       checkIn: '2026-12-20',
       checkOut: '2026-12-22',
       status: 'confirmed',

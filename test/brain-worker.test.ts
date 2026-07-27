@@ -450,14 +450,14 @@ describe('processConversation — the debounced Claude turn', () => {
 
   it('runs the tool loop: get_quote result feeds a second round; the reply row carries raw.toolRuns', async () => {
     const { conversation } = await seedConversation(db, '+917700900045');
-    await seedGuestMessage(db, conversation.id, 'B3 20-22 dec for 4, rate?', 20);
+    await seedGuestMessage(db, conversation.id, 'apt 9 20-22 dec for 4, rate?', 20);
     const rig = makeRig();
     // A stub website so the real get_quote handler returns a fixed quote.
     rig.deps.website = {
       getQuote: async () => ({
         status: 'ok',
         quote: {
-          villaId: '5220300000000000011',
+          villaId: '5220300000000000010',
           checkIn: '2026-12-20',
           checkOut: '2026-12-22',
           nights: 2,
@@ -483,7 +483,7 @@ describe('processConversation — the debounced Claude turn', () => {
         const use = {
           id: 'tu_1',
           name: 'get_quote',
-          input: { villa_label: 'B3', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+          input: { villa_label: 'a9', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
         };
         return {
           text: '',
@@ -493,7 +493,7 @@ describe('processConversation — the debounced Claude turn', () => {
           usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
         };
       }
-      return textResult('Your two nights at Villa B3 come to ₹34,000, all in. Here is the link.');
+      return textResult('Your two nights come to ₹34,000, all in. Here is the link.');
     };
 
     await processConversation(rig.deps, conversation.id);

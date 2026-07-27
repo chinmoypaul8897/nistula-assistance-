@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildToolRegistry } from '../src/brain/tools/index.js';
 import type { ToolContext } from '../src/brain/tools/registry.js';
 import type { AvailabilityOutcome, QuoteOutcome, WebsiteClient } from '../src/brain/tools/websiteApi.js';
+import { resolveVilla } from '../src/lib/villas.js';
 
 const BASE = 'https://website.test.invalid';
 const OK_QUOTE: QuoteOutcome = {
@@ -83,7 +84,7 @@ describe('registry framework', () => {
   });
 
   it('bad input → INVALID result (never throws)', async () => {
-    const res = await registry.run('get_quote', { villa_label: 'B3', check_in: 'nope' }, ctx().ctx);
+    const res = await registry.run('get_quote', { villa_label: 'a9', check_in: 'nope' }, ctx().ctx);
     expect(res).toMatchObject({ ok: false, error: 'INVALID' });
   });
 
@@ -102,7 +103,7 @@ describe('get_quote handler', () => {
     const c = ctx();
     const res = await registry.run(
       'get_quote',
-      { villa_label: 'B3', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      { villa_label: 'a9', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c.ctx,
     );
     expect(res.ok).toBe(true);
@@ -114,7 +115,7 @@ describe('get_quote handler', () => {
     const c = ctx({ quote: { status: 'min_nights', quote: OK_QUOTE.quote } });
     const res = await registry.run(
       'get_quote',
-      { villa_label: 'B3', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      { villa_label: 'a9', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c.ctx,
     );
     expect(res).toMatchObject({ ok: true, note: 'MIN_NIGHTS' });
@@ -124,14 +125,14 @@ describe('get_quote handler', () => {
     const c = ctx({ quote: { status: 'unavailable' } });
     const res = await registry.run(
       'get_quote',
-      { villa_label: 'B3', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      { villa_label: 'a9', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c.ctx,
     );
     expect(res).toMatchObject({ ok: false, error: 'UNAVAILABLE' });
     if (!res.ok) {
       const alts = (res.data as { alternatives: string[] }).alternatives;
-      expect(alts).toContain('Villa B1');
-      expect(alts).not.toContain('Villa B3'); // itself excluded
+      expect(alts).toContain('Apartment 06');
+      expect(alts).not.toContain('Apartment 09'); // itself excluded
     }
     expect(c.recorded).toEqual(['up']);
   });
@@ -140,28 +141,30 @@ describe('get_quote handler', () => {
     const c = ctx({ quote: { status: 'upstream_down' } });
     const res = await registry.run(
       'get_quote',
-      { villa_label: 'B3', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      { villa_label: 'a9', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c.ctx,
     );
     expect(res).toMatchObject({ ok: false, error: 'UPSTREAM_DOWN' });
     expect(c.recorded).toEqual(['down']);
   });
 
-  it('a TYPE ("3bhk") quotes all units → shared price + availability, never asks which unit', async () => {
+  it('a TYPE ("apartment") quotes all units → shared price + availability, never asks which unit', async () => {
     const c = ctx(); // default website returns OK_QUOTE for every unit
     const res = await registry.run(
       'get_quote',
-      { villa_label: '3bhk', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      { villa_label: 'apartment', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c.ctx,
     );
     expect(res.ok).toBe(true);
     if (res.ok) {
       const d = res.data as { type: string; total: number; available: boolean; availableCount: number; unitCount: number };
-      expect(d.type).toBe('Nistula Villa');
+      expect(d.type).toBe('Nistula Apartment');
       expect(d.total).toBe(34000); // shared price
       expect(d.available).toBe(true);
-      expect(d.availableCount).toBe(4);
-      expect(d.unitCount).toBe(4);
+      // CH-20: three units, not four — the 3BHK type (4 units) was retired
+      // 2026-07-24 and the apartments are now the ONLY multi-unit type.
+      expect(d.availableCount).toBe(3);
+      expect(d.unitCount).toBe(3);
     }
     expect(c.recorded).toEqual(['up']); // one health signal for the whole type query
   });
@@ -171,7 +174,7 @@ describe('get_quote handler', () => {
     const c = ctx({ quote: { status: 'unavailable', quote: OK_QUOTE.quote } });
     const res = await registry.run(
       'get_quote',
-      { villa_label: '3bhk', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      { villa_label: 'apartment', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c.ctx,
     );
     expect(res.ok).toBe(true);
@@ -185,7 +188,7 @@ describe('get_quote handler', () => {
 
   it('a TYPE with mixed availability counts only the free units', async () => {
     const recorded: ('down' | 'up')[] = [];
-    const free = new Set(['5220300000000000002', '5220300000000000011']); // B1, B3 free
+    const free = new Set(['5220300000000000001', '5220300000000000008']); // Apartment 11, 06 free
     const c: ToolContext = {
       website: {
         getQuote: async (p) =>
@@ -200,7 +203,7 @@ describe('get_quote handler', () => {
     };
     const res = await registry.run(
       'get_quote',
-      { villa_label: 'villa', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      { villa_label: 'apartment', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c,
     );
     expect(res.ok).toBe(true);
@@ -215,7 +218,7 @@ describe('get_quote handler', () => {
     const c = ctx({ quote: { status: 'upstream_down' } });
     const res = await registry.run(
       'get_quote',
-      { villa_label: '3bhk', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+      { villa_label: 'apartment', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
       c.ctx,
     );
     expect(res).toMatchObject({ ok: false, error: 'UPSTREAM_DOWN' });
@@ -234,11 +237,74 @@ describe('get_quote handler', () => {
   it('rejects out-of-range occupancy and reversed dates', async () => {
     const c = ctx();
     for (const bad of [
-      { villa_label: 'B3', check_in: '2026-12-20', check_out: '2026-12-22', adults: 11 },
-      { villa_label: 'B3', check_in: '2026-12-22', check_out: '2026-12-20', adults: 2 },
+      { villa_label: 'a9', check_in: '2026-12-20', check_out: '2026-12-22', adults: 11 },
+      { villa_label: 'a9', check_in: '2026-12-22', check_out: '2026-12-20', adults: 2 },
     ]) {
       expect(await registry.run('get_quote', bad, c.ctx)).toMatchObject({ ok: false, error: 'INVALID' });
     }
+  });
+
+  // ── CH-20: the retired three-bedroom Assagao villas ───────────────────────
+  //
+  // 🚨 WHY THIS IS ITS OWN ERROR CODE AND NOT `UNKNOWN_VILLA`. Before CH-20 the
+  // four villa ids were still in the map and the website 404'd them, which
+  // `websiteApi` reports as `upstream_down`/unavailable — so asking for a 3BHK
+  // produced either "those dates are taken" or a service-down line. Both are
+  // FALSE STATEMENTS about a real house, from a system whose first rule is never
+  // to invent. The name must resolve far enough to be answered honestly, and the
+  // tool must carry the instruction that says how.
+  describe('a RETIRED villa (B1/B3/C1/C3 — gone 2026-07-24)', () => {
+    it('get_quote refuses with INVENTORY_RETIRED, calls no website, records NO health signal', async () => {
+      for (const label of ['B3', 'villa b1', '3bhk', '3 bedroom', 'C-3']) {
+        const c = ctx();
+        const res = await registry.run(
+          'get_quote',
+          { villa_label: label, check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+          c.ctx,
+        );
+        expect(res).toMatchObject({ ok: false, error: 'INVENTORY_RETIRED' });
+        // A retirement is not an outage. Recording a `down` here would let three
+        // guests asking for a 3BHK trip the degraded-mode breaker and stop
+        // quoting for EVERYONE — the failure mode the resolver's `retired` kind
+        // exists to prevent.
+        expect(c.recorded).toEqual([]);
+      }
+    });
+
+    it('the refusal tells the model NOT to blame the dates, and names what we do have', async () => {
+      const res = await registry.run(
+        'get_quote',
+        { villa_label: '3bhk', check_in: '2026-12-20', check_out: '2026-12-22', adults: 4 },
+        ctx().ctx,
+      );
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.message).toMatch(/do not blame the dates/i);
+        expect(res.message).toMatch(/apartment/i);
+        expect(res.message).toMatch(/siolim/i);
+      }
+    });
+
+    it('get_availability and get_booking_link refuse identically — no half-open door', async () => {
+      // The leak would be a guest who cannot get a PRICE for B3 still being sent
+      // its booking LINK, or told which nights it is "free".
+      const a = await registry.run(
+        'get_availability',
+        { villa_label: 'B3', from: '2026-12-20', to: '2026-12-21' },
+        ctx().ctx,
+      );
+      expect(a).toMatchObject({ ok: false, error: 'INVENTORY_RETIRED' });
+      const l = await registry.run('get_booking_link', { villa_label: '3bhk' }, ctx().ctx);
+      expect(l).toMatchObject({ ok: false, error: 'INVENTORY_RETIRED' });
+    });
+
+    it('bare "villa" is NOT a retirement — Siolim is a villa, so it stays answerable', () => {
+      // Guarding by the WORD rather than the contract would refuse the company's
+      // own noun and make the four-bedroom villa unsellable.
+      expect(resolveVilla('villa').kind).not.toBe('retired');
+      expect(resolveVilla('4bhk').kind).toBe('match');
+      expect(resolveVilla('siolim').kind).toBe('match');
+    });
   });
 });
 
@@ -248,7 +314,7 @@ describe('get_availability + get_booking_link', () => {
     const c = ctx({ availability: { status: 'ok', days } });
     const res = await registry.run(
       'get_availability',
-      { villa_label: 'B3', from: '2026-12-20', to: '2026-12-21' },
+      { villa_label: 'a9', from: '2026-12-20', to: '2026-12-21' },
       c.ctx,
     );
     expect(res.ok).toBe(true);
@@ -267,11 +333,11 @@ describe('get_availability + get_booking_link', () => {
 
   it('get_booking_link for a TYPE returns a representative unit link (no ask)', async () => {
     const c = ctx();
-    const res = await registry.run('get_booking_link', { villa_label: '3bhk' }, c.ctx);
+    const res = await registry.run('get_booking_link', { villa_label: 'apartment' }, c.ctx);
     expect(res.ok).toBe(true);
     if (res.ok) {
       const d = res.data as { type: string; url: string };
-      expect(d.type).toBe('Nistula Villa');
+      expect(d.type).toBe('Nistula Apartment');
       expect(d.url).toMatch(/\/villas\/5220300000000000\d{3}$/);
     }
   });
