@@ -1,19 +1,30 @@
 /**
  * Villa identity map + resolver (plan.md §5.4, CH-05 step 1). The map is the
  * verified website/eZee constant: `villaId` = the website villa id = the eZee
- * physical RoomID. `resolveVilla` turns whatever a guest types ("B3", "3bhk",
- * "apartment", "solim") into a concrete villa, a type SET the model must
- * disambiguate, or nothing — fuzzy but fully DETERMINISTIC (no Math.random, no
- * locale-dependent ops) so the same input always resolves the same way and the
- * resolution is unit-testable as a table.
+ * physical RoomID. `resolveVilla` turns whatever a guest types ("Apartment 11",
+ * "apartment", "solim", "3bhk", "B3") into a concrete villa, a type SET the
+ * model must disambiguate, a RETIRED product, or nothing — fuzzy but fully
+ * DETERMINISTIC (no Math.random, no locale-dependent ops) so the same input
+ * always resolves the same way and the resolution is unit-testable as a table.
  *
  * WHY unit beats type: bookings are held at TYPE level (eZee assigns the unit),
- * but a guest naming a specific unit ("B3") wants that unit — so an explicit
- * unit alias always wins over a bare type word. A multi-unit type ("villa")
- * stays ambiguous on purpose: the model asks or quotes each, never guesses.
+ * but a guest naming a specific unit wants that unit — so an explicit unit alias
+ * always wins over a bare type word. A multi-unit type ("apartment") stays
+ * ambiguous on purpose: the model asks or quotes each, never guesses.
+ *
+ * 🚨 RETIRED INVENTORY (2026-07-24). The three-bedroom Assagao villas
+ * (Villa B1/B3/C1/C3, the "Nistula Villa" type) are no longer part of Nistula —
+ * the contract ended and they were removed from eZee. Their rows are gone from
+ * VILLAS, so nothing may be sold, priced or named for a guest. But their NAMES
+ * still RESOLVE — to `retired`, never a `match` — for two reasons the removal
+ * must not break: a guest may still ask for one (and deserves an honest answer,
+ * not a crash or a fake sold-out), and a house-naming SAFETY screen
+ * (namesPhysicalHouse) must still recognise "Villa B3" as a house. "What may we
+ * SELL?" (loses them) and "does this text NAME a house?" (still yes) are two
+ * different predicates — see namesPhysicalHouse.
  */
 
-export type VillaTypeName = 'Nistula Apartment' | 'Nistula Villa' | 'Nistula 4BHK Siolim';
+export type VillaTypeName = 'Nistula Apartment' | 'Nistula 4BHK Siolim';
 
 export interface VillaOccupancy {
   /** Informational in CH-05 — the website /api/quote is the occupancy authority
@@ -35,30 +46,33 @@ export interface Villa {
 }
 
 const APT = 'Nistula Apartment' as const;
-const VILLA = 'Nistula Villa' as const;
 const SIOLIM = 'Nistula 4BHK Siolim' as const;
 
-// §5.4 occupancy note: Apartment base 4/max 5+2c · Villa base 6/max 7+4c · Siolim max 8+6c.
+// §5.4 occupancy note: Apartment base 4/max 5+2c · Siolim max 8+6c.
 const APT_OCC: VillaOccupancy = { baseAdults: 4, maxAdults: 5, maxChildren: 2 };
-const VILLA_OCC: VillaOccupancy = { baseAdults: 6, maxAdults: 7, maxChildren: 4 };
 const SIOLIM_OCC: VillaOccupancy = { baseAdults: null, maxAdults: 8, maxChildren: 6 };
 
-/** The eight units (plan.md §5.4). ids share the `5220300000000000` prefix. */
+/** The four units we still let (plan.md §5.4; the three-bedroom Assagao villas
+ * were retired 2026-07-24 — see the module header). ids share the
+ * `5220300000000000` prefix. */
 export const VILLAS: readonly Villa[] = [
   { label: 'Apartment 11', villaId: '5220300000000000001', roomTypeId: '5220300000000000001', typeName: APT, occupancy: APT_OCC },
   { label: 'Apartment 06', villaId: '5220300000000000008', roomTypeId: '5220300000000000001', typeName: APT, occupancy: APT_OCC },
   { label: 'Apartment 09', villaId: '5220300000000000010', roomTypeId: '5220300000000000001', typeName: APT, occupancy: APT_OCC },
-  { label: 'Villa B1', villaId: '5220300000000000002', roomTypeId: '5220300000000000003', typeName: VILLA, occupancy: VILLA_OCC },
-  { label: 'Villa B3', villaId: '5220300000000000011', roomTypeId: '5220300000000000003', typeName: VILLA, occupancy: VILLA_OCC },
-  { label: 'Villa C1', villaId: '5220300000000000012', roomTypeId: '5220300000000000003', typeName: VILLA, occupancy: VILLA_OCC },
-  { label: 'Villa C3', villaId: '5220300000000000013', roomTypeId: '5220300000000000003', typeName: VILLA, occupancy: VILLA_OCC },
   { label: 'Siolim 4BHK', villaId: '5220300000000000015', roomTypeId: '5220300000000000009', typeName: SIOLIM, occupancy: SIOLIM_OCC },
 ];
+
+/** The labels of the retired three-bedroom Assagao villas. Kept ONLY so their
+ * names still resolve `retired` and a house-naming screen still recognises them
+ * — they are not sellable and carry no id, rate or occupancy. */
+export const RETIRED_VILLA_LABELS: readonly string[] = ['Villa B1', 'Villa B3', 'Villa C1', 'Villa C3'];
 
 export type VillaResolution =
   | { kind: 'match'; villa: Villa }
   /** A multi-unit type the model must disambiguate (or quote each of). */
   | { kind: 'ambiguous'; typeName: VillaTypeName; villas: Villa[] }
+  /** A three-bedroom Assagao villa we no longer let — named, but not sellable. */
+  | { kind: 'retired'; input: string }
   | { kind: 'none'; input: string };
 
 /**
@@ -74,21 +88,31 @@ function normalise(input: string): string {
     .replace(/\s+/g, ' ');
 }
 
-// Explicit per-unit aliases (checked FIRST, so unit beats type). Villa units
-// are matched before apartment numbers so the "1" in "b1" is never read as an
-// apartment number.
-const VILLA_UNIT_ALIASES: Record<string, string> = {
-  b1: 'Villa B1',
-  b3: 'Villa B3',
-  c1: 'Villa C1',
-  c3: 'Villa C3',
-};
+// The retired three-bedroom Assagao villas, by their unit code. Checked FIRST
+// (unit beats type) AND before apartment numbers, so the "1" in "b1" is never
+// read as an apartment number. They resolve `retired`, never a match.
+const RETIRED_UNIT_TOKENS = new Set(['b1', 'b3', 'c1', 'c3']);
 // Apartment numbers, leading-zero folded (6 ≡ 06, 9 ≡ 09).
 const APARTMENT_UNIT_BY_NUMBER: Record<string, string> = {
   '11': 'Apartment 11',
   '6': 'Apartment 06',
   '9': 'Apartment 09',
 };
+
+/** An explicit THREE-bedroom reference — "3bhk", "3 bhk", "3-bedroom", "3 br".
+ * The bare word "villa" is deliberately NOT one: Siolim is a four-bedroom villa
+ * and "villa" is the company's own noun, so only a three-bedroom cue resolves
+ * to the retired type; "villa" alone falls through to `none`. */
+const THREE_BED_JOINED = new Set(['3bhk', '3bedroom', '3br', 'threebhk', '3bed']);
+function mentionsThreeBed(tokens: string[]): boolean {
+  if (tokens.some((t) => THREE_BED_JOINED.has(t))) return true;
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (tokens[i] === '3' && ['bhk', 'bedroom', 'bedrooms', 'bed', 'br'].includes(tokens[i + 1]!)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function byLabel(label: string): Villa {
   const villa = VILLAS.find((v) => v.label === label);
@@ -136,15 +160,18 @@ export function resolveVilla(labelOrType: string): VillaResolution {
   if (n === '') return { kind: 'none', input: labelOrType };
   const tokens = n.split(' ');
 
-  // 1) Unit signal — villa units first, then apartment numbers.
+  // 1) Unit signal — RETIRED villa codes first (so "b1"'s "1" is never read as
+  // an apartment number, and a retired house is never mistaken for a live one),
+  // then live apartment numbers.
   for (const token of tokens) {
-    const villaLabel = VILLA_UNIT_ALIASES[token];
-    if (villaLabel !== undefined) return { kind: 'match', villa: byLabel(villaLabel) };
+    if (RETIRED_UNIT_TOKENS.has(token)) return { kind: 'retired', input: labelOrType };
   }
   // A bare digit ("6") must NOT override a coexisting explicit villa/type word —
   // otherwise "villa 9 dec" (a date) or "a villa for 6 guests" (a headcount)
   // mis-resolves to an apartment (review finding). A PREFIXED form ("apt 9",
-  // "a9", "apartment 06") is a genuine unit reference and always wins.
+  // "a9", "apartment 06") is a genuine unit reference and always wins. Kept
+  // referencing "villa"/"3bhk" though the villa TYPE is retired: the guard is
+  // about a bare digit beside those words, which is still text a guest types.
   const hasVillaWord = tokens.includes('villa') || tokens.includes('3bhk');
   for (const token of tokens) {
     // An apartment number — bare ("11") or glued to a prefix ("a9", "apt06",
@@ -162,14 +189,27 @@ export function resolveVilla(labelOrType: string): VillaResolution {
   if (tokens.includes('4bhk') || tokens.some(looksLikeSiolim)) {
     return { kind: 'match', villa: villasOfType(SIOLIM)[0]! }; // single-unit type → match
   }
-  if (tokens.includes('villa') || tokens.includes('3bhk')) {
-    return { kind: 'ambiguous', typeName: VILLA, villas: villasOfType(VILLA) };
+  // The three-bedroom villa TYPE is retired — but ONLY an explicit three-bedroom
+  // cue resolves to it. Bare "villa" is not one (Siolim is a villa), so it falls
+  // through to `none` and the tool asks which product the guest means.
+  if (mentionsThreeBed(tokens)) {
+    return { kind: 'retired', input: labelOrType };
   }
   if (tokens.some((t) => t === 'apartment' || t === 'apt' || t === 'studio')) {
     return { kind: 'ambiguous', typeName: APT, villas: villasOfType(APT) };
   }
 
   return { kind: 'none', input: labelOrType };
+}
+
+/** Does this eZee/mirror room-type string name the RETIRED three-bedroom villa
+ * product? Used by the lifecycle marketing guard, which reads the stored type
+ * STRING (a booking's room_type_name or a scheduled row's params), never the
+ * live map. Precise: the two remaining types ("Nistula Apartment", "Nistula
+ * 4BHK Siolim") do not match. */
+export function isRetiredVillaType(villaType: string | null | undefined): boolean {
+  if (villaType == null) return false;
+  return /\bnistula\s+villa\b/i.test(villaType);
 }
 
 /** Reverse lookup for booking-awareness/mirror joins (CH-11). */
@@ -246,7 +286,12 @@ export function namesPhysicalHouse(text: string): boolean {
   // A span is a house only if the resolver says so — an unknown "a1" or
   // "villa 99" names nothing, and a TYPE ("the apartment") resolves ambiguous.
   return spans.some((span) => {
-    if (resolveVilla(span).kind === 'match') return true;
+    const kind = resolveVilla(span).kind;
+    // A RETIRED house (Villa B1/B3/C1/C3) still NAMES a house — this screen
+    // stops a house reaching a guest-facing template or competing with the door
+    // on a staff card, and that must keep firing for a retired name too. "What
+    // may we sell?" lost these; "does this text name a house?" did not.
+    if (kind === 'match' || kind === 'retired') return true;
     // 🚨 THE ROUND-3 GAP. "villa 11" / "villa 9" / "villa 6" resolve AMBIGUOUS,
     // not match — resolveVilla protects FREE TEXT from "a villa for 6 guests"
     // and "villa 9 dec" (a date) by refusing a bare digit that sits beside the

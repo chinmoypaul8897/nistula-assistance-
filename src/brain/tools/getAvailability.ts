@@ -26,11 +26,19 @@ export const getAvailabilityTool: ToolDef = {
   async handler(rawInput, ctx): Promise<ToolResult> {
     const input = rawInput as AvailabilityInput;
     const resolution = resolveVilla(input.villa_label);
+    if (resolution.kind === 'retired') {
+      return {
+        ok: false,
+        error: 'INVENTORY_RETIRED',
+        message:
+          'Nistula no longer lets the three-bedroom villas in Assagao. Do not check dates for, name or describe them. Tell the guest we no longer let the three-bedroom houses in Assagao, and offer what we do have — the Assagao apartments and the four-bedroom villa in Siolim.',
+      };
+    }
     if (resolution.kind === 'none') {
       return {
         ok: false,
         error: 'UNKNOWN_VILLA',
-        message: `no villa matches "${input.villa_label}" — ask the guest which villa`,
+        message: `no specific home matched "${input.villa_label}" — ask whether they mean the Assagao apartments or the four-bedroom villa in Siolim`,
       };
     }
     if (resolution.kind === 'ambiguous') {

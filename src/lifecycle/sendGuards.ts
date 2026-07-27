@@ -21,6 +21,7 @@ import { and, eq, gte, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { bookingsMirror, guests, scheduledMessages } from '../db/schema.js';
 import { isNightIST, nowIST } from '../lib/time.js';
+import { isRetiredVillaType } from '../lib/villas.js';
 import { bookingState, hasPhone, passesSource, type GateContext } from './gates.js';
 import { LIFECYCLE_TEMPLATES, type ScheduledKind } from './templates.js';
 
@@ -268,6 +269,14 @@ async function sentCountSince(
   return count;
 }
 
+/** The villa TYPE string a scheduled row rendered with (jsonb, so `unknown`).
+ * Narrowed, never cast — a non-string or absent param yields null. */
+function paramVillaType(params: unknown): string | null {
+  if (typeof params !== 'object' || params === null) return null;
+  const v = (params as Record<string, unknown>).villaType;
+  return typeof v === 'string' ? v : null;
+}
+
 /** Marketing may only go to a guest who asked for it and never after they said
  * STOP (§4, §3.3, CH-15's consent). Caps are per-kind, per-guest, per-window. */
 async function marketingBlock(
@@ -277,6 +286,14 @@ async function marketingBlock(
   now: Date,
 ): Promise<string | null> {
   if (LIFECYCLE_TEMPLATES[kind].category !== 'marketing') return null;
+
+  // The two marketing bodies invite the guest to re-book the villa TYPE they
+  // stayed in or enquired about ("your Nistula Villa in Assagao is here…"). The
+  // three-bedroom Assagao villas were retired 2026-07-24, so for a residual row
+  // typed to that product this is now an invitation to book a house we no longer
+  // let. SKIP — terminal is correct: a retirement cannot come back. Read the
+  // stored type STRING (lead_followup has no booking), never the live map.
+  if (isRetiredVillaType(paramVillaType(row.params))) return 'inventory_retired';
 
   const [guest] = await db.select().from(guests).where(eq(guests.id, row.guestId));
   if (guest === undefined) return 'guest_missing';

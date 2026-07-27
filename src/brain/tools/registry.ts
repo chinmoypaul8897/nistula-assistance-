@@ -27,6 +27,7 @@ export type ToolErrorCode =
   | 'INVALID'
   | 'UNKNOWN_VILLA'
   | 'AMBIGUOUS_VILLA'
+  | 'INVENTORY_RETIRED'
   | 'UNAVAILABLE'
   | 'UPSTREAM_DOWN'
   | 'UNKNOWN_TOOL'
