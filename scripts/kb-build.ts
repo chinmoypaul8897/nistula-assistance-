@@ -60,6 +60,32 @@ function typeWord(villa: Villa): string {
   return villa.typeName === 'Nistula Apartment' ? 'apartment' : 'villa';
 }
 
+const SMALL_NUMBERS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'];
+const spellCount = (n: number): string => SMALL_NUMBERS[n] ?? String(n);
+
+/** The inventory sentence, DERIVED from VILLAS so it cannot silently drift the
+ * way the old hardcoded "eight private homes … four villas" literal did when the
+ * three-bedroom Assagao villas were retired (2026-07-24). */
+function inventorySentence(): string {
+  const apts = VILLAS.filter((v) => v.typeName === 'Nistula Apartment').length;
+  const siolim = VILLAS.filter((v) => v.typeName === 'Nistula 4BHK Siolim').length;
+  const parts: string[] = [];
+  if (apts > 0) parts.push(`${spellCount(apts)} private apartment${apts === 1 ? '' : 's'} in Assagao`);
+  if (siolim > 0) {
+    parts.push(
+      siolim === 1
+        ? 'a four-bedroom villa in Siolim'
+        : `${spellCount(siolim)} four-bedroom villas in Siolim`,
+    );
+  }
+  const inventory = parts.length > 0 ? parts.join(' and ') : 'private homes in Goa';
+  return (
+    `Nistula has ${inventory}. Homes are booked at room-type level — the exact unit is assigned ` +
+    'on arrival, so never promise a specific unit unless it has already been allocated. All rates ' +
+    'are all-inclusive; quote them only from get_quote.'
+  );
+}
+
 /** Joins each villa's identity (VILLAS) with its website copy (villas.json) and
  * type occupancy (roomtypes.json → "sleeps up to maxAdults"). */
 function renderVillas(src: VillasSource, roomTypes: RoomTypesSource): string {
@@ -79,7 +105,7 @@ function renderVillas(src: VillasSource, roomTypes: RoomTypesSource): string {
   return [
     GENERATED('kb/source/website-content/villas.json + kb/source/roomtypes.json'),
     '# The villas',
-    'Nistula has eight private homes in Goa: three apartments and four villas in Assagao, and a four-bedroom villa in Siolim. Homes are booked at room-type level — the exact unit is assigned on arrival, so never promise a specific unit unless it has already been allocated. All rates are all-inclusive; quote them only from get_quote.',
+    inventorySentence(),
     // WHY "listed on every villa page" and NOT "shared on every home": the site
     // renders ONE property-wide amenity list on every villa; it is a published
     // claim, not a verified per-villa fact. A blanket "swimming pool" here would

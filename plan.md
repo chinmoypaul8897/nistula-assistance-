@@ -218,7 +218,10 @@ WA_TEMPLATE_MODE=simulate    # CH-12 addition. simulate|send. Template approval 
                              # number's WABA, which does not exist yet — dev sends the identical body as
                              # free-form (raw.devTemplate=true). Nothing branches on NODE_ENV (§5.3).
 OPS_NUMBERS               # comma-separated E.164 — Paul + front-desk lead (alerts, digests, draft approvals)
-STAFF_ROSTER_JSON         # [{"name":"…","phone":"+91…","role":"housekeeping|maintenance|frontdesk","villas":["B1","B3"]}]
+STAFF_ROSTER_JSON         # [{"name":"…","phone":"+91…","role":"housekeeping|maintenance|frontdesk","villas":["Apartment 06","Apartment 09"]}]
+                          # CH-20 (2026-07-27): "villas" holds CANONICAL labels, and the only four are
+                          # Apartment 06 · Apartment 09 · Apartment 11 · Siolim 4BHK. [] = any house.
+                          # A RETIRED villa (B1/B3/C1/C3) here REFUSES BOOT, by design — see §5.4.
 DRAFT_MODE=true · AUTO_SEND_TYPES=            # csv: presales,instay,… unlocked over time
 NIGHT_START=20:00 · NIGHT_END=10:00
 ADMIN_BEARER_TOKEN · ADMIN_ROUTES_ENABLED=0
@@ -326,25 +329,41 @@ Sends (`POST {GRAPH_BASE_URL}/{WA_PHONE_NUMBER_ID}/messages`, bearer `WA_ACCESS_
 
 ### 5.4 Villa identity map (constant `src/lib/villas.ts` — from the website codebase, verified)
 
-> **⚠️ OBSERVED-LIVE CAVEAT (2026-07-21, CH-19 close-out): the villa/3BHK IDs may have DRIFTED.** On the
-> live test line, `get_quote` returned real prices for the APARTMENT IDs (₹59,000 quoted correctly) but
-> the website returned **`villa_map_drift` 404s for the villa/3BHK IDs** (B1/B3/C1/C3/Siolim). The website
-> rebuild (branch `v2`, OQ-19) likely changed those IDs. **Do not treat the villa/3BHK rows below as
-> live-verified until the drift is resolved** — a wrong "villas are taken" can result from a 404, not a
-> real 409. Tracked as a non-blocking clean-up in progress.md (CH-19 entry); apartment rows are fine.
+> ## ⚠️ AMENDED 2026-07-27 (CH-20) — FOUR HOUSES IN TWO TYPES. This box overrides the table below.
+> **Nistula's contract for the four three-bedroom Assagao villas ended 2026-07-24; they were removed
+> from eZee and from the website.** The inventory is now **4 houses in 2 room types**:
+> Apartment 06 · Apartment 09 · Apartment 11 (the "Nistula Apartment" type) and the Siolim 4BHK.
+> Removing all four retired an ENTIRE room type. Their rows are struck below and are **gone from
+> `src/lib/villas.ts` `VILLAS`** — nothing may be sold, priced or named for a guest.
+>
+> **🚨 This also RESOLVES the 2026-07-21 "villa-map drift" caveat that used to sit here, and the
+> answer is not the one that caveat assumed.** It read the villa/3BHK `villa_map_drift` 404s as
+> *"the website rebuild probably changed those IDs"* and told the next session not to trust the rows
+> until the drift was resolved. **The ids did not move — the houses are gone.** So the fix is
+> DELETION, not id-hunting: do not go looking for replacement ids, and do not re-add these rows to
+> silence a `task_unmapped_room_id` alert (that re-creates the product). *(Siolim was named in that
+> caveat too; it is still let, and its row stands.)*
+>
+> **The names still RESOLVE, to `retired` — never to a match.** A guest may still ask for one and
+> deserves an honest answer, and the house-naming safety screen (`namesPhysicalHouse`) must still
+> recognise "Villa B3" as a house. *"What may we SELL?"* lost them; *"does this text NAME a house?"*
+> did not. The three price tools return `INVENTORY_RETIRED`; the AI gives the approved line and
+> **never blames the dates**.
 
 | Villa label | Website villaId (= eZee RoomID) | RoomTypeID | Type name |
 |---|---|---|---|
 | Apartment 11 | 5220300000000000001 | 5220300000000000001 | Nistula Apartment |
 | Apartment 06 | 5220300000000000008 | 5220300000000000001 | Nistula Apartment |
 | Apartment 09 | 5220300000000000010 | 5220300000000000001 | Nistula Apartment |
-| Villa B1 | 5220300000000000002 | 5220300000000000003 | Nistula Villa |
-| Villa B3 | 5220300000000000011 | 5220300000000000003 | Nistula Villa |
-| Villa C1 | 5220300000000000012 | 5220300000000000003 | Nistula Villa |
-| Villa C3 | 5220300000000000013 | 5220300000000000003 | Nistula Villa |
+| ~~Villa B1~~ | ~~5220300000000000002~~ | ~~5220300000000000003~~ | ~~Nistula Villa~~ **RETIRED 2026-07-24** |
+| ~~Villa B3~~ | ~~5220300000000000011~~ | ~~5220300000000000003~~ | ~~Nistula Villa~~ **RETIRED 2026-07-24** |
+| ~~Villa C1~~ | ~~5220300000000000012~~ | ~~5220300000000000003~~ | ~~Nistula Villa~~ **RETIRED 2026-07-24** |
+| ~~Villa C3~~ | ~~5220300000000000013~~ | ~~5220300000000000003~~ | ~~Nistula Villa~~ **RETIRED 2026-07-24** |
 | Siolim 4BHK | 5220300000000000015 | 5220300000000000009 | Nistula 4BHK Siolim |
 
-Rules: bookings are held at **type** level (eZee assigns the unit) → pre-arrival the AI says "your 3BHK villa in Assagao", **never promises a specific unit at all. 🚨 SUPERSEDED BY OQ-19 (CH-11): the old "unless `physical_room_label` is already assigned" clause is INVERTED and must not be followed — that label is eZee's GUESS (it holds 8 houses in 3 room types and auto-assigns lowest-first), not the house the guest booked. Shipped as `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`.** Occupancy: Apartment base 4/max 5+2c · Villa base 6/max 7+4c · Siolim max 8+6c (refresh from RoomTypeList in CH-06).
+Rules: bookings are held at **type** level (eZee assigns the unit) → pre-arrival the AI says ~~"your 3BHK villa in Assagao"~~ **"your apartment in Assagao" (CH-20 — the 3BHK type is retired)**, **never promises a specific unit at all. 🚨 SUPERSEDED BY OQ-19 (CH-11): the old "unless `physical_room_label` is already assigned" clause is INVERTED and must not be followed — that label is eZee's GUESS (it held 8 houses in 3 room types and auto-assigns lowest-first), not the house the guest booked. Shipped as `stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`.** Occupancy: Apartment base 4/max 5+2c · ~~Villa base 6/max 7+4c~~ · Siolim max 8+6c (refresh from RoomTypeList in CH-06).
+
+**🚨 CH-20 sharpened OQ-19's business half rather than closing it: the apartments are now the ONLY multi-unit type left**, so "are Apartment 06/09/11 genuinely interchangeable?" is the whole question, not one of two.
 
 ### 5.5 Anthropic API
 

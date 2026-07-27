@@ -53,9 +53,12 @@ function reservation(uniqueId: string, roomId?: string): Record<string, unknown>
         CurrentStatus: 'Confirmed Reservation',
         Start: '2026-08-26',
         End: '2026-08-28',
-        RoomTypeCode: '5220300000000000003',
-        RoomTypeName: 'Nistula Villa',
-        ...(roomId === undefined ? {} : { RoomID: roomId, RoomName: 'B3' }),
+        // CH-20: was the retired 3BHK type (…0003 / "Nistula Villa"). Reconcile's
+        // subject is the ArrivalList→BKG-03 hydration gap, not the room type, so
+        // it runs on a product we still let.
+        RoomTypeCode: '5220300000000000001',
+        RoomTypeName: 'Nistula Apartment',
+        ...(roomId === undefined ? {} : { RoomID: roomId, RoomName: '09' }),
         TotalAmountAfterTax: '13854.75',
         RentalInfo: [{ Adult: '4', Child: '0' }],
       },
@@ -125,7 +128,7 @@ describe('the diff — "is our mirror complete?"', () => {
     await upsertMirrorRow(db, mirrorInput({ ezeeReservationNo: '953', physicalRoomLabel: null }));
     await upsertMirrorRow(
       db,
-      mirrorInput({ ezeeReservationNo: '954', physicalRoomLabel: 'Villa B3' }),
+      mirrorInput({ ezeeReservationNo: '954', physicalRoomLabel: 'Apartment 09' }),
     );
     const c = fakeClient({
       fetchArrivals: async () => ok([reservation('953'), reservation('954')]),
@@ -176,8 +179,8 @@ describe('--apply hydrates through BKG-03 (the only call that returns a room)', 
   it('writes the missing booking WITH its villa label', async () => {
     const c = fakeClient({
       fetchArrivals: async () => ok([reservation('999')]),
-      // BKG-03 returns RoomID; the poll never does. 5220300000000000011 = Villa B3.
-      fetchSingleBooking: async () => ok([reservation('999', '5220300000000000011')]),
+      // BKG-03 returns RoomID; the poll never does. 5220300000000000010 = Apartment 09.
+      fetchSingleBooking: async () => ok([reservation('999', '5220300000000000010')]),
     });
 
     const r = await reconcileMirror({ db, client: c, log }, { ...RANGE, apply: true });
@@ -185,20 +188,20 @@ describe('--apply hydrates through BKG-03 (the only call that returns a room)', 
     expect(r.upserted).toBe(1);
     const [row] = await db.select().from(schema.bookingsMirror);
     expect(row?.ezeeReservationNo).toBe('999');
-    expect(row?.physicalRoomLabel).toBe('Villa B3');
+    expect(row?.physicalRoomLabel).toBe('Apartment 09');
   });
 
   it('hydrates a label onto a booking we already held', async () => {
     await upsertMirrorRow(db, mirrorInput({ ezeeReservationNo: '953', physicalRoomLabel: null }));
     const c = fakeClient({
       fetchArrivals: async () => ok([reservation('953')]),
-      fetchSingleBooking: async () => ok([reservation('953', '5220300000000000011')]),
+      fetchSingleBooking: async () => ok([reservation('953', '5220300000000000010')]),
     });
 
     await reconcileMirror({ db, client: c, log }, { ...RANGE, apply: true });
 
     const [row] = await db.select().from(schema.bookingsMirror);
-    expect(row?.physicalRoomLabel).toBe('Villa B3');
+    expect(row?.physicalRoomLabel).toBe('Apartment 09');
   });
 });
 
@@ -275,7 +278,7 @@ describe('the safety invariants', () => {
   it('NEVER acknowledges anything, even with --apply', async () => {
     const c = fakeClient({
       fetchArrivals: async () => ok([reservation('999')]),
-      fetchSingleBooking: async () => ok([reservation('999', '5220300000000000011')]),
+      fetchSingleBooking: async () => ok([reservation('999', '5220300000000000010')]),
     });
 
     await reconcileMirror({ db, client: c, log }, { ...RANGE, apply: true });

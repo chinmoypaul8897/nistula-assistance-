@@ -637,3 +637,60 @@ Until then, the runbook's "every staff number messages the line once" **buys 24 
 `assignFor`'s frontdesk-lead fallback becomes the normal path rather than the exception.
 **Owner:** front desk + villa team. **Feeds:** CH-13a task cards · the cutover checklist.
 **Status:** 🔴 OPEN
+
+---
+
+## H · CH-20 (villa retirement) — 2026-07-27
+
+### OQ-29 — 🚨 The four three-bedroom Assagao villas are GONE. OQ-19's business half is now the whole question.
+
+**This entry SUPERSEDES the arithmetic in OQ-19 above. Per this file's append-only rule the OQ-19
+narrative is left exactly as written — it is the dated record of what was true on 2026-07-14/16 —
+and nothing in it has been edited in place.** Read this entry alongside it.
+
+**What changed, and it is a business fact, not a finding.** Nistula's contract for **Villa B1, B3,
+C1 and C3** — all four Assagao three-bedroom houses, i.e. the entire **"Nistula Villa" room type** —
+**ended on 2026-07-24**. They were removed from eZee and from the website. Owner-confirmed
+2026-07-24/25; no current or future guest holds a booking in one, and no new one can arrive.
+
+**Inventory is now 4 houses in 2 room types:** Apartment 06 · Apartment 09 · Apartment 11 (the
+"Nistula Apartment" type) and the Siolim 4BHK.
+
+**What this does to OQ-19.** OQ-19 asked whether Apartment 06/09/11 are *genuinely interchangeable*,
+on the reasoning that the website had abolished house-choice to mirror eZee's shape. That question
+**survives the retirement and gets sharper**: the apartments were one of two multi-unit types and are
+now **the only one**. Every multi-unit behaviour the system has — type-level quoting, eZee assigning
+the door, "never promise a named house to a guest" — now rests on that single answer. If they differ
+in view, layout or light, "the guest cannot book the house they want" is no longer a smaller problem
+traded against a bigger one; it is the only remaining instance of the problem.
+
+**What we shipped meanwhile (CH-20, fail-closed by default).**
+- The four rows are gone from `src/lib/villas.ts` — **nothing may be sold, priced or named**.
+- Their NAMES still resolve, to a new `retired` kind — never a `match`, never a crash. A guest may
+  still ask for one, and the house-naming safety screen must still recognise "Villa B3" as a house.
+- The three price tools return **`INVENTORY_RETIRED`** and the AI gives an approved line
+  (Paul-approved 2026-07-24) that names what we *do* have and **never blames the dates**.
+- `lifecycle/sendGuards.ts` **SKIPS** `winback` / `lead_followup` for a row typed to the retired
+  product (reason `inventory_retired`) — SKIP, not defer, because a retirement cannot come back.
+- A roster naming a retired villa **refuses boot**, with a message that says why.
+
+**What changes once answered.** If the apartments ARE interchangeable, this model is right and OQ-19
+closes for good. If they are NOT, the re-model (one house = one product, as **Siolim already is**)
+becomes a revenue decision about three units rather than seven — smaller in scope, but now
+unavoidable, because there is no second multi-unit type left to absorb the ambiguity.
+
+**Owner:** Paul + the villa team. **Feeds:** `src/lib/villas.ts` · pre-sales quoting · OQ-15.
+**Status:** 🔴 OPEN (business half only — the engineering shipped in CH-20)
+
+### OQ-30 — The "group of six in Assagao" now has no product. ACCEPTED as a gap.
+
+The retired villas were the three-bedroom inventory. A party needing three bedrooms in Assagao can no
+longer be served there; the nearest answer is the four-bedroom Siolim villa (different locality) or
+multiple apartments (which the system cannot combine into one quote).
+
+**Owner-confirmed 2026-07-24: ACCEPTED, do not build around it.** Logged so that the AI's behaviour
+here is a recorded decision rather than an unnoticed hole: today the guest is told plainly what we
+have, and may be offered Siolim. **What would change it:** a decision to sell adjacent apartments as
+a single multi-unit product — a pricing and housekeeping question, not an engineering one.
+
+**Owner:** Paul. **Feeds:** pre-sales phrasebook. **Status:** 🟢 ACCEPTED (recorded, not open)

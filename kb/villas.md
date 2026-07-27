@@ -2,7 +2,7 @@
 
 # The villas
 
-Nistula has eight private homes in Goa: three apartments and four villas in Assagao, and a four-bedroom villa in Siolim. Homes are booked at room-type level — the exact unit is assigned on arrival, so never promise a specific unit unless it has already been allocated. All rates are all-inclusive; quote them only from get_quote.
+Nistula has three private apartments in Assagao and a four-bedroom villa in Siolim. Homes are booked at room-type level — the exact unit is assigned on arrival, so never promise a specific unit unless it has already been allocated. All rates are all-inclusive; quote them only from get_quote.
 
 **Listed on every villa page (property-wide):** free Wi-Fi, air conditioning, HD TV, a full kitchen with refrigerator and coffee machine, welcome drinks, room service, laundry and dry cleaning, daily housekeeping, an in-house spa, garden views, a private entrance, contactless check-in, and free parking. We can also help arrange airport transfers, a chef and experiences through trusted partners.
 
@@ -19,22 +19,6 @@ A calm Assagao apartment beside a pool and an arched garden wall — afternoon s
 ### Apartment 09
 2-bedroom apartment in Assagao · sleeps up to 5 · Shared pool.
 A treetop Assagao apartment with a hanging chair on the balcony and gentle morning light — bright, open living and restful green bedrooms.
-
-### Villa B1
-3-bedroom villa in Assagao · sleeps up to 7 · Private pool.
-A spacious Assagao villa with generous living space, a private garden and a private pool — room for a group to spread out over long lunches and slow evenings.
-
-### Villa B3
-3-bedroom villa in Assagao · sleeps up to 7 · Private pool.
-A private Assagao villa tucked into the lanes, quiet enough to hear the garden — a living space made for gathering, restful bedrooms and a private pool.
-
-### Villa C1
-3-bedroom villa in Assagao · sleeps up to 7 · Private pool.
-A relaxed Assagao villa with easy, spread-out living, a private garden and a private pool — cool, calm bedrooms through the afternoon.
-
-### Villa C3
-3-bedroom villa in Assagao · sleeps up to 7 · Private pool with a water feature.
-A private Assagao villa wrapped around its own pool with a water feature — an outdoor dining corner, a garden-facing living space and warm, considered interiors.
 
 ### Siolim 4BHK
 4-bedroom villa in Siolim · sleeps up to 8.

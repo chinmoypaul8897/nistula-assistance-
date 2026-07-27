@@ -25,7 +25,7 @@ export function istDay(offsetDays = 0): string {
 }
 
 /**
- * The acceptance roster: a housekeeper whose round includes Villa B3 (the door
+ * The acceptance roster: a housekeeper whose round includes Apartment 09 (the door
  * the S3 fixture read resolves), a front-desk lead (the fail-closed fallback and
  * escalation owner), and one ops number. Villa labels are the §5.4 canonical
  * form assignFor compares against.
@@ -33,7 +33,7 @@ export function istDay(offsetDays = 0): string {
 export function acceptanceRoster(): Roster {
   return {
     members: [
-      { name: 'Asha', phone: HOUSEKEEPER_PHONE, role: 'housekeeping', villas: ['Villa B3'] },
+      { name: 'Asha', phone: HOUSEKEEPER_PHONE, role: 'housekeeping', villas: ['Apartment 09'] },
       { name: 'Meera', phone: FRONTDESK_PHONE, role: 'frontdesk', villas: [] },
     ],
     opsNumbers: [OPS_PHONE],
@@ -49,8 +49,11 @@ export async function openStaffWindow(db: Db, phone: string): Promise<void> {
 const DEFAULTS: Omit<MirrorRowInput, 'ezeeReservationNo' | 'guestName' | 'guestPhone'> = {
   ezeeBookingTranId: null,
   guestEmail: null,
-  roomTypeId: '5220300000000000003', // §5.4 Nistula Villa (the 3BHK type)
-  roomTypeName: 'Nistula Villa',
+  // CH-20 (2026-07-27): was …0003 / "Nistula Villa" — the 3BHK type retired
+  // 2026-07-24. The apartments are now the only multi-unit type, so they are
+  // where the "eZee assigns the house, we never promise it" contract lives.
+  roomTypeId: '5220300000000000001', // §5.4 Nistula Apartment
+  roomTypeName: 'Nistula Apartment',
   physicalRoomLabel: null, // the mirror never carries a live room (BKG-02); the door is a fresh read
   rateplanId: null,
   checkIn: null,
@@ -156,7 +159,7 @@ export async function seedWinback(
     bookingId: opts.bookingId,
     kind: 'winback',
     templateName: LIFECYCLE_TEMPLATES.winback.name,
-    params: { firstName: opts.firstName, villaType: 'Nistula Villa', locality: 'Assagao' },
+    params: { firstName: opts.firstName, villaType: 'Nistula Apartment', locality: 'Assagao' },
     sendAt: opts.sendAt,
     dedupeKey: `winback:${opts.reservationNo}`,
   });

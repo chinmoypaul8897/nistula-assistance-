@@ -185,9 +185,34 @@ describe('normalizeReservation — degraded payloads', () => {
 
 describe('physical room label', () => {
   it('maps a known RoomID to the canonical villa label', () => {
-    const result = normalizeReservation(firstReservation('fetch-single-booking.json'));
-    expect(result.row?.physicalRoomLabel).toBe('Villa B3');
+    // Apartment 09 (§5.4). Was Villa B3 until CH-20 retired that house — see the
+    // retired-RoomID case below, which now owns the fixture.
+    const reservation = firstReservation('fetch-single-booking.json');
+    const tran = (reservation.BookingTran as Record<string, unknown>[])[0] ?? {};
+    const result = normalizeReservation({
+      ...reservation,
+      BookingTran: [{ ...tran, RoomID: '5220300000000000010', RoomName: '09', RentalInfo: [] }],
+    });
+    expect(result.row?.physicalRoomLabel).toBe('Apartment 09');
     expect(result.row?.status).toBe('checked_in'); // CurrentStatus Arrived
+  });
+
+  it('🚨 still INGESTS a retired villa: the RoomID stops mapping, the raw RoomName is RECORDED', () => {
+    // This fixture is a REAL captured booking in Villa B3 — one of the four
+    // three-bedroom Assagao houses retired 2026-07-24 (CH-20). Its rows are gone
+    // from VILLAS, so getVillaById no longer resolves the id.
+    //
+    // 🚨 THE CONTRACT THIS PINS: we refuse where we ACT, never where we RECORD.
+    // The mirror is a change feed of what eZee sent us, and history did happen —
+    // dropping the row, nulling the label or throwing would corrupt real past
+    // stays and lose the only trace of which house a guest was actually in.
+    // eZee's own RoomName rides through verbatim instead of a canonical label,
+    // which is exactly the unmapped-RoomID path below.
+    const result = normalizeReservation(firstReservation('fetch-single-booking.json'));
+    expect(result.row?.physicalRoomLabel).toBe('B3'); // eZee's RoomName, not "Villa B3"
+    expect(result.row?.roomTypeName).toBe('Nistula Villa'); // the retired TYPE is recorded too
+    expect(result.row?.status).toBe('checked_in'); // ingestion is entirely unaffected
+    expect(result.issues).toEqual([]); // and it is not flagged as a problem
   });
 
   it('falls back to the verbatim RoomName for an unmapped RoomID, else null', () => {

@@ -116,7 +116,7 @@ async function seedBooking(over: Partial<BookingMirror> = {}): Promise<string> {
     ezeeReservationNo: '953',
     guestName: 'Rahul Mehta',
     guestPhone: PHONE,
-    roomTypeName: 'Nistula Villa',
+    roomTypeName: 'Nistula Apartment',
     checkIn: '2026-12-20',
     checkOut: '2026-12-22',
     adults: 4,
@@ -243,6 +243,61 @@ describe('runSender', () => {
     await openWindow();
     // Consent arrives ~74 days after the row was scheduled — which is exactly
     // why opt-in is judged now and not back then.
+    await db.execute(sql`UPDATE guests SET marketing_opt_in = true`);
+    await db.execute(
+      sql`UPDATE scheduled_messages SET send_at = ${minutesBefore(1)} WHERE kind = 'winback'`,
+    );
+
+    const { wa } = makeWa();
+    await runSender(senderDeps(wa));
+
+    const [winback] = await db.select().from(scheduledMessages).where(sql`kind = 'winback'`);
+    expect(winback?.status).toBe('sent');
+  });
+
+  // ── CH-20: marketing for a RETIRED product ────────────────────────────────
+  it('🚨 SKIPS a win-back for a retired villa type — never invites a re-book of a house we lost', async () => {
+    // The win-back body invites the guest to re-book the TYPE they stayed in
+    // ("your Nistula Villa in Assagao is here…"). The four three-bedroom Assagao
+    // houses went 2026-07-24, so for any residual row typed to that product this
+    // is an invitation to book something Nistula cannot let. It must not send.
+    const no = await seedBooking({ roomTypeName: 'Nistula Villa' });
+    await scheduleForBooking(schedulerDeps(), no);
+    await openWindow();
+    // Everything ELSE that could hold this row back is deliberately satisfied:
+    // opted in, under the cap, due, window open. So a `sent` here would be a
+    // real guest really invited to re-book a departed house.
+    await db.execute(sql`UPDATE guests SET marketing_opt_in = true`);
+    await db.execute(
+      sql`UPDATE scheduled_messages SET send_at = ${minutesBefore(1)} WHERE kind = 'winback'`,
+    );
+
+    const { wa } = makeWa();
+    await runSender(senderDeps(wa));
+
+    const [winback] = await db.select().from(scheduledMessages).where(sql`kind = 'winback'`);
+    // 🚨 SKIPPED, not deferred — and the verb is the whole point. Skipping is
+    // TERMINAL in this system (a resolved row is never rescheduled), so the
+    // standing rule is that a rule may only SKIP on a fact that cannot come
+    // back. A retirement is precisely such a fact: the contract ended, the
+    // rooms are out of eZee, and no later event can make this row sendable.
+    // Deferring would leave it re-evaluated for ever.
+    expect(winback?.status).toBe('skipped');
+    expect(winback?.skipReason).toBe('inventory_retired');
+    // …and no win-back message row was ever created, so nothing reached the
+    // guest. Asserted on the win-back TEMPLATE specifically: other lifecycle
+    // rows for this booking send legitimately in the same pass, so a blanket
+    // "nothing was sent" would pass for the wrong reason.
+    const msgs = await db.select().from(schema.messages);
+    expect(msgs.some((m) => m.templateName === 'nst_winback_v1')).toBe(false);
+  });
+
+  it('an APARTMENT win-back is untouched by the retirement guard — it is precise, not a blanket', async () => {
+    // The other half: guarding on the word "villa" rather than the retired TYPE
+    // would silently kill marketing for the products we still let.
+    const no = await seedBooking({ roomTypeName: 'Nistula Apartment' });
+    await scheduleForBooking(schedulerDeps(), no);
+    await openWindow();
     await db.execute(sql`UPDATE guests SET marketing_opt_in = true`);
     await db.execute(
       sql`UPDATE scheduled_messages SET send_at = ${minutesBefore(1)} WHERE kind = 'winback'`,

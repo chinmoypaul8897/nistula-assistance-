@@ -411,7 +411,9 @@ function canonicaliseRosterVillas(member: StaffMember): string[] {
     const detail =
       resolution.kind === 'ambiguous'
         ? `names a villa TYPE (${resolution.villas.map((v) => v.label).join(', ')}), not one house`
-        : 'is not a villa we know';
+        : resolution.kind === 'retired'
+          ? 'names a three-bedroom Assagao villa Nistula no longer lets — routing to it is impossible'
+          : 'is not a villa we know';
     throw new ConfigError(
       `STAFF_ROSTER_JSON: villa "${entry}" for "${member.name}" ${detail}. ` +
         `Use a canonical label: ${VILLAS.map((v) => v.label).join(', ')}.`,

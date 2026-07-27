@@ -1383,9 +1383,11 @@ it — the change is just an env edit.
 
 **Do not act on `bookings_mirror.physical_room_label`.**
 
-eZee holds 8 houses inside 3 room types, so a booking cannot name a house — eZee auto-assigns
-lowest-number-first. The label is **not** the house the guest booked. The AI is therefore forbidden
-from speaking one (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`) and says "your Nistula Villa".
+eZee holds ~~8 houses inside 3 room types~~ **4 houses inside 2 room types (CH-20, 2026-07-27 — the
+four three-bedroom Assagao villas were retired 2026-07-24)**, so a booking cannot name a house — eZee
+auto-assigns lowest-number-first. The label is **not** the house the guest booked. The AI is
+therefore forbidden from speaking one (`stayView.TRUST_EZEE_ROOM_ASSIGNMENT = false`) and says
+~~"your Nistula Villa"~~ **"your Nistula Apartment"** (or names the Siolim villa's type).
 
 **🚨 SUPERSEDED 2026-07-16 — read CLAUDE.md §OQ-19 before acting on anything above.** The website
 abolished house-level choice, so there is no "guest's house" for eZee's assignment to contradict:
@@ -1466,11 +1468,19 @@ correct behaviour, not a bug — but it means:
 ### The roster
 
 `STAFF_ROSTER_JSON` is boot-validated: phones normalise to E.164, and **villas must resolve to a
-canonical label** (`"B3"` → `Villa B3`). An unknown or ambiguous villa **REFUSES BOOT** — without
-that, a typo'd round matches nothing and every task for that house silently routes to the front desk,
-which presents as a mysterious ops workload rather than a config error. `villas: []` is legal and
-means "no specific round" (NOT a wildcard). **The frontdesk LEAD is the first `frontdesk` member —
-roster order is a contract.** The roster may be empty; it fails closed on its own.
+canonical label** (~~`"B3"` → `Villa B3`~~ **`"apt 9"` → `Apartment 09`**). An unknown or ambiguous
+villa **REFUSES BOOT** — without that, a typo'd round matches nothing and every task for that house
+silently routes to the front desk, which presents as a mysterious ops workload rather than a config
+error. `villas: []` is legal and means "no specific round" (NOT a wildcard). **The frontdesk LEAD is
+the first `frontdesk` member — roster order is a contract.** The roster may be empty; it fails closed
+on its own.
+
+**🚨 CH-20 (2026-07-27): the only four canonical labels are `Apartment 06`, `Apartment 09`,
+`Apartment 11` and `Siolim 4BHK`.** A roster naming a RETIRED villa — `Villa B1/B3/C1/C3`, whose
+contract ended 2026-07-24 — also **REFUSES BOOT, deliberately**, with a message saying so: a card
+cannot be routed to a house Nistula no longer operates, and failing at boot is the only place a human
+is still watching. This is the one case where the boot refusal is *expected* rather than a typo, so
+the message names the cause instead of just calling the label unknown.
 
 ### Verifying it locally
 

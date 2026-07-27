@@ -3594,3 +3594,131 @@ delete it once the parent's own release carries the patched version and let `pnp
   silently skipped, and two of them here are security backstops.
 - `pnpm` itself is one minor behind (11.10.0 → 11.17.0, pinned by `packageManager`). Not touched —
   the toolchain pin is load-bearing for CI reproducibility.
+
+---
+
+### CH-20 · Retire the four Assagao three-bedroom villas — DONE 2026-07-27
+
+**Branch** `chunk/CH-20-retire-assagao-villas` (resumed; the 2026-07-25 WIP commit was restructured into
+six logical commits per §3.6 — the tree was byte-compared against the verified WIP before rewording, so
+the restructure changed nothing). Spec: `docs/CH-20-villa-retirement-handoff.md` §4a–§4e, carried into
+the repo by this chunk. Not in plan.md — a post-v1 inventory change, not a build chunk.
+
+**The business fact.** Nistula's contract for **Villa B1, B3, C1 and C3** ended **2026-07-24**; they were
+removed from eZee and from the website. That is not four rows — it is an **entire room type**
+("Nistula Villa"). Inventory went from **8 houses in 3 types to 4 houses in 2**: Apartment 06 / 09 / 11
+plus the Siolim 4BHK. Owner-confirmed 2026-07-24/25; no current or future guest holds one of these
+bookings, and no new one can arrive.
+
+**🚨 WHY THIS WAS URGENT, and it is not tidiness.** Before this chunk the four ids were still in
+`VILLAS` and **404 at the website** — which `websiteApi` reports as unavailable/upstream_down. So a
+guest asking "is a 3bhk free 20–22 Dec?" could be told **their DATES were taken** for a house Nistula
+does not operate: a false statement about a real product, from a system whose first rule is never to
+invent. `state-report.md` §4.11 / §10.2 flagged it as the highest guest-facing risk on `main`, and it
+had been true for three days.
+
+**And the record's explanation of it was WRONG.** plan.md §5.4 carried a 2026-07-21 caveat reading the
+same 404s as *"the website rebuild probably changed those IDs — do not trust these rows until the drift
+is resolved."* **The ids never moved. The houses are gone.** The fix is DELETION, not id-hunting. Both
+plan.md and CLAUDE.md now say so explicitly, including *do not re-add the rows to silence a
+`task_unmapped_room_id` alert* — that would re-create the product.
+
+**The design: one table was answering two questions, and the retirement separates them.**
+
+| question | answer after CH-20 |
+|---|---|
+| *What may we SELL?* | loses all four — not sellable, priced, offered or described |
+| *Does this text NAME a house?* | **still yes** — a guest may still ask, and `namesPhysicalHouse` must still flag "Villa B3" |
+
+Hence a new resolver kind **`retired`** rather than plain deletion. Two traps the naive fix hits, both
+avoided and both now pinned by tests:
+- `"3bhk"` would resolve to an **empty `ambiguous`**, which `quoteType` records as a false
+  `degraded('down')` — after three enquiries the breaker **stops quoting for every guest**.
+- deleting the `b1/b3/c1/c3` aliases would make `byLabel` **throw**, with no try/catch above it —
+  guest-facing silence.
+
+Bare `"villa"` stays `none`, deliberately: Siolim IS a villa, and it is the company's own noun.
+
+**Shipped:** the `retired` kind + `RETIRED_VILLA_LABELS` + `isRetiredVillaType` (`lib/villas.ts`) · a new
+`INVENTORY_RETIRED` error from all three price tools, carrying the instruction to give the approved line
+and **never blame the dates** · `PHRASEBOOK.inventoryRetired` (Paul-approved) + a standing block [4]
+rule · `sendGuards.marketingBlock` **SKIPS** `winback`/`lead_followup` for the retired type · a new
+`skipped_inventory_retired` lead outcome · a roster naming a retired villa still **refuses boot**, now
+with a message that names the cause · `kb-build`'s inventory sentence **derived from `VILLAS`** instead
+of the hardcoded "eight private homes" that had silently gone false.
+
+**Two verb decisions, both the standing rule applied:**
+- Marketing **SKIPS**, not defers. Skipping is terminal here, so a rule may only skip on **a fact that
+  cannot come back** — a retirement is exactly that.
+- The lead gate got its **own outcome** rather than reusing `skipped_no_type`. Both fail closed, so
+  collapsing them looks free — but "unresolvable" merely **coincides** with "retired" today, which is
+  this repo's signature defect shape, and an operator reading `skipped_no_type` would hunt for a
+  resolver bug that does not exist.
+
+**Test work: 58 files MENTION a departed villa; only 16 files / 39 tests actually FAILED.** The suite was
+run first to get the real list, exactly as the handoff insisted — no blind find-replace. Each hit was
+classified: mechanical retarget (the villa was incidental scaffolding), meaningful rewrite, or refuse.
+
+**The refusals matter more than the fixes**, and all four came from the handoff's DO-NOT-TOUCH list:
+- `kb/source/roomtypes.json` keeps its "Nistula Villa" entry. It is a **dated external capture**, not our
+  config; deleting it to pass a test destroys the evidence the occupancy equality is anchored to. The
+  invariant was narrowed **by name** instead, so a genuinely NEW eZee type still fails.
+- The B3 eZee fixture stays, and now asserts the contract it demonstrates: **we refuse where we ACT,
+  never where we RECORD.** A retired RoomID stops mapping and eZee's raw `RoomName` rides through —
+  history happened, and the mirror must keep ingesting it.
+- `lifecycle-templates`' four departed labels stay green, unchanged.
+- `stay-guards` keeps "your stay is in Villa C3" a violation — plus a NEW test that a retired unit is
+  still a violation even if something claims we assigned it.
+
+**A distinction worth recording for the next inventory change:** several "meaningful" rewrites were not
+about strings at all — the old fixtures had become **unreachable in production**. A roster entry of
+"B3" now refuses boot; eZee cannot assign a house that is gone; a retired RoomID resolves no door. Those
+tests were asserting rules on inputs the system can no longer be given, which is a passing test that
+proves nothing. `config.test.ts`'s shared-phone case was the clearest: the retirement check threw
+**before** the phone check, so it had quietly stopped testing phones.
+
+**🚨 THE WIP HAD ZERO COVERAGE OF ITS OWN NEW BEHAVIOUR.** `isRetiredVillaType` was unit-tested; every
+path that USES it was not. Added: the three price tools return `INVENTORY_RETIRED`, call no website and
+record **no health signal** (a retirement is not an outage — recording `down` would let three 3BHK
+enquiries trip the degraded breaker); the refusal message forbids blaming the dates; `marketingBlock`
+skips a retired win-back **with every other gate deliberately satisfied**, while an apartment win-back
+still sends (the guard is precise, not a blanket); block [3] carries no departed house.
+
+**Acceptance contract amended (§4b), struck in place under dated AMENDED boxes — never silently
+rewritten**, because `docs/product-picture.md` is what `replay.test.ts` asserts against. Five of the six
+scenarios opened on a house that no longer exists. What each scenario PROVES is unchanged; only the
+product moved. **S3 retargeted onto the apartments is a STRICTER test of the same rule** — they are now
+the only multi-unit type left, so they are the only place "eZee picks the door, we never promise it" can
+still be exercised. **One beat was ADDED, not retargeted:** S1 and S6 now assert the retirement line, and
+the negative with it.
+
+**That new assertion caught its own first draft** — a lesson worth keeping. The naive form banned
+`/those dates/`, and **it failed on the approved line itself**, which legitimately ends *"Shall I check
+either for those dates?"*. An offer to check is the opposite of a claim. The pattern now bans the
+**availability CLAIM**, not the word.
+
+**Verified (exit codes read directly, single process, never grepped):**
+- `pnpm check` → **exit 0** · **106/106 files, 1813/1813 tests**, 490 s.
+- `pnpm replay` → **exit 0, 6/6 scenarios PASS**, in a separate process after the gate.
+- `pnpm audit --audit-level high` → exit 0 (rides on FIX-4, merged earlier this session).
+
+**A FLAKE, recorded because the next session will hit it.** The FIRST full gate came back
+`1812/1813` — one failure in `test/consent-stop-optin.test.ts`, `rejects "yes but not this time"`. It was
+**not a logic failure**: the message was `Hook timed out in 10000ms` on the `beforeEach` TRUNCATE, so the
+assertion never ran (and `isAffirmative` is a pure string function that cannot touch the DB). It passed
+in isolation, and the re-run of the full gate was 1813/1813. **On this box the DB `beforeEach` TRUNCATE
+can exceed the 10 s hook timeout under load — read the failure MESSAGE before believing the test name.**
+
+**Scope note carried from the handoff, and it is a real limit:** `pnpm replay`'s fixture website echoes
+back any `villaId` with constant amounts, so **6/6 PASS is NOT evidence that the villa map is correct**.
+Only the live probe below tests that.
+
+**Open / carried:**
+- **OQ-29 / OQ-30 filed** in `docs/open-questions.md` (append-only; OQ-19's narrative untouched and
+  superseded by date). **OQ-19's business half got SHARPER, not resolved:** the apartments were one of
+  two multi-unit types and are now the **only** one, so every multi-unit behaviour rests on that single
+  answer. OQ-30 records the accepted gap — a group of six in Assagao now has no product.
+- **`WEBSITE_BASE_URL` still points at the Vercel preview**, not `nistula.life`. Untouched deliberately:
+  that is a deployment decision, not a CH-20 one, and it is the other half of state-report §8.2.
+- The four departed labels remain in `test/lifecycle-review-fixes.test.ts`'s template-escaping cases on
+  purpose — they prove a house name in a param is REJECTED, which the retirement does not affect.

@@ -32,7 +32,8 @@ export const s3: Scenario = {
   id: 'S3',
   title: 'Two towels — task, house on the card not the reply, SLA nudge, DONE',
   async run(h) {
-    // Rahul is in-house in a Nistula Villa (checked in yesterday, out in two days).
+    // Rahul is in-house in a Nistula Apartment (checked in yesterday, out in two
+    // days). CH-20: was a Nistula Villa — that type was retired 2026-07-24.
     await seedBooking(h.db, {
       reservationNo: RES,
       guestName: 'Rahul Menon',
@@ -62,13 +63,13 @@ export const s3: Scenario = {
     assert.equal(tasks.length, 1, 'S3: exactly one task raised');
     const task = tasks[0];
     assert.equal(task?.kind, 'housekeeping', 'S3: a housekeeping task');
-    assert.equal(task?.villaLabel, 'Villa B3', 'S3: the card names the house from BKG-03 (OQ-19)');
-    assert.equal(task?.assignedPhone, HOUSEKEEPER_PHONE, 'S3: routed to the B3 housekeeper');
+    assert.equal(task?.villaLabel, 'Apartment 09', 'S3: the card names the house from BKG-03 (OQ-19)');
+    assert.equal(task?.assignedPhone, HOUSEKEEPER_PHONE, 'S3: routed to the Apartment 09 housekeeper');
 
     // The card reached the housekeeper and carries the house + the ask.
     const card = textSendsTo(h, HOUSEKEEPER_PHONE);
     assert.equal(card.length, 1, 'S3: exactly one card delivered to the housekeeper');
-    assert(/Villa B3/.test(card[0]?.body ?? ''), 'S3: the card names Villa B3');
+    assert(/Apartment 09/.test(card[0]?.body ?? ''), 'S3: the card names Apartment 09');
     assert(/towel/i.test(card[0]?.body ?? ''), 'S3: the card carries the ask');
 
     // The guest REPLY is the promise, licensed by the successful task — and it
@@ -80,7 +81,7 @@ export const s3: Scenario = {
     // ASSIGNMENT=false, not by a hard guardrail on arbitrary phrasing — so this
     // checks the scripted reply's COMPLIANCE (a prompt property, human-pass
     // territory), not a guardrail. The guard that DOES catch a bound unit
-    // assertion ("you're in Villa B3") is scanUnitAssertions, unit-tested in
+    // assertion ("you're in Apartment 09") is scanUnitAssertions, unit-tested in
     // stay-guards.test.ts. What IS proven here by real code: the CARD names the
     // house (fresh BKG-03) while the reply, on the same turn, does not.
     assert(!/Villa B3|\bB3\b|Apartment/.test(guestSends[0]?.body ?? ''), 'S3: the reply names NO house (OQ-15)');

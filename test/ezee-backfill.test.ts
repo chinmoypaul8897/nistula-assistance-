@@ -60,7 +60,12 @@ describe('backfillBookings', () => {
     expect(result.failed).toEqual(['MISSING-1']);
     const row = await getMirrorByReservationNo(db, '11241600');
     expect(row?.status).toBe('checked_in'); // CurrentStatus Arrived
-    expect(row?.physicalRoomLabel).toBe('Villa B3'); // RoomID → §5.4 label
+    // The fixture is a real booking in Villa B3, retired 2026-07-24 (CH-20), so
+    // its RoomID no longer maps to a §5.4 label and eZee's own RoomName rides
+    // through. Asserted deliberately rather than retargeted: backfill exists to
+    // recover HISTORY, and history contains houses we no longer let. We refuse
+    // where we ACT, never where we RECORD.
+    expect(row?.physicalRoomLabel).toBe('B3');
     const stays = await db.select().from(schema.guestStays);
     expect(stays.some((s) => s.bookingId === row?.id)).toBe(true);
   });

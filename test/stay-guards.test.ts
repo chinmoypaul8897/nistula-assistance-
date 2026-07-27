@@ -125,9 +125,22 @@ describe('unit assertions — the AI may name a house only when eZee gave us one
   });
 
   it('allows the unit eZee actually assigned', () => {
-    expect(scanUnitAssertions('Your Villa B3 is ready for you.', ['Villa B3']).violations).toEqual(
-      [],
-    );
+    // CH-20: was 'Villa B3'. That house was retired 2026-07-24, so eZee can no
+    // longer assign it — the old fixture asserted the allow-path on an input
+    // production cannot produce. The rule is unchanged, on a live house.
+    expect(
+      scanUnitAssertions('Your Apartment 09 is ready for you.', ['Apartment 09']).violations,
+    ).toEqual([]);
+  });
+
+  it('🚨 a RETIRED unit is still a violation even if something claims we assigned it', () => {
+    // The retirement must not become a hole in the house-naming guard: the
+    // allowed-units list comes from a fresh eZee read, and if a stale or
+    // malformed one ever carried a departed house, binding a guest to it is
+    // still the OQ-19 failure. "Names a house" outlived "may we sell it".
+    expect(
+      scanUnitAssertions('Your Villa B3 is ready for you.', ['Villa B3']).violations.length,
+    ).toBe(1);
   });
 
   // The over-fire guard. Pre-sales names villas constantly — the voice guide's

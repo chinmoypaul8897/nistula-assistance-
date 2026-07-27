@@ -37,9 +37,17 @@ describe('buildKb', () => {
 
   it('renders villa facts from the identity map + occupancy join', () => {
     const villas = buildKb(realSources()).files['villas.md'];
-    // Villa B3: type + Assagao + occupancy (maxAdults 7 from roomtypes) + pool.
-    expect(villas).toContain('### Villa B3');
-    expect(villas).toContain('3-bedroom villa in Assagao · sleeps up to 7 · Private pool');
+    // Apartment 09: type + Assagao + occupancy (maxAdults 5 from roomtypes) + pool.
+    // Was Villa B3 until CH-20 retired the three-bedroom houses (2026-07-24).
+    expect(villas).toContain('### Apartment 09');
+    expect(villas).toContain('2-bedroom apartment in Assagao · sleeps up to 5 · Shared pool');
+    // 🚨 And the departed houses are GONE from the block the model reads. This
+    // is the assertion that matters: block [3] is the AI's source of truth for
+    // villa facts, so a leftover "### Villa B3" would let it describe — warmly,
+    // in detail, from "knowledge" — a house Nistula no longer lets.
+    for (const gone of ['Villa B1', 'Villa B3', 'Villa C1', 'Villa C3']) {
+      expect(villas).not.toContain(gone);
+    }
   });
 
   it('makes NO pool claim for Siolim anywhere in the file (OQ-09 unconfirmed)', () => {

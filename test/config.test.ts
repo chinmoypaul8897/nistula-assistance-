@@ -118,8 +118,10 @@ describe('AUTO_SEND_TYPES validation (CH-16)', () => {
 
   it('refuses a roster where two members share one phone', () => {
     const roster = JSON.stringify([
-      { name: 'Meera', phone: '7700900010', role: 'frontdesk', villas: ['B1'] },
-      { name: 'Ravi', phone: '07700900010', role: 'housekeeping', villas: ['B3'] },
+      // CH-20: villas must be houses we still let, or the RETIREMENT check
+      // throws first and this test stops proving anything about phones.
+      { name: 'Meera', phone: '7700900010', role: 'frontdesk', villas: ['Apartment 06'] },
+      { name: 'Ravi', phone: '07700900010', role: 'housekeeping', villas: ['Apartment 09'] },
     ]);
     expect(() => loadConfig({ ...minimalEnv, STAFF_ROSTER_JSON: roster })).toThrow(
       /Meera.*Ravi|share one phone/,
@@ -128,7 +130,7 @@ describe('AUTO_SEND_TYPES validation (CH-16)', () => {
 
   it('parses and normalises STAFF_ROSTER_JSON — phones AND villas (CH-13a)', () => {
     const roster = JSON.stringify([
-      { name: 'Meera', phone: '91 77009 00010', role: 'frontdesk', villas: ['B1', 'B3'] },
+      { name: 'Meera', phone: '91 77009 00010', role: 'frontdesk', villas: ['apt 6', 'a9'] },
     ]);
     const config = loadConfig({ ...minimalEnv, STAFF_ROSTER_JSON: roster });
     expect(config.staffRoster).toEqual([
@@ -138,9 +140,11 @@ describe('AUTO_SEND_TYPES validation (CH-16)', () => {
         role: 'frontdesk',
         // CH-13a: villas are canonicalised at boot for the same reason phones
         // are — assignFor matches them against eZee-derived labels, and
-        // "B1" would match nothing, silently routing every task to the front
+        // "apt 6" would match nothing, silently routing every task to the front
         // desk. Full battery in test/staff-roster.test.ts.
-        villas: ['Villa B1', 'Villa B3'],
+        // CH-20: was ['B1','B3'] → ['Villa B1','Villa B3']; those houses were
+        // retired 2026-07-24 and now refuse boot instead of canonicalising.
+        villas: ['Apartment 06', 'Apartment 09'],
       },
     ]);
   });

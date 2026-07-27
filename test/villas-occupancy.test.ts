@@ -55,10 +55,36 @@ describe('villas.ts occupancy ≡ roomtypes.json (single truth)', () => {
     }
   });
 
-  it('the snapshot has no room types villas.ts does not know', () => {
+  it('the snapshot has no room types villas.ts does not know — except the RETIRED one', () => {
+    // 🚨 CH-20. roomtypes.json is a DATED eZee CFG-05 capture, and on its capture
+    // date the property really did have five room types. The three-bedroom
+    // Assagao type (…0003, "Nistula Villa") was retired 2026-07-24 and dropped
+    // from VILLAS, so a strict "everything in the snapshot is known" now fails.
+    //
+    // The tempting fix — deleting the entry from the snapshot — is the wrong
+    // one: it is an external record of what eZee returned, not our config, and
+    // editing it to make a test pass destroys the evidence the equality checks
+    // above are anchored to. (A refreshed capture belongs at cutover.)
+    //
+    // So the invariant is narrowed by NAME, not weakened: a snapshot type must
+    // be either modelled or on the explicit retired list. A genuinely NEW type
+    // eZee starts returning still fails this test, which is the whole point —
+    // that is inventory we would otherwise never learn we cannot sell.
+    const RETIRED_ROOM_TYPE_IDS = new Set(['5220300000000000003']); // "Nistula Villa"
     const known = new Set(VILLAS.map((v) => v.roomTypeId));
     for (const roomType of snapshot.roomTypes) {
-      expect(known.has(roomType.roomTypeId), roomType.typeName).toBe(true);
+      const accounted = known.has(roomType.roomTypeId) || RETIRED_ROOM_TYPE_IDS.has(roomType.roomTypeId);
+      expect(accounted, `${roomType.typeName} is neither modelled nor a known retirement`).toBe(true);
     }
+  });
+
+  it('the retired type is genuinely ABSENT from villas.ts, not merely unreferenced', () => {
+    // The other direction of the same fact: nothing sellable may still point at
+    // the departed room type. Without this, a stray row would keep it quotable.
+    for (const villa of VILLAS) {
+      expect(villa.roomTypeId, villa.label).not.toBe('5220300000000000003');
+      expect(villa.typeName, villa.label).not.toBe('Nistula Villa');
+    }
+    expect(VILLAS).toHaveLength(4); // 3 apartments + Siolim
   });
 });

@@ -30,10 +30,6 @@ The ask is question Q-"per-villa quirks" in docs/team-questions.md (OQ-01).
 =============================================================================
 -->
 
-<!-- ## Villa B1 -->
-<!-- ## Villa B3 -->
-<!-- ## Villa C1 -->
-<!-- ## Villa C3 -->
 <!-- ## Apartment 06 -->
 <!-- ## Apartment 09 -->
 <!-- ## Apartment 11 -->

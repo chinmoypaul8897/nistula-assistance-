@@ -10,18 +10,51 @@
 > DEFERRED to real-number cutover (runbook §CH-19). One beat below is struck as a post-v1 fast-follow — see
 > the S2 amendment.
 
+> ## ⚠️ AMENDED 2026-07-27 (CH-20 · inventory change), Paul-approved
+> **Nistula's contract for the four three-bedroom Assagao villas — Villa B1, B3, C1 and C3 — ended on
+> 2026-07-24. They were removed from eZee and from the website. Nistula now lets FOUR houses in TWO
+> room types: Apartment 06, Apartment 09, Apartment 11 (the "Nistula Apartment" type) and the Siolim
+> 4BHK.** Removing all four retired an ENTIRE room type, not just rows.
+>
+> **Every scenario below was written against the old eight-house inventory, and five of the six opened
+> on a house that no longer exists.** They are amended in place and struck where a beat changed —
+> never silently rewritten, because this file is the contract `test/acceptance/replay.test.ts` asserts
+> against. **What each scenario PROVES is unchanged**; only the product it proves it on has moved. The
+> apartments still share one room type, so every multi-unit behaviour (type-level quoting, eZee
+> assigning the house, "never name a unit to a guest") survives intact on them.
+>
+> **One beat is ADDED, not merely retargeted — S1's opening.** A guest asking for a three-bedroom is
+> not a hypothetical: the four villas were sold for years, and their website ids 404 today. Before
+> CH-20 that guest got a 404 the tools could not distinguish from "taken", so **the AI could tell a
+> guest the dates were unavailable for a house Nistula no longer operates** — a false statement about
+> a real product, in a system whose first rule is never to invent. The retirement line is now an
+> asserted beat, and "never blame the dates" is asserted with it.
+>
+> Original text preserved in git history. Retractions stay visible.
+
 Legend: **G** = guest's WhatsApp · **A** = the AI (Nistula voice) · **H** = human staff (from the normal app) · **STAFF** = what the team's phones receive · **SYS** = what the system must have done (assertable).
 
 ---
 
 ## S1 · Midnight enquiry (pre-sales, no human)
 
-- G 23:42 — "Hi, is a 3bhk villa available 20-22 dec? what will be the rate"
-- A 23:42 — Good evening + yes: 3BHK duplex villas in Assagao free for 20–22 Dec, exact all-inclusive ₹ figure from the live quote, sleeps info, offer of photos or the booking link.
-- G 23:43 — "any discount for direct booking?"
-- A 23:43 — Phrasebook discount line (final rate for everyone, all-inclusive) + booking link. No discount words, no apology.
+> **⚠️ AMENDED 2026-07-27 (CH-20), Paul-approved.** The guest's opening line is UNCHANGED — a guest
+> really does still ask for a 3BHK — but ~~the AI's reply quoted it~~. It cannot: that product was
+> retired 2026-07-24. The retirement beat is now asserted, and the scenario then continues onto the
+> apartments so it still proves what it was built to prove (live quote, ₹ trace, discount phrasebook,
+> booking link). **The critical negative: the AI must NOT say the dates are taken.** A 404 from a
+> retired id is indistinguishable from "unavailable" to anything downstream, and blaming the dates
+> would be a false statement about a real house.
 
-STAFF: nothing. SYS: ack <1s · debounce batched · `get_quote` called (villa type resolved from "3bhk") · every ₹ in replies present in tool JSON (guardrail 1 log clean) · booking link from `get_booking_link` · conversation logged · in draft mode this pauses at a draft card instead.
+- G 23:42 — "Hi, is a 3bhk villa available 20-22 dec? what will be the rate"
+- A 23:42 — the approved retirement line: we no longer let the three-bedroom houses in Assagao, here is what we do have (the Assagao apartments, the four-bedroom villa in Siolim), shall I check either for those dates. **No ₹ figure, no house named, no claim about availability.**
+- G 23:43 — "the apartments then — same dates"
+- A 23:43 — yes: apartments in Assagao free for 20–22 Dec, exact all-inclusive ₹ figure from the live quote, sleeps info, offer of photos or the booking link.
+- G 23:44 — "any discount for direct booking?"
+- A 23:44 — Phrasebook discount line (final rate for everyone, all-inclusive) + booking link. No discount words, no apology.
+
+STAFF: nothing. SYS: ack <1s · debounce batched · `get_quote` on "3bhk" returned **`INVENTORY_RETIRED`** and **no quote was issued for it** · `get_quote` called for the apartment TYPE · every ₹ in replies present in tool JSON (guardrail 1 log clean) · booking link from `get_booking_link` · conversation logged · in draft mode this pauses at a draft card instead.
+**Asserted negatives:** no reply names Villa B1/B3/C1/C3 or the "Nistula Villa" type · no reply attributes the retirement to dates being taken/booked/unavailable.
 
 ## S2 · Booking made (lifecycle, zero staff typing)
 
@@ -39,7 +72,7 @@ STAFF: nothing. SYS: ack <1s · debounce batched · `get_quote` called (villa ty
 >
 > The original text is preserved in git history. Retractions stay visible.
 
-Event: a **direct** booking (website / walk-in) appears in eZee for Rahul M, 3BHK type, 20–22 Dec, phone present.
+Event: a **direct** booking (website / walk-in) appears in eZee for Rahul M, ~~3BHK type~~ **Nistula Apartment type (CH-20, 2026-07-27 — the 3BHK type was retired 2026-07-24)**, 20–22 Dec, phone present.
 *(An OTA booking mirrors identically but is **not** messaged — see the amendment above.)*
 
 - A (moment of booking) — confirmation: name, villa **type** + Assagao, dates, reference, check-in from 3 pm, "we're right here for any question."
@@ -61,7 +94,15 @@ SYS: poller mirrored the booking ≤60s · guest row auto-created from booking p
 
 ## S3 · Two towels (in-stay service + honest follow-up)
 
-Precondition: Rahul linked to an ACTIVE stay in Villa B3.
+Precondition: Rahul linked to an ACTIVE stay in ~~Villa B3~~ **Apartment 09 (CH-20, 2026-07-27)**.
+
+> **⚠️ AMENDED 2026-07-27 (CH-20), Paul-approved.** The stay, the staff card's house and the roster
+> round all move from Villa B3 to an apartment. **Nothing this scenario proves changes**: the
+> apartments share one room type and eZee assigns the unit, so the card still names a house resolved
+> from a FRESH `BKG-03 tran.RoomID` read at task time, and the AI's reply still names no house at all.
+> Retargeting it onto the apartments is in fact a STRICTER test of the same rule — the apartments are
+> now the ONLY multi-unit type left, so they are the only place the "eZee picks the door, we never
+> promise it" contract can still be exercised.
 
 - G 15:20 — "hi, can we get 2 extra towels"
 - A 15:20 — "Of course — two fresh towels are on their way up. Anything else you need this afternoon?"
@@ -79,7 +120,7 @@ Precondition: Rahul linked to an ACTIVE stay in Villa B3.
   > the sentence (`REGISTER_EXEMPLARS[0]` was that exact line and is now "Two towels are on their way
   > up."). Widening the guard's cues is CH-11 surface with real false-positive risk on the pre-sales
   > quote path — filed, not hot-fixed under merge pressure.
-- STAFF 15:20 — task card: `NISTULA TASK #<id> · Nistula Villa (Assagao) · Rahul · 2 extra towels · Reply DONE <id>`
+- STAFF 15:20 — task card: `NISTULA TASK #<id> · ~~Nistula Villa~~ **Apartment 09** (Assagao) · Rahul · 2 extra towels · Reply DONE <id>` *(CH-20, 2026-07-27)*
   **🚨 OQ-19 amendment, REVISED 2026-07-16 (this supersedes the earlier amendment on this line —
   which said the card must never name a house and was written before the answer landed): the card MAY
   name the house, sourced from a FRESH `BKG-03 tran.RoomID` read at task time — NEVER from
@@ -103,7 +144,8 @@ SYS: `create_staff_task` succeeded BEFORE the 15:20 promise (guardrail 2) · fol
 
 ## S4 · Special request (human takeover + escalation SLA)
 
-Different guest (Villa B1, arriving Friday).
+Different guest (~~Villa B1~~ **Apartment 06 (CH-20, 2026-07-27)**, arriving Friday).
+*(The guest's line still says "at the villa" — that is a guest's own word for where they are staying, and Nistula remains a villa company. Nothing here depends on a three-bedroom house.)*
 
 - G 12:15 — "we are planning a proposal at the villa, can you decorate the pool area? budget not an issue"
 - A 12:15 — warm congratulations + "our villa team will design this personally; someone will message you right here very shortly." (No invented capabilities, no price talk.)
@@ -116,17 +158,30 @@ SYS: `escalate_to_human(reason: outside_kb)` ran · echo webhook paused the AI +
 
 ## S5 · Night issue (honest hold, morning digest)
 
-Rahul, in-house B3, 23:05 (staff off 20:00–10:00).
+Rahul, in-house ~~B3~~ **Apartment 09 (CH-20, 2026-07-27)**, 23:05 (staff off 20:00–10:00).
 
 - G 23:05 — "the AC in the master bedroom feels weak, can someone look at it"
 - A 23:05 — sorry once, plainly + honest timing: logged for the villa team, "they'll be at your door soon after 10 when the team comes in" + (only if kb/quirks.md has it) the practical tip: "the second bedroom's AC runs strong — please use it comfortably tonight." No promise of a night visit. Never silence.
-- STAFF 10:00 — morning digest: overnight queue (1): B3 · AC weak · 23:05 · guest informed of 10 am visit; night_queue task converts to live task, SLA starts.
+- STAFF 10:00 — morning digest: overnight queue (1): ~~B3~~ **Apartment 09** · AC weak · 23:05 · guest informed of 10 am visit; night_queue task converts to live task, SLA starts. *(CH-20, 2026-07-27)*
 
 SYS: maintenance intent + staff-off → night_queue path (no 23:05 staff ping) · quirk line only from kb/quirks.md, never invented · digest lists it · task open with running clock.
 
 ## S6 · Three months later (win-back + memory)
 
-Precondition: Rahul's stay ended ~75 days ago; `marketing_opt_in=true` (captured via post-stay YES); one `past_issue` fact ("AC weak in B3 master — resolved") and one `preference` fact ("early check-in matters").
+Precondition: Rahul's stay ended ~75 days ago; `marketing_opt_in=true` (captured via post-stay YES); one `past_issue` fact (~~"AC weak in B3 master — resolved"~~ **"AC weak in the apartment master — resolved"**) and one `preference` fact ("early check-in matters"). *(CH-20, 2026-07-27)*
+
+> **⚠️ AMENDED 2026-07-27 (CH-20), Paul-approved.** Rahul's stay becomes an **apartment** stay, and
+> the win-back names the **Nistula Apartment** type + locality. Two things this amendment must not be
+> read as softening:
+> 1. **A win-back for a RETIRED type is not retargeted — it is SKIPPED.** `lifecycle/sendGuards.ts`
+>    blocks `winback` and `lead_followup` when the scheduled row's stored `villaType` is the retired
+>    product (reason `inventory_retired`). SKIP, not defer, is the correct verb here by the standing
+>    rule — **a retirement cannot come back**, so the row can never become sendable. Any residual row
+>    typed to a departed villa dies quietly rather than inviting a guest to re-book a house Nistula no
+>    longer lets.
+> 2. **The guest's reply now asks for the three-bedroom, on purpose.** A returning guest asking for
+>    more space is the likeliest way a real person meets the retired product, and it makes S6 assert
+>    the retirement line on the *memory* path as well as the pre-sales one.
 
 > **⚠️ AMENDED 2026-07-14 (CH-12), Paul-approved.** The win-back originally **"names the villa"**.
 > It may not, and neither may anything else we send: **a guest cannot book a specific house — eZee
@@ -137,11 +192,13 @@ Precondition: Rahul's stay ended ~75 days ago; `marketing_opt_in=true` (captured
 > prompt. **Naming a house to a GUEST is gated on OQ-15** (may we promise a specific house?) **and on
 > staleness — NOT on the PMS re-model, which OQ-19's 2026-07-16 answer removed as a precondition.**
 
-- A 11:00 (win-back template) — seasonal, personal, names the villa **TYPE + locality** (never a house — see above), zero pressure, "(Reply STOP anytime to stop these.)"
-- G 11:24 — "good timing. is b3 free 12-14 oct?"
-- A 11:24 — live ₹ figure from `get_quote` + memory in action: "and I remember early check-in matters to you — I've already flagged it to the team" (only if a task/fact action actually ran) + booking link offer.
+- A 11:00 (win-back template) — seasonal, personal, names the villa **TYPE + locality** (~~"your Nistula Villa in Assagao"~~ **"your Nistula Apartment in Assagao"** — never a house, see above), zero pressure, "(Reply STOP anytime to stop these.)"
+- G 11:24 — "good timing. is the 3bhk free 12-14 oct?" *(CH-20: ~~"is b3 free 12-14 oct?"~~ — same ask, now aimed at the retired TYPE)*
+- A 11:24 — the approved retirement line first (no ₹ figure, no fake "taken"), then what we do have.
+- G 11:25 — "ok the apartment then"
+- A 11:25 — live ₹ figure from `get_quote` + memory in action: "and I remember early check-in matters to you — I've already flagged it to the team" (only if a task/fact action actually ran) + booking link offer.
 
-SYS: win-back gated on opt-in + <2 in trailing 365d · reply opened a free-form window · profile block carried both facts · a frontdesk task exists to verify the past AC issue before the new arrival (auto-created on the new `booking.created` if he books) · STOP at any point flips opt-in off and cancels pending marketing.
+SYS: win-back gated on opt-in + <2 in trailing 365d · **a win-back whose stored `villaType` is the retired product is SKIPPED with reason `inventory_retired`, never sent** · reply opened a free-form window · profile block carried both facts · a frontdesk task exists to verify the past AC issue before the new arrival (auto-created on the new `booking.created` if he books) · STOP at any point flips opt-in off and cancels pending marketing.
 
 ---
 

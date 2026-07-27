@@ -88,7 +88,7 @@ async function insertLead(
       bookingId: null,
       kind: 'lead_followup',
       templateName: 'nst_lead_followup_v1',
-      params: { firstName: 'Rahul', villaType: 'Nistula Villa', dates: '20-22 Dec' },
+      params: { firstName: 'Rahul', villaType: 'Nistula Apartment', dates: '20-22 Dec' },
       sendAt: NOW,
       dedupeKey: `lead_followup:${guestId}:${randomUUID()}`,
       ...over,
@@ -127,7 +127,7 @@ const senderDeps = (wa: ReturnType<typeof makeWa>['wa']): SenderDeps => ({
   now: () => NOW,
 });
 
-const run = (guestId: string, quote = { villaLabel: 'B3', checkIn: '2026-12-20', checkOut: '2026-12-22' }) =>
+const run = (guestId: string, quote = { villaLabel: 'apt 9', checkIn: '2026-12-20', checkOut: '2026-12-22' }) =>
   scheduleLeadFollowup({ db, now: NOW }, { guestId, quote });
 
 // ── pure detection ───────────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ describe('scheduleLeadFollowup', () => {
     expect(row?.bookingId).toBeNull();
     expect(row?.status).toBe('pending');
     expect(row?.templateName).toBe('nst_lead_followup_v1');
-    expect(row?.params).toMatchObject({ villaType: 'Nistula Villa', firstName: 'Rahul' });
+    expect(row?.params).toMatchObject({ villaType: 'Nistula Apartment', firstName: 'Rahul' });
     // T+3d from 2026-07-14 = 2026-07-17, 11:00 IST = 05:30 UTC.
     expect(row?.sendAt.toISOString()).toBe('2026-07-17T05:30:00.000Z');
     // dedupeKey = lead_followup:<guestId>:<Monday-of-week>; 2026-07-14 is a Tue.
@@ -200,7 +200,7 @@ describe('scheduleLeadFollowup', () => {
     expect(await run(guestId)).toBe('scheduled');
     // A different villa/dates two days later is still one guest, one window.
     expect(
-      await run(guestId, { villaLabel: 'C1', checkIn: '2027-01-05', checkOut: '2027-01-08' }),
+      await run(guestId, { villaLabel: 'siolim', checkIn: '2027-01-05', checkOut: '2027-01-08' }),
     ).toBe('skipped_cap');
     const rows = await db.select().from(scheduledMessages);
     expect(rows).toHaveLength(1);
@@ -214,6 +214,27 @@ describe('scheduleLeadFollowup', () => {
     expect(await run(guestId)).toBe('skipped_cap');
     // Only the prior row exists — no new one.
     expect(await db.select().from(scheduledMessages)).toHaveLength(1);
+  });
+
+  it('🚨 skips a lead who enquired about a RETIRED villa — and says so distinctly', async () => {
+    // CH-20. The follow-up body invites the guest back to the product they
+    // enquired about, so a lead who asked for a three-bedroom must never get
+    // one: the invitation would be to a house Nistula no longer lets.
+    //
+    // The outcome is its OWN value, not `skipped_no_type`. Both fail closed, so
+    // collapsing them would look harmless — but they are different facts and
+    // only one is permanent. "Unresolvable" merely COINCIDES with "retired"
+    // today, and an operator reading `skipped_no_type` would go hunting for a
+    // resolver bug that does not exist.
+    const g = await seedGuest('+917700900558');
+    for (const label of ['B3', '3bhk', 'villa c1']) {
+      expect(await run(g, { villaLabel: label, checkIn: '2026-12-20', checkOut: '2026-12-22' })).toBe(
+        'skipped_inventory_retired',
+      );
+    }
+    // Nothing was written — this gate is EARLIER than the send-time backstop in
+    // sendGuards.marketingBlock, so no row exists to be judged later.
+    expect(await db.select().from(scheduledMessages)).toHaveLength(0);
   });
 
   it('skips an unresolvable villa and a nameless guest', async () => {
@@ -324,7 +345,7 @@ describe('conversion cleanup', () => {
       ezeeReservationNo: '953',
       guestName: 'Rahul Mehta',
       guestPhone: phone,
-      roomTypeName: 'Nistula Villa',
+      roomTypeName: 'Nistula Apartment',
       checkIn: '2026-12-20',
       checkOut: '2026-12-22',
       adults: 4,
@@ -393,7 +414,7 @@ function quotingRig() {
       const use = {
         id: 'tu_q',
         name: 'get_quote',
-        input: { villa_label: 'B3', check_in: '2026-12-20', check_out: '2026-12-22', adults: 2 },
+        input: { villa_label: 'apt 9', check_in: '2026-12-20', check_out: '2026-12-22', adults: 2 },
       };
       return {
         text: '',
@@ -403,7 +424,7 @@ function quotingRig() {
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
       };
     }
-    return textResult('That villa is ₹34,000 for the two nights — here is the link whenever you are ready.');
+    return textResult('That is ₹34,000 for the two nights — here is the link whenever you are ready.');
   };
   const deps: WorkerDeps = {
     db,
@@ -426,7 +447,7 @@ const leadRows = () =>
 describe('lead detection through the real worker', () => {
   it('schedules a lead follow-up after a quote to a lead-stage guest', async () => {
     const { conversation } = await seedConversation(db, '+917700900571');
-    await seedGuestMessage(db, conversation.id, 'how much is B3 for 20-22 dec?', 30);
+    await seedGuestMessage(db, conversation.id, 'how much is apt 9 for 20-22 dec?', 30);
     await processConversation(quotingRig(), conversation.id);
 
     const rows = await leadRows();
@@ -437,7 +458,7 @@ describe('lead detection through the real worker', () => {
 
   it('does NOT schedule after a refusal, even with a quote', async () => {
     const { conversation } = await seedConversation(db, '+917700900572');
-    await seedGuestMessage(db, conversation.id, 'how much is B3 for dec? actually we booked elsewhere', 30);
+    await seedGuestMessage(db, conversation.id, 'how much is apt 9 for dec? actually we booked elsewhere', 30);
     await processConversation(quotingRig(), conversation.id);
     expect(await leadRows()).toHaveLength(0);
   });
@@ -449,7 +470,7 @@ describe('lead detection through the real worker', () => {
       ezeeReservationNo: '961',
       guestName: 'Rahul Mehta',
       guestPhone: phone,
-      roomTypeName: 'Nistula Villa',
+      roomTypeName: 'Nistula Apartment',
       checkIn: '2099-01-01',
       checkOut: '2099-01-03',
       adults: 4,

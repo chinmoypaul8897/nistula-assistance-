@@ -28,9 +28,11 @@ const ZERO_USAGE: ConverseResult['usage'] = {
 export const FIXTURE_TOTAL = 34000;
 export const FIXTURE_PER_NIGHT = 17000;
 
-/** §5.4: Villa B3's eZee RoomID. The fixture door read returns this so
- * resolveDoor maps it back to the canonical label "Villa B3" (S3). */
-export const B3_ROOM_ID = '5220300000000000011';
+/** §5.4: Apartment 09's eZee RoomID. The fixture door read returns this so
+ * resolveDoor maps it back to the canonical label "Apartment 09" (S3).
+ * CH-20 (2026-07-27): was Villa B3's id (…011) — that house was retired
+ * 2026-07-24, so it no longer resolves to a door at all. */
+export const DOOR_ROOM_ID = '5220300000000000010';
 
 let tuSeq = 0;
 
