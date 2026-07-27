@@ -2,3 +2,25 @@
 # esbuild's install script places the platform binary tsx/vitest rely on.
 allowBuilds:
   esbuild: true
+
+# Security overrides — plan §3.3's `pnpm audit --audit-level high` is a CI gate,
+# and four HIGH advisories landed on TRANSITIVE deps we do not choose directly.
+# Every one is pinned to the advisory's own "patched versions" floor, held inside
+# the SAME MAJOR the dependent already resolved, so each is a patch/minor bump and
+# no parent's peer expectation moves. WHY caret and not the advisory's bare `>=`:
+# `>=3.1.4` resolves fast-uri to 4.x, a major jump under `ajv` — an unverified
+# upgrade smuggled in as a security fix.
+#
+# Each entry is a TEMPORARY pin: delete it once the parent's own release carries
+# the patched version, and let `pnpm audit` prove it is still clean.
+overrides:
+  # fastify > @fastify/ajv-compiler > ajv > fast-uri (9 paths) · GHSA-v2hh-gcrm-f6hx
+  # host confusion via a literal backslash authority delimiter. fastify 5.10.0 is
+  # already the newest release, so bumping fastify cannot close this — only a pin can.
+  fast-uri: ^3.1.4
+  # fastify > find-my-way · GHSA-c96f-x56v-gq3h — DDoS with HTTP/2. Same story.
+  find-my-way: ^9.6.1
+  # vitest > vite > postcss · GHSA-r28c-9q8g-f849 — path traversal via sourceMappingURL.
+  postcss: ^8.5.18
+  # eslint > minimatch > brace-expansion · GHSA-mh99-v99m-4gvg — DoS via unbounded expansion.
+  brace-expansion: ^5.0.8

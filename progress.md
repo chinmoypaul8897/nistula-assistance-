@@ -3523,3 +3523,74 @@ back with failures scattered across erasure/lifecycle/db-stays. None were real �
 running vitest concurrently, and the suites share `nistula_test` and TRUNCATE each other. **The
 standing "never two vitest at once" rule now has a second face: review AGENTS run tests too.** Do not
 start the gate while one is live.
+
+---
+
+### FIX-4 · CI has been red since 2026-07-22 — the audit gate, and what it was hiding — DONE 2026-07-27
+
+**Branch** `chunk/FIX-4-ci-green`. Issued by the architect's Step-1 re-sync off `docs/state-report.md`
+§1.5. Not part of the 25–26 Jul UAT backlog — this is the build's own supply chain.
+
+**The symptom, and the misreading it invites.** `main`'s CI had failed every run since 2026-07-22
+(runs `29889227897`, `30243293336`). It is tempting to read "CI red" as "the code is broken": it was
+not. **`pnpm check` SUCCEEDED on every one of those runs.** The failing step is the one after it,
+`pnpm audit --audit-level high` (plan §3.3).
+
+**🚨 THE PART THAT MATTERS, and it is not the advisories.** The workflow's steps are sequential with
+no `if:` conditions, so an aborting audit step takes the rest of the job with it — and the step after
+the audit is the **Fixture PII guard** (`.github/workflows/ci.yml:61`), the CI backstop that greps
+`test/fixtures/` and `test/acceptance/` for real-looking `+91`/plusless numbers. It has been
+**`skipped` on every run for five days**. Nothing leaked (the guard was re-run green here, and
+`test/fixture-scrub.test.ts` covers the same ground inside `pnpm check`), but the failure SHAPE is
+this repo's signature one: **a guard that still appears in the workflow, still looks configured, and
+had quietly stopped executing — its silence indistinguishable from a pass.** The advisories were four
+days of housekeeping; the skipped guard is the finding.
+
+**The state report's §1.5 was accurate WHEN WRITTEN and is now incomplete — do not fix from it alone.**
+It names `fast-uri` as the single advisory. Re-running the audit this session returned **four HIGH
+advisories**: the GitHub advisory database moved on after 22 Jul. A fix scoped to `fast-uri` would
+have left the gate red, the PII guard still skipped, and a progress entry claiming CI was green.
+
+| package | in tree | patched | via |
+|---|---|---|---|
+| `fast-uri` | 3.1.3 | ≥3.1.4 | `fastify > @fastify/ajv-compiler > ajv` (9 paths) · GHSA-v2hh-gcrm-f6hx |
+| `find-my-way` | 9.6.0 | ≥9.6.1 | `fastify` · GHSA-c96f-x56v-gq3h |
+| `postcss` | 8.5.16 | ≥8.5.18 | `vitest > vite` · GHSA-r28c-9q8g-f849 |
+| `brace-expansion` | 5.0.7 | ≥5.0.8 | `eslint > minimatch` · GHSA-mh99-v99m-4gvg |
+
+**Built.** Four pins in `pnpm-workspace.yaml`. Two decisions worth keeping:
+
+1. **Overrides do NOT go in `package.json` any more.** The first cut put a `pnpm.overrides` block
+   there — the documented home, and what the issuing instruction assumed. pnpm 11 **ignores it with a
+   warning and installs nothing**: `[WARN] The "pnpm" field in package.json is no longer read by pnpm`.
+   A silent no-op that typechecks, lints and passes the suite. `pnpm-workspace.yaml` already existed
+   here for `allowBuilds`, and is the real home.
+2. **Caret, not the advisory's bare `>=`.** `">=3.1.4"` is what the advisory prints and what the
+   instruction proposed, but pnpm resolves it to the newest match — **fast-uri 4.1.1, a MAJOR jump
+   under `ajv`**. That is an unverified dependency upgrade smuggled into the tree as a security fix,
+   which is precisely the move this codebase has been burned by. Every pin is held inside the major
+   its dependent already resolved (`^3.1.4`, `^9.6.1`, `^8.5.18`, `^5.0.8`), so all four are
+   patch/minor bumps, no peer expectation moves, and `pnpm install` swapped exactly 5 packages.
+   Bumping the parents instead was checked and **cannot work**: `fastify@5.10.0` and `vitest@4.1.10`
+   are already the newest published releases, and they are what pull the vulnerable versions.
+
+Each pin carries a WHY comment naming its advisory and its parent chain, and is marked **temporary** —
+delete it once the parent's own release carries the patched version and let `pnpm audit` prove it.
+
+**Verified (exit codes read directly, never grepped — the standing rule):**
+- `pnpm audit --audit-level high` → **exit 0**. One `moderate` remains, deliberately: it is below the
+  gate's own threshold and pinning it would be scope the gate does not ask for.
+- `pnpm install --frozen-lockfile` → **exit 0** — the flag CI actually uses, checked because an
+  overrides block that forces a lockfile rewrite would turn a green local run into a red CI one.
+- Full `pnpm check` → **exit 0**, `106/106` test files, **`1791/1791`** tests, 696 s. No test changed;
+  the count is identical to the pre-fix baseline, which is the point — the pins moved dependencies,
+  not behaviour.
+
+**Open / carried:**
+- **The step ordering that caused the five-day blind spot is UNCHANGED, on purpose.** Giving the
+  Fixture PII guard `if: always()` would make it independent of the audit and prevent a recurrence —
+  a one-line change — but it alters CI semantics beyond the issued fix, so it is **proposed, not
+  taken**, for the architect. The general form is worth a ruling: *any* step after a failing one is
+  silently skipped, and two of them here are security backstops.
+- `pnpm` itself is one minor behind (11.10.0 → 11.17.0, pinned by `packageManager`). Not touched —
+  the toolchain pin is load-bearing for CI reproducibility.
