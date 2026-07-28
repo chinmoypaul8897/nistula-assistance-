@@ -4529,3 +4529,63 @@ throughout (four houses, two types). Test count **1,813** per the CH-20 gate. `d
 and `docs/state-report.md` were read as background only; no internals from either are surfaced.
 
 Refs: docs
+
+---
+
+## Docs note — the explainer PDF expanded to the full end-to-end picture (2026-07-28)
+
+**Second pass on `docs/what-is-nistula-assistance.pdf`, architect-directed. 10 pages → 22.** The first
+cut told **four of the six** acceptance scenarios, showed **two** of the six kinds of person, and
+drew the whole system as five boxes. Paul's read was that this undersells it to the point of costing
+credibility, and he is right: the two scenes that were missing are the two that prove the most.
+
+### What was missing, and why it mattered
+
+- **S2 (booking → five self-sending messages)** — the ONLY place the system speaks first, to someone
+  who never messaged us. Its absence made the whole thing read as a question-answering chatbot.
+- **S6 (memory + win-back)** — the guest known across months, and the arrival task raised for a past
+  issue before he walks back in.
+- **The cast.** Housekeeping, maintenance, the front desk, the front-desk lead and ops were collapsed
+  into one generic "staff phone", which erased routing, rounds, the SLA differences and the ladder.
+- **S5 had been weakened for the wrong reason** — the real maintenance / night-queue / 10:00-digest
+  chain was swapped for a simpler private-chef ask because it was easier to byte-check. That traded
+  the scene's point for the author's convenience; it is now the real chain, with the real digest.
+
+### Now 22 pages
+
+Cover · the idea · the eight parts · **the cast** · **the whole system as four concurrent lanes** ·
+one message in detail (7 steps, 7 tools, 7 checks) · **the clock** · then all six scenes at two pages
+each — the chat, then who else moved and what the machinery did — then the rails, the nevers, and
+where it stands.
+
+### The checker now IMPORTS instead of grepping, and that is the real change
+
+`scripts/build-explainer-pdf.mjs` → **`scripts/build-explainer-pdf.ts`**, run with `npx tsx`. It
+imports `PHRASEBOOK` and calls the real `renderTemplate`, so every quoted body is produced by the
+**actual render path, slots and all** — a regex over a source file only ever proved the file contains
+a string, never that the system sends it. **40 checks:** 16 rendered/verbatim lines (5 phrasebook, 6
+lifecycle templates, 4 staff cards, the digest), 7 source-token guards for the module-private bits
+(both close lines, the TASKS list, the SLA overdue prefix, the digest clauses), and **17 numbers read
+out of the code** — every SLA, the win-back cap and window, the staleness hours, both night windows,
+four cron times, the takeover TTL, the open-task cap. A number in the document that drifts from the
+code now fails the build.
+
+Entity handling is explicit: a body containing `<new text>` must be escaped to render at all, so the
+comparison tries the raw and escaped forms rather than relaxing.
+
+### Three layout attempts, two of them wrong — recorded in the CSS
+
+Landscape pages left a third of the page empty. **`align-items:center` staggered the columns** (unequal
+heights centre at different heights, so neither meets the heading). **`justify-content:space-between`
+then tore the cards apart — and did the same to the escalation ladder, turning one climbing sequence
+into four unrelated notes.** What actually works is readable type: `.cols.fill` bumps body copy to
+11 pt and leaves tops aligned. The comment in the stylesheet says all three so the next person does
+not re-run the experiment.
+
+Also fixed from the page proofs: bubbles capped at 150 mm (full-bleed read as banners, not messages),
+and a global `nth-last-child(2)` bottom margin so nothing sits flush on the foot rule.
+
+**Verification:** all 22 pages measured at zero overflow, every page rendered and read, `pnpm check`'s
+typecheck and lint clean on the new script (no `src/` or `test/` change, so the suite was not re-run).
+
+Refs: docs

@@ -5,15 +5,17 @@
 <title>What is Nistula Assistance</title>
 <!--
   BUILD SOURCE for docs/what-is-nistula-assistance.pdf.
-  Render:  node scripts/build-explainer-pdf.mjs
+  Render:  npx tsx scripts/build-explainer-pdf.ts
   Design:  inherited verbatim from docs/presentation/nistula-assistance-explained.html
            (Paul's deck, 23 Jul 2026) — same palette, type scale, rails, chips,
            cards, tiles and 336x189mm page. That file is gitignored; this one is
            the committed, self-contained copy of the same system.
-  Every guest-facing line quoted here is byte-identical to its source constant in
-  src/brain/prompt.ts (PHRASEBOOK), src/lifecycle/templates.ts (render) or
-  src/staff/commands.ts (CLOSE_LINE). Do not "tidy" the punctuation — straight
-  apostrophes and em dashes are load-bearing.
+
+  Every guest- and staff-facing line quoted here is produced by CALLING the real
+  render path (PHRASEBOOK, renderTemplate) and compared byte for byte; every
+  number stated as fact (SLAs, quiet hours, caps, cron times) is read out of the
+  code. The build REFUSES on drift. Do not "tidy" the punctuation — straight
+  apostrophes and em dashes are load-bearing, and prettier will curl them.
 -->
 <style>
   :root{
@@ -111,7 +113,29 @@
      different heights, so the tops no longer line up with each other or the
      heading. Keep the tops aligned and fill the page with content instead. */
   .cols.mid{align-items:start;}
+  /* `fill` spreads a column's cards down the page instead of stacking them at
+     the top and leaving a third of a landscape page empty. Tops still align with
+     each other and with the heading — which is what centring got wrong. */
+  .cols.fill{align-items:stretch;}
+  /* Two things were tried here and both were wrong, so they are recorded.
+     `align-items:center` STAGGERED the columns — unequal heights centre at
+     different heights and neither meets the heading. `justify-content:
+     space-between` then TORE the cards apart, and did the same to the ladder,
+     which turned one escalating sequence into four unrelated notes.
+     What actually fills a landscape page honestly is readable type. */
+  .cols.fill .stack{gap:5mm;}
+  .cols.fill .ladder{gap:4.6mm;}
+  .cols.fill .tl{gap:4.6mm;}
+  .cols.fill .card p,
+  .cols.fill .rule p{font-size:11pt;line-height:1.46;}
+  .cols.fill ul li{font-size:10.8pt;line-height:1.44;}
+  .cols.fill .rung .body{font-size:10.6pt;line-height:1.42;}
+  .cols.fill .card h3,
+  .cols.fill .rule h3{font-size:8.4pt;}
   .stack{display:flex;flex-direction:column;gap:4mm;}
+
+  /* Nothing should sit flush against the foot rule. */
+  .slide > *:nth-last-child(2){margin-bottom:4.5mm;}
 
   ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2mm;}
   ul li{
@@ -255,6 +279,101 @@
     font-family:var(--mono);font-size:17pt;color:var(--green);flex:0 0 auto;opacity:.55;
   }
 
+  /* ── cast ─────────────────────────────────────────────── */
+  .cast{display:grid;grid-template-columns:repeat(3,1fr);gap:5mm;flex:1;align-content:start;}
+  .who-card{
+    border:1px solid var(--card-border);border-radius:8px;padding:4.6mm;background:#fff;
+    display:flex;flex-direction:column;gap:2.2mm;
+  }
+  .who-card.green{background:var(--green);border-color:var(--green);}
+  .who-card.green .r{color:rgba(255,255,255,.55);}
+  .who-card.green .n{color:#fff;}
+  .who-card.green .d{color:rgba(255,255,255,.82);}
+  .who-card.green .back{color:rgba(255,255,255,.7);border-top-color:rgba(255,255,255,.25);}
+  .who-card.pale{background:var(--pale-green);border-color:#cfe9c9;}
+  .who-card .r{font-family:var(--mono);font-size:7pt;letter-spacing:.8pt;text-transform:uppercase;color:var(--muted);}
+  .who-card .n{font-size:12pt;line-height:1.1;letter-spacing:-.4pt;color:var(--green);}
+  .who-card .d{font-size:9pt;line-height:1.38;color:var(--body);}
+  .who-card .back{
+    margin-top:auto;padding-top:2.2mm;border-top:1px solid var(--hairline);
+    font-family:var(--mono);font-size:7.5pt;line-height:1.4;color:var(--soft);
+  }
+
+  /* ── system map ───────────────────────────────────────── */
+  .lanes{display:flex;flex-direction:column;gap:3.4mm;flex:1;justify-content:center;}
+  .lane{display:grid;grid-template-columns:31mm 1fr;gap:5mm;align-items:center;}
+  .lane .tag{
+    font-family:var(--mono);font-size:7.5pt;letter-spacing:.7pt;text-transform:uppercase;
+    color:var(--green);line-height:1.35;text-align:right;
+  }
+  .lane .tag i{display:block;font-style:normal;color:var(--muted);font-size:7pt;}
+  .track{display:flex;align-items:stretch;gap:2.4mm;}
+  .n-box{
+    flex:1;border:1px solid var(--card-border);border-radius:6px;background:#fff;
+    padding:2.8mm 3mm;display:flex;flex-direction:column;justify-content:center;gap:1mm;
+  }
+  .n-box .t{font-size:8.8pt;line-height:1.2;color:var(--ink);}
+  .n-box .s{font-size:7.6pt;line-height:1.25;color:var(--soft);}
+  .n-box.code{background:var(--stone);}
+  .n-box.ai{background:var(--green);border-color:var(--green);}
+  .n-box.ai .t{color:#fff;}
+  .n-box.ai .s{color:rgba(255,255,255,.7);}
+  .n-box.guard{border:1.5px solid var(--coral);background:#fff7f4;}
+  .n-box.out{background:var(--pale-green);border-color:#cfe9c9;}
+  .caret{
+    align-self:center;font-family:var(--mono);font-size:11pt;color:var(--green);
+    opacity:.45;flex:0 0 auto;
+  }
+  .lane-note{
+    grid-column:2;font-size:8pt;line-height:1.35;color:var(--soft);
+    padding-left:.5mm;margin-top:-1.4mm;
+  }
+  .lane-note b{color:#8c3a22;}
+
+  /* ── clock ────────────────────────────────────────────── */
+  .clock{display:grid;grid-template-columns:repeat(2,1fr);gap:0 12mm;flex:1;align-content:start;}
+  .tick{
+    display:grid;grid-template-columns:26mm 1fr;gap:4mm;align-items:baseline;
+    padding:1.9mm 0;border-bottom:1px solid var(--hairline);
+  }
+  .tick .when{
+    font-family:var(--mono);font-size:8.5pt;letter-spacing:.3pt;color:var(--green);
+  }
+  .tick .what{font-size:9.2pt;line-height:1.32;color:var(--body);}
+  .tick .what b{color:var(--ink);}
+
+  /* ── lifecycle timeline ───────────────────────────────── */
+  .tl{display:flex;flex-direction:column;gap:3mm;flex:1;}
+  .tl-row{display:grid;grid-template-columns:33mm 1fr;gap:5mm;align-items:start;}
+  .tl-when{
+    font-family:var(--mono);font-size:8pt;line-height:1.35;letter-spacing:.3pt;
+    color:var(--green);text-align:right;padding-top:1.4mm;
+  }
+  .tl-when i{display:block;font-style:normal;color:var(--muted);font-size:7pt;letter-spacing:.6pt;text-transform:uppercase;}
+  .tl-msg{
+    background:var(--ink);color:#f2f2f4;border-radius:10px;border-bottom-left-radius:3px;
+    padding:2.6mm 3.4mm;font-size:9pt;line-height:1.4;
+    /* A full-bleed bubble reads as a banner, not as a message on a phone. */
+    max-width:150mm;
+  }
+  .tl-msg.pale{background:var(--pale-green);color:var(--ink);border:1px solid #cfe9c9;}
+  .tl-msg.staff{
+    background:var(--pale-green);color:var(--ink);border:1px solid #cfe9c9;
+    font-family:var(--mono);font-size:8.2pt;line-height:1.5;white-space:pre-line;
+  }
+
+  /* ── ladder ───────────────────────────────────────────── */
+  .ladder{display:flex;flex-direction:column;gap:2.6mm;}
+  .rung{
+    display:grid;grid-template-columns:20mm 1fr;gap:4mm;align-items:center;
+    border-left:2px solid var(--green);padding:2.4mm 0 2.4mm 4mm;
+  }
+  .rung.stop{border-left-color:var(--coral);}
+  .rung .clockface{font-family:var(--mono);font-size:9pt;color:var(--green);}
+  .rung.stop .clockface{color:#c14b2d;}
+  .rung .body{font-size:9.5pt;line-height:1.35;color:var(--body);}
+  .rung .body b{color:var(--ink);}
+
   /* ── stands ───────────────────────────────────────────── */
   .stands{display:grid;grid-template-columns:1fr 1fr;gap:9mm;align-items:start;}
   .stands ul li{font-size:10.5pt;}
@@ -328,7 +447,7 @@
     <div class="chip plain">In six lines</div>
   </div>
   <h2 class="wide">A host on WhatsApp who never sleeps, never guesses, and never leaves a guest waiting.</h2>
-  <div class="cols mid">
+  <div class="cols mid fill">
     <div class="stack">
       <ul class="big">
         <li><strong>One WhatsApp number.</strong> It answers the way our front desk answers — in Nistula's voice, at any hour.</li>
@@ -409,13 +528,214 @@
   <div class="foot"><span>What is Nistula Assistance</span><span>02</span></div>
 </section>
 
-<!-- ══ 3a · CONVERSATION — PRE-SALES ══════════════════════ -->
+<!-- ══ 3 · THE CAST ═══════════════════════════════════════ -->
 <section class="slide">
   <div class="rail">
-    <div class="eyebrow"><b>03</b> · A real conversation · one of four</div>
-    <div class="chip done">Midnight enquiry</div>
+    <div class="eyebrow"><b>03</b> · Who is in this system</div>
+    <div class="chip plain">Real roles, as configured</div>
   </div>
-  <h2 class="tight wide">A guest asks at 23:42. Nobody is awake. The answer is still right, and the rupees are real.</h2>
+  <h2 class="wide">Six kinds of person share one WhatsApp number. Each sees only what is theirs.</h2>
+  <div class="cast">
+    <div class="who-card green">
+      <div class="r">The only one outside</div>
+      <div class="n">The guest</div>
+      <div class="d">Sees a warm, ordinary WhatsApp conversation and nothing else. No ticket numbers, no card, no mention of a system, no other guest's details — ever.</div>
+      <div class="back">They just type.</div>
+    </div>
+    <div class="who-card">
+      <div class="r">Role · housekeeping</div>
+      <div class="n">Housekeeping</div>
+      <div class="d">Gets the towels, the cleaning, the extra pillow — as a card naming the house. Each housekeeper is set up with a round of houses, and only their round reaches them.</div>
+      <div class="back">DONE &lt;id&gt; · TASKS</div>
+    </div>
+    <div class="who-card">
+      <div class="r">Role · maintenance</div>
+      <div class="n">Maintenance</div>
+      <div class="d">Gets the AC, the geyser, the leak. Same card, same house, a longer clock — two hours rather than thirty minutes, because the work is different.</div>
+      <div class="back">DONE &lt;id&gt; · TASKS</div>
+    </div>
+    <div class="who-card pale">
+      <div class="r">Role · frontdesk</div>
+      <div class="n">The front desk</div>
+      <div class="d">Gets anything a guest wants a human for, anything the assistant is unsure of, and anything raised overnight. Replying in the guest's own thread takes the conversation over.</div>
+      <div class="back">Reply in the thread · DONE · TASKS · AI OFF / AI ON</div>
+    </div>
+    <div class="who-card pale">
+      <div class="r">Role · frontdesk, first listed</div>
+      <div class="n">The front-desk lead</div>
+      <div class="d">The catch-all. Copied on every job that runs late, and given anything the assistant could not route — because "we do not know which house" must never become "send whoever is nearest".</div>
+      <div class="back">Everything the front desk can, plus the copies</div>
+    </div>
+    <div class="who-card">
+      <div class="r">Ops numbers · a channel, not a person</div>
+      <div class="n">Ops and the owner</div>
+      <div class="d">The daily summary, the nightly rollup, the alarms, the spend. The only numbers allowed to approve what the assistant wants to say to a guest.</div>
+      <div class="back">OK / EDIT / NO on a draft</div>
+    </div>
+  </div>
+  <p style="margin:5mm 0 0;font-size:9.5pt;max-width:none;color:var(--soft)">A staff number is never treated as a guest: the assistant never strikes up a conversation with the team. And a housekeeper's <strong>OK</strong> is ordinary chatter — only an ops number can approve a reply.</p>
+  <div class="foot"><span>What is Nistula Assistance</span><span>03</span></div>
+</section>
+
+<!-- ══ 4 · THE WHOLE SYSTEM ═══════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>04</b> · The whole system, end to end</div>
+    <div class="chip plain">Four things running at once</div>
+  </div>
+  <h2 class="wide">Answering a guest is one of four engines. The other three run whether anyone writes or not.</h2>
+  <div class="lanes">
+
+    <div class="lane">
+      <div class="tag">A guest writes<i>every message</i></div>
+      <div class="track">
+        <div class="n-box code"><div class="t">It arrives</div><div class="s">Confirmed received in under a second, stored before anything else</div></div>
+        <div class="caret">›</div>
+        <div class="n-box code"><div class="t">It waits</div><div class="s">People type in bursts — three lines become one answer</div></div>
+        <div class="caret">›</div>
+        <div class="n-box"><div class="t">Who is this</div><div class="s">Their booking, what we remember, what they said earlier</div></div>
+        <div class="caret">›</div>
+        <div class="n-box ai"><div class="t">The assistant thinks</div><div class="s">Seven things it may fetch or do — never guess</div></div>
+        <div class="caret">›</div>
+        <div class="n-box guard"><div class="t">Seven checks</div><div class="s">Every rupee, every promise, every word</div></div>
+        <div class="caret">›</div>
+        <div class="n-box out"><div class="t">One reply</div><div class="s">Or a draft, for the front desk to approve</div></div>
+      </div>
+    </div>
+
+    <div class="lane">
+      <div class="tag">A booking lands<i>every 60 seconds</i></div>
+      <div class="track">
+        <div class="n-box code"><div class="t">eZee is checked</div><div class="s">Every booking, every channel, known within a minute</div></div>
+        <div class="caret">›</div>
+        <div class="n-box guard"><div class="t">Four gates</div><div class="s">Recent, still ahead, really confirmed, and ours to write to</div></div>
+        <div class="caret">›</div>
+        <div class="n-box"><div class="t">Five messages planned</div><div class="s">Each pinned to a fact of the booking, not to today</div></div>
+        <div class="caret">›</div>
+        <div class="n-box guard"><div class="t">Checked again at send</div><div class="s">Still true? Still permitted? Not the middle of the night?</div></div>
+        <div class="caret">›</div>
+        <div class="n-box out"><div class="t">It sends itself</div><div class="s">Nobody typed anything</div></div>
+      </div>
+    </div>
+
+    <div class="lane">
+      <div class="tag">Something is needed<i>every 5 minutes</i></div>
+      <div class="track">
+        <div class="n-box ai"><div class="t">A job is raised</div><div class="s">From the chat, or from a booking landing</div></div>
+        <div class="caret">›</div>
+        <div class="n-box"><div class="t">The house is looked up</div><div class="s">Fresh from eZee, at that moment</div></div>
+        <div class="caret">›</div>
+        <div class="n-box out"><div class="t">It reaches a person</div><div class="s">The role that does this work, on that round of houses</div></div>
+        <div class="caret">›</div>
+        <div class="n-box guard"><div class="t">The clock runs</div><div class="s">Late means chased, then escalated, then ops</div></div>
+        <div class="caret">›</div>
+        <div class="n-box"><div class="t">DONE closes it</div><div class="s">And only then is the guest told</div></div>
+      </div>
+    </div>
+
+    <div class="lane">
+      <div class="tag">It watches itself<i>all day</i></div>
+      <div class="track">
+        <div class="n-box code"><div class="t">10:00 — the morning summary</div><div class="s">Everything that happened overnight, to ops</div></div>
+        <div class="caret">›</div>
+        <div class="n-box code"><div class="t">23:30 — the day in one line</div><div class="s">Messages, escalations, spend</div></div>
+        <div class="caret">›</div>
+        <div class="n-box guard"><div class="t">Every 5 min — is it alive</div><div class="s">Silence on the line raises an alarm</div></div>
+        <div class="caret">›</div>
+        <div class="n-box guard"><div class="t">The spending cap</div><div class="s">Warns, then stops itself, then resumes at midnight</div></div>
+      </div>
+    </div>
+
+  </div>
+  <div class="card pale" style="margin-top:5mm">
+    <p style="margin-bottom:0;max-width:none"><strong>Read it as four lanes, not one line.</strong> The guest lane is the only one anybody watches, and it is the only one that needs a guest. The booking lane speaks first, to people who have never messaged us. The job lane moves the team. The watcher lane is what makes the other three safe to leave running overnight.</p>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>04</span></div>
+</section>
+
+<!-- ══ 5 · ONE MESSAGE, IN DETAIL ═════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>05</b> · One message, in detail</div>
+    <div class="chip plain">The same path, every time</div>
+  </div>
+  <h2 class="wide">The assistant is bracketed by plain, predictable code on both sides. That is the whole safety idea.</h2>
+  <!-- Deliberately NOT `fill`: this page is already full at the base type size. -->
+  <div class="cols">
+    <div class="stack">
+      <ol class="steps">
+        <li class="code-step"><b>It arrives.</b> We confirm it genuinely came from WhatsApp and answer "received" in under a second, so nothing is ever dropped on a slow reply.</li>
+        <li class="code-step"><b>It is stored raw, first.</b> Before any thinking. A message that arrives twice is recognised and ignored rather than answered twice.</li>
+        <li class="code-step"><b>It waits about fifteen seconds.</b> People type in bursts. Three messages become one answer, not three.</li>
+        <li><b>The picture is assembled.</b> Who is this, do they have a stay, are they in a villa <em>right now</em>, what did they tell us months ago, what does our knowledge base say.</li>
+        <li><b>The assistant thinks, with tools.</b> Up to five rounds. It may fetch a price, check dates, fetch the booking link, look up their booking, raise a job, remember a fact, or bring a human in.</li>
+        <li class="code-step"><b>Seven checks run on the draft.</b> Listed opposite. A failure means the reply is rewritten, replaced with approved wording, or held back and a person brought in — never sent and apologised for later.</li>
+        <li class="code-step"><b>One send, through one door.</b> Every outbound message in the whole system passes through the same gate, which knows WhatsApp's rules and the hour.</li>
+      </ol>
+    </div>
+    <div class="stack">
+      <div class="card green">
+        <h3>The seven checks, on every reply</h3>
+        <ul style="margin-top:1mm">
+          <li><strong>The money check</strong> — every ₹ figure must appear in something we fetched this turn.</li>
+          <li><strong>The promise check</strong> — "the team has been told" only if a job really reached a phone.</li>
+          <li><strong>The negotiation check</strong> — any discount language is replaced with the approved sentence.</li>
+          <li><strong>The window check</strong> — WhatsApp's rules on when a business may write first.</li>
+          <li><strong>The identity check</strong> — it never claims to be a person.</li>
+          <li><strong>The length and manner check</strong> — short, no exclamation marks, British English.</li>
+          <li><strong>The leak check</strong> — nothing internal, and never another guest.</li>
+        </ul>
+      </div>
+      <div class="rule">
+        <h3>Why the numbered steps are grey</h3>
+        <p>Steps 1, 2, 3, 6 and 7 are ordinary code, not judgement. The assistant is never trusted to remember the rules — they are enforced around it, every single turn, whatever it happens to have been told.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>05</span></div>
+</section>
+
+<!-- ══ 6 · THE CLOCK ══════════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>06</b> · The clock</div>
+    <div class="chip plain">Indian time, always</div>
+  </div>
+  <h2 class="wide">Most of what this system does, it does on a timer, with nobody watching.</h2>
+  <div class="clock">
+    <div class="tick"><div class="when">every 60 sec</div><div class="what"><b>eZee is checked</b> for new, changed and cancelled bookings.</div></div>
+    <div class="tick"><div class="when">09:00</div><div class="what"><b>Welcome</b> — on the morning a guest arrives.</div></div>
+    <div class="tick"><div class="when">every 5 min</div><div class="what"><b>Late jobs are chased</b>, unapproved drafts expire, and the system checks it is still alive.</div></div>
+    <div class="tick"><div class="when">10:00</div><div class="what"><b>The morning summary</b> to ops, and every overnight request becomes a live job with a running clock.</div></div>
+    <div class="tick"><div class="when">04:00</div><div class="what"><b>Long conversations are summarised</b>, so a guest never has to repeat themselves.</div></div>
+    <div class="tick"><div class="when">10:00, 3 days before</div><div class="what"><b>Pre-arrival</b> — check-in time, and a person will send the pin.</div></div>
+    <div class="tick"><div class="when">08:00 – 22:00</div><div class="what"><b>The only hours we will write to a guest first.</b> Outside them everything waits, except a booking confirmation.</div></div>
+    <div class="tick"><div class="when">11:00, next day</div><div class="what"><b>Thank-you</b> — and the one place a guest is ever asked whether we may write again.</div></div>
+    <div class="tick"><div class="when">20:00 – 10:00</div><div class="what"><b>The team is off.</b> The assistant says so honestly rather than promising someone is coming.</div></div>
+    <div class="tick"><div class="when">11:00, +75 days</div><div class="what"><b>Welcome back</b> — only with permission, at most twice a year.</div></div>
+    <div class="tick"><div class="when">23:30</div><div class="what"><b>The day in one line</b> to ops: messages in and out, escalations raised, what was spent.</div></div>
+    <div class="tick"><div class="when">18:00 Sunday</div><div class="what"><b>The weekly report</b> on how the drafts are going — approved, edited, rejected.</div></div>
+  </div>
+  <div class="cols even" style="flex:0 0 auto;margin-top:6mm">
+    <div class="card green">
+      <h3>Two different nights, and they are not the same night</h3>
+      <p style="margin-bottom:0"><strong>The team is off from 20:00.</strong> That is who is available, and it changes what the assistant may honestly promise. <strong>We will not write to a guest first after 22:00.</strong> That is courtesy, and it holds a message until morning. A guest writing at 23:00 still gets an answer within seconds — being quiet first is not the same as being unavailable.</p>
+    </div>
+    <div class="card outline">
+      <h3>Why the timings are pinned to the booking</h3>
+      <p style="margin-bottom:0">"Three days before check-in" is worked out from the check-in date, not from the day the system happens to look. A message that has been waiting too long to still be true is dropped rather than sent late — which is how a guest avoids being told we look forward to welcoming them on a morning they have already arrived.</p>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>06</span></div>
+</section>
+
+<!-- ══ S1a · MIDNIGHT ENQUIRY ═════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>07</b> · Scene one · a stranger, at midnight</div>
+    <div class="chip done">Pre-sales</div>
+  </div>
+  <h2 class="tight wide">Nobody is awake. The answer is still right, the rupees are real, and no house is invented.</h2>
   <div class="phones">
     <div class="phone">
       <div class="top"><span class="name">The guest's phone</span><span class="tag">Rahul · 23:42</span></div>
@@ -427,21 +747,143 @@
       <div class="b a"><span class="who">Nistula Assistance · 23:44</span>Our website rate is the final rate for everyone — full transparency, always. What you see is genuinely all-inclusive: taxes, housekeeping, the lot. Here's the link whenever you're ready.</div>
     </div>
     <div class="phone">
-      <div class="top"><span class="name">The staff phone</span><span class="tag">Front desk</span></div>
+      <div class="top"><span class="name">Everyone else's phone</span><span class="tag">Housekeeping · maintenance · front desk · ops</span></div>
       <div class="idle">Nothing. No card, no alert, nobody woken.<br />The whole exchange was handled without the team.</div>
-      <div class="ann"><strong>Never blames the dates.</strong> The three-bedroom houses were retired, not booked. Saying "those dates are taken" would be a false statement about a real house, so the assistant says plainly what is true.</div>
-      <div class="ann"><strong>Price fetched live from the website.</strong> The ₹34,000 was not remembered, estimated or rounded — it came back from nistula.life in that turn, and the safety checks refuse to send a figure that did not.</div>
-      <div class="ann"><strong>The discount line is fixed wording.</strong> It is not the assistant's own phrasing and cannot drift. Every guest who asks gets the same sentence, word for word.</div>
+      <div class="ann"><strong>Never blames the dates.</strong> The three-bedroom houses were retired, not booked. "Those dates are taken" would be a false statement about a real house, so the assistant says plainly what is true and offers what exists.</div>
+      <div class="ann"><strong>Price fetched live from the website.</strong> The ₹34,000 was not remembered, estimated or rounded — it came back from nistula.life in that turn, and the money check refuses to send a figure that did not.</div>
+      <div class="ann"><strong>The discount line is fixed wording.</strong> Not the assistant's own phrasing, and it cannot drift. Every guest who asks gets the same sentence, word for word — which is the point of a one-price promise.</div>
+      <div class="ann"><strong>Three messages, one reply each time.</strong> Had he sent his dates across four lines, he would still have had one answer.</div>
     </div>
   </div>
-  <div class="foot"><span>What is Nistula Assistance</span><span>03</span></div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>07</span></div>
 </section>
 
-<!-- ══ 3b · CONVERSATION — IN-STAY ════════════════════════ -->
+<!-- ══ S1b · THE FOLLOW-UP ════════════════════════════════ -->
 <section class="slide">
   <div class="rail">
-    <div class="eyebrow"><b>03</b> · A real conversation · two of four</div>
-    <div class="chip done">Two towels</div>
+    <div class="eyebrow"><b>07</b> · Scene one, continued · three days later</div>
+    <div class="chip plain">If he does not book</div>
+  </div>
+  <h2 class="tight wide">An enquiry that goes quiet is not forgotten, and it is not chased either.</h2>
+  <div class="cols fill">
+    <div class="stack">
+      <div class="tl">
+        <div class="tl-row">
+          <div class="tl-when">23 Dec · 11:00<i>Enquiry + 3 days</i></div>
+          <div class="tl-msg">Rahul, a gentle note about the Nistula Apartment you were considering for 20–22 December 2026. No rush at all — we are right here if you would like the link again. (Reply STOP anytime to stop these.)</div>
+        </div>
+      </div>
+      <div class="rule" style="margin-top:2mm">
+        <h3>Three deliberate restraints in one short message</h3>
+        <p><strong>It claims nothing about availability.</strong> Three days have passed and we have not re-checked those dates, so it does not say they are still free. He re-quotes live, like everyone else.</p>
+      </div>
+      <div class="rule">
+        <p><strong>It goes once.</strong> There is no second nudge, no countdown, no "before they go".</p>
+      </div>
+      <div class="rule">
+        <p><strong>STOP is on the message itself,</strong> and one word ends it permanently.</p>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card outline">
+        <h3>And if he replies STOP</h3>
+        <div class="tl-msg pale" style="margin-bottom:3mm">Done — you will not receive any more messages like this from us. We are still right here whenever you need anything for a stay.</div>
+        <p style="margin-bottom:0">Honest about what actually stops. Marketing ends for good; the service line does not. If he books next year he still gets his confirmation, his pre-arrival and his welcome — because those are not marketing, and pretending otherwise would leave a real guest in the dark.</p>
+      </div>
+      <div class="card pale">
+        <h3>What the conversation left behind</h3>
+        <p style="margin-bottom:0">The dates he wanted, the type he settled on, and the fact he asked about a three-bedroom. If he writes again in March, the assistant opens knowing all three — and the front desk can read the whole thread on the same number.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>08</span></div>
+</section>
+
+<!-- ══ S2a · THE BOOKING LANDS ════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>08</b> · Scene two · the booking lands</div>
+    <div class="chip done">Zero staff typing</div>
+  </div>
+  <h2 class="tight wide" style="margin:3mm 0 2.5mm">He books on the website. Five messages now send themselves, and nobody types one of them.</h2>
+  <div class="tl" style="gap:2.2mm">
+    <div class="tl-row">
+      <div class="tl-when">within 60 sec<i>Confirmation</i></div>
+      <div class="tl-msg">Rahul, your booking with Nistula is confirmed — your Nistula Apartment in Assagao, 20–22 December 2026. Your reference is 1042. Check-in is from 3 pm, and we are right here on WhatsApp whenever you need us.</div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">17 Dec · 10:00<i>Pre-arrival · check-in −3d</i></div>
+      <div class="tl-msg">Rahul, we are looking forward to welcoming you on Sunday 20 December. Check-in is from 3 pm — share your expected arrival time and we will send an accurate location pin and arrival guidance. If there is anything we can arrange before you travel, just say.</div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">20 Dec · 09:00<i>Welcome · arrival morning</i></div>
+      <div class="tl-msg">Rahul, your Nistula Apartment is ready for you today, from 3 pm. Anything at all during your stay — an extra towel, a cab, a recommendation — message us right here.</div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">23 Dec · 11:00<i>Thank-you · check-out +1d</i></div>
+      <div class="tl-msg">Rahul, thank you for staying with us. We hope Goa was kind to you — and if anything could have been better, we would genuinely like to hear it. May we write to you when the season turns? Reply YES and we will.</div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">+75 days · 11:00<i>Welcome back · with permission</i></div>
+      <div class="tl-msg">Rahul, the season is turning in Goa. If another stay is on your mind, your Nistula Apartment in Assagao is here whenever you are. (Reply STOP anytime to stop these.)</div>
+    </div>
+  </div>
+  <div class="cols even" style="flex:0 0 auto;margin-top:4mm">
+    <div class="card outline" style="padding:4.4mm">
+      <h3>Note what is not in any of them</h3>
+      <p style="margin-bottom:0;font-size:9.5pt"><strong>No rupee figure</strong> — an agency's net is not the guest's bill. <strong>No address or pin</strong>, because we do not hold one; a person sends it, and the message says so. <strong>No house number. No claim about breakfast.</strong> Each absence is one somebody argued for.</p>
+    </div>
+    <div class="card pale" style="padding:4.4mm">
+      <h3>And if the dates change</h3>
+      <p style="margin-bottom:0;font-size:9.5pt">The plan moves with the booking rather than duplicating — a guest who shifts by a week does not get two welcomes. A cancellation drops everything pending. And a message that has waited too long to still be true is dropped, not sent late and wrong.</p>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>09</span></div>
+</section>
+
+<!-- ══ S2b · THE GATES ════════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>08</b> · Scene two, continued · who gets nothing</div>
+    <div class="chip next">The system speaks first</div>
+  </div>
+  <h2 class="tight wide">This is the only place the assistant writes to someone who never wrote to us. Four gates stand in front of it.</h2>
+  <div class="cols even fill">
+    <div class="stack">
+      <div class="card outline">
+        <h3>Every booking must pass all four</h3>
+        <ul style="margin-top:1mm">
+          <li><strong>Is it recent?</strong> Bookings already in the system when we switched on get nothing. History does not suddenly start messaging people.</li>
+          <li><strong>Is the stay still ahead?</strong> A guest who left in March is never told we look forward to welcoming them.</li>
+          <li><strong>Is it really confirmed?</strong> An unconfirmed hold reserves nothing, so nobody is congratulated on a booking that does not exist yet.</li>
+          <li><strong>Are we permitted to write to them?</strong> Direct and website bookings, yes. Airbnb and Booking.com guests, <strong>no</strong> — see opposite.</li>
+        </ul>
+      </div>
+      <div class="rule">
+        <h3>And again, at the moment of sending</h3>
+        <p style="margin-bottom:0">Planning a message is not permission to send it. At send time it is re-checked: is this still true, has the booking been cancelled, is it the middle of the night. A stay that moves is re-planned rather than duplicated; a stay that is cancelled has its pending messages dropped.</p>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card green">
+        <h3>The one everyone gets wrong</h3>
+        <p>The comfortable assumption is that booking sites hide a guest's phone number, so an accidental message is impossible. <strong>Two of them do. Airbnb and Booking.com do not.</strong></p>
+        <p style="margin-bottom:0">There are real people in the system right now, arriving soon, with real numbers we could dial — and nobody has told us we may. So the assistant does not, and will not, until the villa team says otherwise. That is a setting waiting on an answer, not a limitation.</p>
+      </div>
+      <div class="card pale">
+        <h3>Their rooms still get prepared</h3>
+        <p style="margin-bottom:0">A booking we may not <em>message</em> is still a booking. It is mirrored, the stay is known, and any job it raises still reaches the right phone — because a staff card reaches no guest. The gate stops a message, not the hospitality.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>10</span></div>
+</section>
+
+<!-- ══ S3a · TWO TOWELS ═══════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>09</b> · Scene three · two towels</div>
+    <div class="chip done">In-stay · housekeeping</div>
   </div>
   <h2 class="tight wide">A request in the chat becomes a job on a phone. Both ends close in the same loop.</h2>
   <div class="phones">
@@ -449,119 +891,301 @@
       <div class="top"><span class="name">The guest's phone</span><span class="tag">Rahul · in-house</span></div>
       <div class="b g"><span class="who">Guest · 15:20</span>hi, can we get 2 extra towels</div>
       <div class="b a"><span class="who">Nistula Assistance · 15:20</span>Of course — two fresh towels are on their way up. Anything else you need this afternoon?</div>
-      <div class="ann"><strong>The promise came after the job, not before.</strong> The card below had already reached a phone. If it had failed, the assistant would have said so and brought the team in instead.</div>
+      <div class="ann"><strong>The promise came after the job, not before.</strong> The card opposite had already reached a phone. Had it failed, the assistant would have said so and brought the team in instead of promising towels nobody had heard about.</div>
+      <div class="b g"><span class="who">Guest · 15:52</span>where are those?</div>
+      <div class="b a"><span class="who">Nistula Assistance · 15:52</span>I've just nudged housekeeping — your towels are marked on the way. Sorry for the wait, Rahul.</div>
+      <div class="ann"><strong>"I've nudged" is only sayable because a nudge happened.</strong> It did not ask housekeeping; it read the job record, and the chase opposite is what makes the sentence true.</div>
       <div class="b a"><span class="who">Nistula Assistance · 15:59</span>Housekeeping have taken care of that for you.</div>
-      <div class="ann"><strong>Only a real DONE closes a guest's loop.</strong> Nothing tells the guest it is finished until a person says it is.</div>
     </div>
     <div class="phone">
-      <div class="top"><span class="name">The staff phone</span><span class="tag">Housekeeping · Assagao</span></div>
+      <div class="top"><span class="name">Housekeeping's phone</span><span class="tag">The round that includes Apartment 09</span></div>
       <div class="b card-msg"><span class="who">Task card · 15:20</span>NISTULA TASK #K7Q2FX
 Apartment 09 · Rahul · 2 extra towels
 Reply DONE K7Q2FX when finished.</div>
-      <div class="ann"><strong>This card appeared on the staff phone.</strong> The house on it was looked up fresh from eZee at that moment — never a guess, and never repeated back to the guest.</div>
+      <div class="ann"><strong>The house on the card was looked up fresh</strong> from eZee at that moment — not read from a copy that might be months old, and never repeated back to the guest.</div>
       <div class="b card-msg"><span class="who">Chased · 15:52 · copied to the front-desk lead</span>NISTULA TASK #K7Q2FX
 Apartment 09 · overdue · STILL OPEN after 30 min — 2 extra towels
 Reply DONE K7Q2FX when finished.</div>
       <div class="b h"><span class="who">Housekeeping · 15:58</span>DONE K7Q2FX</div>
-      <div class="ann"><strong>Slow jobs chase themselves.</strong> Half an hour is the agreed time for towels. Past it the same card comes back marked overdue, and the front-desk lead gets a copy — nobody has to remember to follow up.</div>
+      <div class="ann"><strong>Thirty minutes is the agreed time for towels</strong> — two hours for a repair, ten minutes for anything the front desk owns. Past it, the same card returns marked overdue and the lead gets a copy. Nobody has to remember to follow up.</div>
     </div>
   </div>
-  <div class="foot"><span>What is Nistula Assistance</span><span>04</span></div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>11</span></div>
 </section>
 
-<!-- ══ 3c · CONVERSATION — HUMAN + NIGHT ══════════════════ -->
+<!-- ══ S3b · THE ROUTING ══════════════════════════════════ -->
 <section class="slide">
   <div class="rail">
-    <div class="eyebrow"><b>03</b> · A real conversation · three and four of four</div>
-    <div class="chip done">Handover · and the night</div>
+    <div class="eyebrow"><b>09</b> · Scene three, continued · how it knew whose phone</div>
+    <div class="chip plain">Routing</div>
+  </div>
+  <h2 class="tight wide">Two questions, asked in order, and a fallback that is a real person every time.</h2>
+  <div class="cols fill">
+    <div class="stack">
+      <div class="ladder">
+        <div class="rung">
+          <div class="clockface">First</div>
+          <div class="body"><b>Who does this kind of work?</b> Towels are housekeeping. A weak AC is maintenance. "I want to speak to someone" is the front desk. The kind of request decides the role, and every kind has an answer — none of them falls through by accident.</div>
+        </div>
+        <div class="rung">
+          <div class="clockface">Then</div>
+          <div class="body"><b>Whose round is this house on?</b> Each person is set up with the houses they cover. The card goes to the one who covers Apartment 09.</div>
+        </div>
+        <div class="rung stop">
+          <div class="clockface">If not</div>
+          <div class="body"><b>The front-desk lead.</b> If nobody with that role covers that house — or if we could not establish the house at all — it goes to the lead, who can find out. It is never sent to whoever seems closest.</div>
+        </div>
+        <div class="rung stop">
+          <div class="clockface">If still not</div>
+          <div class="body"><b>Ops.</b> And if even ops is unset, the assistant records that nobody was reachable and <b>does not tell the guest anyone was told</b> — the one outcome that must never be papered over.</div>
+        </div>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card green">
+        <h3>Why "we do not know the house" is not a small problem</h3>
+        <p style="margin-bottom:0">It would be easy to guess — send it to whoever usually cleans the apartments. The system refuses. A guess sends a person to the wrong door and leaves a real guest waiting on a job that looks handled. Not knowing goes to a human who can find out, in seconds.</p>
+      </div>
+      <div class="card outline">
+        <h3>What a staff member can ask at any time</h3>
+        <div class="tl-msg staff" style="margin:2mm 0 3mm">Open for you:
+#K7Q2FX · Apartment 09 · 2 extra towels
+Reply DONE &lt;id&gt; when finished.</div>
+        <p style="margin-bottom:0">One word — <strong>TASKS</strong> — and their own open list comes back. No app, no login, no training. A guest can hold at most three open requests at once, so the list stays a list.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>12</span></div>
+</section>
+
+<!-- ══ S4a · THE PROPOSAL ═════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>10</b> · Scene four · something we do not do by script</div>
+    <div class="chip done">Human takeover</div>
   </div>
   <h2 class="tight wide">When a person is needed, a person arrives — and the assistant steps back without being told.</h2>
   <div class="phones">
     <div class="phone">
-      <div class="top"><span class="name">A human steps in</span><span class="tag">Guest's phone · 12:15</span></div>
+      <div class="top"><span class="name">The guest's phone</span><span class="tag">Priya · arriving Friday</span></div>
       <div class="b g"><span class="who">Guest · 12:15</span>we are planning a proposal at the villa, can you decorate the pool area? budget not an issue</div>
       <div class="b a"><span class="who">Nistula Assistance · 12:15</span>Congratulations — what a lovely thing to plan. Our villa team will design this personally; someone will message you right here very shortly.</div>
+      <div class="ann"><strong>No invented capability, and no price talk.</strong> It does not know whether we decorate pools or what that would cost, so it promises only the one thing it can guarantee: a person, on this thread, soon.</div>
       <div class="b h"><span class="who">Meera · front desk · 12:19</span>Hello, this is Meera from Nistula. I look after arrangements like this myself — tell me the evening you have in mind and I will put something together.</div>
       <div class="b quietly">The assistant goes quiet on this chat for 2 hours</div>
-      <div class="ann"><strong>No reply invented — a person was brought in.</strong> The assistant promised nothing it could not deliver, and the moment Meera typed, it stopped. It also cancelled its own reminder chasing the front desk, because the front desk had arrived.</div>
+      <div class="ann"><strong>She did not press a button.</strong> She replied in the guest's thread from the normal WhatsApp app, and that alone paused the assistant. It also cancelled its own reminder chasing the front desk — because the front desk had arrived.</div>
     </div>
     <div class="phone">
-      <div class="top"><span class="name">The night</span><span class="tag">Guest's phone · 23:30</span></div>
-      <div class="b g"><span class="who">Guest · 23:30</span>could you arrange a private chef for tomorrow evening?</div>
-      <div class="b a"><span class="who">Nistula Assistance · 23:30</span>That's one for the villa team — let me bring them in. Someone will reply first thing after 10, when the team is in.</div>
-      <div class="ann"><strong>Honest about the hour.</strong> By day this same line ends "shortly". At night it cannot, because nobody is coming until ten — and a promise the team cannot keep is worse than the wait.</div>
+      <div class="top"><span class="name">The front desk's phone</span><span class="tag">12:16 · one minute later</span></div>
+      <div class="b card-msg"><span class="who">Escalation card · 12:16</span>NISTULA ESCALATION #M4T8QP
+Priya · outside_kb
+Proposal at the villa - asks us to decorate the pool area, budget no object. In-house from Friday.
+Reply in the guest's thread to take over.</div>
+      <div class="ann"><strong>A different card, on purpose.</strong> A handover card carries the guest's own words — which may include a house, a rupee figure or a link — because the person reading it needs all of it. A housekeeping card is stricter, because it feeds a slot that must never leak.</div>
       <div class="card outline" style="margin-top:1mm">
-        <h3>What the team sees at 10:00</h3>
-        <p style="margin-bottom:0;font-size:9.5pt">Anything raised overnight is waiting in the morning summary, with the guest's own words and the hour it came in. Nothing is lost between midnight and the first cup of coffee.</p>
+        <h3>Meera walks in with the picture</h3>
+        <p style="margin-bottom:0">The card names the guest, why it came to her, and what was asked. The whole conversation is on the same WhatsApp number she already uses, so she reads back as far as she likes before typing a word.</p>
       </div>
     </div>
   </div>
-  <div class="foot"><span>What is Nistula Assistance</span><span>05</span></div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>13</span></div>
 </section>
 
-<!-- ══ 4 · THE FLOW ═══════════════════════════════════════ -->
+<!-- ══ S4b · THE LADDER ═══════════════════════════════════ -->
 <section class="slide">
   <div class="rail">
-    <div class="eyebrow"><b>04</b> · What happens to a message</div>
-    <div class="chip plain">Every single time</div>
+    <div class="eyebrow"><b>10</b> · Scene four, continued · if nobody had answered</div>
+    <div class="chip next">The escalation ladder</div>
   </div>
-  <h2 class="wide">The same path, every message, whatever the assistant happens to think.</h2>
-  <div class="flow">
-    <div class="fbox green">
-      <div class="h">A message arrives</div>
-      <div class="t">Answered within a second, then held for a few seconds in case more is coming</div>
-    </div>
-    <div class="arrow">→</div>
-    <div class="fbox">
-      <div class="h">It is understood</div>
-      <div class="t">Who is this guest, are they staying with us, what did they ask before?</div>
-    </div>
-    <div class="arrow">→</div>
-    <div class="fbranch">
-      <div class="fbox pale">
-        <div class="h">Needs a price?</div>
-        <div class="t">Asks the website, and uses only what comes back</div>
+  <h2 class="tight wide">Meera replied in four minutes. Here is what would have happened if she had not.</h2>
+  <div class="cols fill">
+    <div class="stack">
+      <div class="ladder">
+        <div class="rung">
+          <div class="clockface">12:15</div>
+          <div class="body"><b>The guest is told a person is coming.</b> That sentence now has a clock attached to it.</div>
+        </div>
+        <div class="rung">
+          <div class="clockface">12:16</div>
+          <div class="body"><b>The card reaches the front desk,</b> and the front-desk lead is copied. Ten minutes is the agreed time for anything a guest wants a human for.</div>
+        </div>
+        <div class="rung">
+          <div class="clockface">12:26</div>
+          <div class="body"><b>Still nobody. The card is re-sent</b> to the front desk and the lead, marked overdue.</div>
+        </div>
+        <div class="rung stop">
+          <div class="clockface">12:36</div>
+          <div class="body"><b>Ops and the owner are brought in.</b> Twenty minutes after a guest was promised a person, somebody senior knows they have not had one.</div>
+        </div>
+        <div class="rung stop">
+          <div class="clockface">Any point</div>
+          <div class="body"><b>A human reply ends the ladder instantly.</b> Someone on the thread <em>is</em> the resolution — the chase stops, and the assistant stays quiet.</div>
+        </div>
       </div>
-      <div class="fbox pale">
-        <div class="h">Needs hands?</div>
-        <div class="t">Raises a card on the right staff phone</div>
-      </div>
-      <div class="fbox pale">
-        <div class="h">Needs a person?</div>
-        <div class="t">Brings the front desk in and says so</div>
-      </div>
     </div>
-    <div class="arrow">→</div>
-    <div class="fbox coral">
-      <div class="h">Safety checks</div>
-      <div class="t">Is every rupee traceable? Is every promise backed by something that really happened? Any discount language? Anything a guest should not see?</div>
-    </div>
-    <div class="arrow">→</div>
-    <div class="fend">
-      <div class="fbox green">
-        <div class="h">The reply goes out</div>
-        <div class="t">One message, in Nistula's voice</div>
+    <div class="stack">
+      <div class="card green">
+        <h3>What the assistant does while a human has the thread</h3>
+        <p>Nothing. It reads, it stores, it stays silent for two hours — and the clock restarts every time a person types again.</p>
+        <p style="margin-bottom:0">The front desk can also switch it off for a conversation outright, and back on when they are finished. <strong>AI OFF</strong>, <strong>AI ON</strong>. No screen, no setting to find.</p>
       </div>
-      <div class="fbox coral">
-        <div class="h">Or a draft, for approval</div>
-        <div class="t">The front desk says OK, EDIT or NO</div>
+      <div class="rule">
+        <h3>The rung that matters most is the last one</h3>
+        <p style="margin-bottom:0">Most systems escalate to a queue. This one escalates to a named human, then to a second named human, then to the owner. Every rung is somebody who could actually walk over — and if no rung has anybody in it, the assistant records the hole rather than quietly dropping the request.</p>
       </div>
     </div>
   </div>
-  <div class="card pale" style="margin-top:7mm">
-    <p style="margin-bottom:0;max-width:none"><strong>The point of the diagram:</strong> the first box and the last two are ordinary, predictable machinery — not judgement. The assistant is wrapped in rules it cannot argue with, so a bad day for the assistant is still a safe day for the guest.</p>
+  <div class="foot"><span>What is Nistula Assistance</span><span>14</span></div>
+</section>
+
+<!-- ══ S5a · THE NIGHT ════════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>11</b> · Scene five · 23:05, and the team is off</div>
+    <div class="chip done">The honest hold</div>
   </div>
-  <div class="foot"><span>What is Nistula Assistance</span><span>06</span></div>
+  <h2 class="tight wide">Never silent, and never a promise that somebody is on their way when nobody is.</h2>
+  <div class="phones">
+    <div class="phone">
+      <div class="top"><span class="name">The guest's phone</span><span class="tag">Rahul · in-house · 23:05</span></div>
+      <div class="b g"><span class="who">Guest · 23:05</span>the AC in the master bedroom feels weak, can someone look at it</div>
+      <div class="b a"><span class="who">Nistula Assistance · 23:05</span>I'm sorry, Rahul — that is not how a night with us should feel. It is logged for the villa team and they will be at your door soon after 10, when maintenance comes in. The second bedroom's AC runs strong tonight, please use it comfortably.</div>
+      <div class="ann"><strong>Three things, in order.</strong> Sorry once and plainly. Then the honest hour — <em>after 10</em>, never "shortly", never "right away". Then something he can actually do tonight.</div>
+      <div class="ann"><strong>The tip is not invented.</strong> The second bedroom's AC is a recorded fact about that house. If it were not written down, the assistant would have said nothing extra rather than reach for a comforting guess.</div>
+      <div class="b g"><span class="who">Guest · 23:31</span>is anyone coming tonight?</div>
+      <div class="b a"><span class="who">Nistula Assistance · 23:31</span>That's one for the villa team — let me bring them in. Someone will reply first thing after 10, when the team is in.</div>
+    </div>
+    <div class="phone">
+      <div class="top"><span class="name">Maintenance and the front desk</span><span class="tag">Overnight</span></div>
+      <div class="idle">Silent, on purpose. No card, no buzz, nobody woken at 23:05 for a job they cannot do until morning.<br /><br />The request is held, with the hour it came in and the guest's own words.</div>
+      <div class="ann"><strong>By day, that same line ends "shortly".</strong> The wording changes because the fact changes — the note reaches the team at ten, and a person is not on the way until then. A promise the team cannot keep is worse than the wait.</div>
+      <div class="ann"><strong>No clock is running yet, and that is deliberate.</strong> Starting a thirty-minute timer at 23:05 would only manufacture an overdue job by midnight and page people who are asleep.</div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>15</span></div>
+</section>
+
+<!-- ══ S5b · THE MORNING ══════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>11</b> · Scene five, continued · 10:00, the team walks in</div>
+    <div class="chip plain">The morning summary</div>
+  </div>
+  <h2 class="tight wide">Nothing is lost between midnight and the first cup of coffee.</h2>
+  <div class="cols fill">
+    <div class="stack">
+      <div class="tl">
+        <div class="tl-row">
+          <div class="tl-when">10:00<i>To ops</i></div>
+          <div class="tl-msg staff">NISTULA DIGEST — Monday 21 December
+1 raised overnight now live (the AC in the master bedroom is weak · 23:05); 0 escalation(s) + 1 task(s) open</div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-when">10:00<i>To maintenance</i></div>
+          <div class="tl-msg staff">NISTULA TASK #T3RV8N
+Apartment 09 · Rahul · the AC in the master bedroom is weak
+Reply DONE T3RV8N when finished.</div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-when">11:40<i>To the guest</i></div>
+          <div class="tl-msg">Maintenance have seen to that for you.</div>
+        </div>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card pale">
+        <h3>What happened at exactly 10:00</h3>
+        <p style="margin-bottom:0">The overnight request stopped being a note and became a live job: routed to maintenance for that house, with its two-hour clock starting now rather than at 23:05. The guest was told after ten. It happened after ten.</p>
+      </div>
+      <div class="card outline">
+        <h3>The summary is a summary, not a feed</h3>
+        <p style="margin-bottom:0">One line: what came in overnight and when, how many jobs and handovers are still open, and — if there were any — how many times the safety checks stopped something. <strong>A genuinely quiet night sends nothing at all.</strong> A daily empty ping is how people learn to ignore a channel.</p>
+      </div>
+      <div class="rule">
+        <h3>And at 23:30, the other direction</h3>
+        <p style="margin-bottom:0">Ops get the day in one line — messages in and out, conversations handled, handovers raised, and what the whole day cost to run.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>16</span></div>
+</section>
+
+<!-- ══ S6a · THREE MONTHS LATER ═══════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>12</b> · Scene six · three months later</div>
+    <div class="chip done">Memory</div>
+  </div>
+  <h2 class="tight wide">He is not a new number. He is Rahul, and the assistant knows what went wrong last time.</h2>
+  <div class="phones">
+    <div class="phone">
+      <div class="top"><span class="name">The guest's phone</span><span class="tag">Rahul · 75 days after check-out</span></div>
+      <div class="b a"><span class="who">Nistula Assistance · 11:00</span>Rahul, the season is turning in Goa. If another stay is on your mind, your Nistula Apartment in Assagao is here whenever you are. (Reply STOP anytime to stop these.)</div>
+      <div class="b g"><span class="who">Guest · 11:24</span>good timing. is the 3bhk free 12-14 oct?</div>
+      <div class="b a"><span class="who">Nistula Assistance · 11:24</span>We no longer let the three-bedroom houses in Assagao. What we do have is our Assagao apartments, and the four-bedroom villa in Siolim. Shall I check either for those dates?</div>
+      <div class="b g"><span class="who">Guest · 11:25</span>ok the apartment then</div>
+      <div class="b a"><span class="who">Nistula Assistance · 11:25</span>Free for 12–14 Oct — ₹34,000 all-inclusive for both nights. And I remember early check-in matters to you, so I have flagged it to the team. Shall I send the link?</div>
+    </div>
+    <div class="phone">
+      <div class="top"><span class="name">What made that possible</span><span class="tag">Three months of small facts</span></div>
+      <div class="ann"><strong>He said YES once, in December.</strong> The thank-you message is the only place a guest is ever asked whether we may write again. A YES within the week turns marketing on. Nothing else does, and there is no pre-ticked anything.</div>
+      <div class="ann"><strong>The welcome-back is capped at two a year</strong> and checked against his permission at the moment of sending, not when it was planned. If he had said STOP in February, this message would simply never have gone.</div>
+      <div class="ann"><strong>It named the type, not a house.</strong> "Your Nistula Apartment in Assagao" is always true. "Your Apartment 09" would be a promise about a door the assistant does not get to make.</div>
+      <div class="ann"><strong>"I remember early check-in matters to you"</strong> was saved as a durable fact during his stay, in his own context — and it is only sayable here because flagging it to the team actually happened in that same turn.</div>
+      <div class="ann"><strong>Had the retired three-bedroom been what he booked before,</strong> the welcome-back would not have been retargeted — it would never have been sent. Inviting someone back to a house we no longer let is not a message worth rescuing.</div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>17</span></div>
+</section>
+
+<!-- ══ S6b · BEFORE HE WALKS BACK IN ══════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>12</b> · Scene six, continued · before he walks back in</div>
+    <div class="chip plain">The job nobody asked for</div>
+  </div>
+  <h2 class="tight wide">He books. A card appears that no guest requested and no member of staff typed.</h2>
+  <div class="cols fill">
+    <div class="stack">
+      <div class="tl">
+        <div class="tl-row">
+          <div class="tl-when">On booking<i>To the front desk</i></div>
+          <div class="tl-msg staff">NISTULA TASK #B6HN4D
+Nistula Apartment · Rahul · verify before arrival: AC weak in the apartment master — resolved
+Reply DONE B6HN4D when finished.</div>
+        </div>
+      </div>
+      <div class="card green" style="margin-top:2mm">
+        <h3>This is the point of remembering anything</h3>
+        <p style="margin-bottom:0">A returning guest with something that went wrong last time gets it checked <strong>before</strong> he arrives — not apologised for again afterwards. Nobody had to remember. Nobody had to be told. The booking landing was enough.</p>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="card outline">
+        <h3>Three careful details on one small card</h3>
+        <ul style="margin-top:1mm">
+          <li><strong>It names the type, not a house.</strong> A booking that has not arrived has no room assigned yet — and this is a front-desk job anyway.</li>
+          <li><strong>It is raised once.</strong> A hold that later becomes a real booking, or the same booking arriving twice, collides with the card that already exists rather than making a second.</li>
+          <li><strong>It runs even for guests we may not message.</strong> A card reaches no guest, so an Airbnb guest's room is still checked. The permission gate stops a message, never the preparation.</li>
+        </ul>
+      </div>
+      <div class="rule">
+        <h3>What the assistant will never remember</h3>
+        <p style="margin-bottom:0">Health, religion, politics, caste. Anything sensitive. And never a rate, a discount, an entitlement or an instruction dressed up as a fact — memory records what a guest likes, never what somebody claims they were promised.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>18</span></div>
 </section>
 
 <!-- ══ 5 · THE SAFETY RAILS ═══════════════════════════════ -->
 <section class="slide">
   <div class="rail">
-    <div class="eyebrow"><b>05</b> · The safety rails</div>
+    <div class="eyebrow"><b>13</b> · The safety rails</div>
     <div class="chip plain">Checked on every reply</div>
   </div>
   <h2 class="wide">Eight things it is not allowed to do — enforced, not merely requested.</h2>
-  <div class="cols mid">
+  <div class="cols mid fill">
     <div class="stack">
       <ul class="ticks big">
         <li><strong>It cannot invent a price.</strong> Only the website's number reaches a guest.</li>
@@ -577,26 +1201,30 @@ Reply DONE K7Q2FX when finished.</div>
     <div class="stack">
       <div class="card green">
         <h3>Day one — the team is the teacher</h3>
-        <p>Every message the assistant writes starts as a <strong>draft</strong>. Nothing reaches a guest until the front desk approves it.</p>
-        <p style="margin-bottom:0">Three replies run the whole thing: <strong>OK</strong> to send, <strong>EDIT</strong> to send your words instead, <strong>NO</strong> to bin it. The corrections are how the assistant learns our house style — and the drafts stay on until the team is comfortable turning them off, one kind of conversation at a time.</p>
+        <p style="margin-bottom:0">Every message the assistant writes starts as a <strong>draft</strong> on an ops phone. Nothing reaches a guest until somebody approves it. The corrections are how it learns our house style, and the drafts stay on until the team is comfortable turning them off — one kind of conversation at a time, not all at once.</p>
       </div>
+      <div class="tl-msg staff">DRAFT #9WXB2K for Rahul (presales)
+---
+Good evening. The apartments in Assagao are free for 20-22 Dec.
+---
+Reply: OK 9WXB2K · EDIT 9WXB2K &lt;new text&gt; · NO 9WXB2K</div>
       <div class="rule">
         <h3>The one it always answers honestly</h3>
         <p>"You're chatting with Nistula Assistance — our own AI host, built end to end by Nistula to look after your stay from the first hello to welcome back. The front-desk team reads along and can step in anytime — just say the word."</p>
       </div>
     </div>
   </div>
-  <div class="foot"><span>What is Nistula Assistance</span><span>07</span></div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>19</span></div>
 </section>
 
 <!-- ══ 6 · WHAT IT NEVER DOES ═════════════════════════════ -->
 <section class="slide">
   <div class="rail">
-    <div class="eyebrow"><b>06</b> · What it never does</div>
+    <div class="eyebrow"><b>14</b> · What it never does</div>
     <div class="chip next">Five hard nos</div>
   </div>
   <h2 class="wide">Five things that are simply out of reach.</h2>
-  <div class="cols even mid">
+  <div class="cols even mid fill">
     <div class="stack">
       <ul class="crosses big">
         <li><strong>No discounts, ever.</strong> Not on request, not on repeat asking, not for anyone.</li>
@@ -620,13 +1248,13 @@ Reply DONE K7Q2FX when finished.</div>
       </div>
     </div>
   </div>
-  <div class="foot"><span>What is Nistula Assistance</span><span>08</span></div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>20</span></div>
 </section>
 
 <!-- ══ 7 · WHERE IT STANDS ════════════════════════════════ -->
 <section class="slide">
   <div class="rail">
-    <div class="eyebrow"><b>07</b> · Where it stands</div>
+    <div class="eyebrow"><b>15</b> · Where it stands</div>
     <div class="chip plain">July 2026</div>
   </div>
   <h2 class="wide">Built and proven. Waiting on two keys that are not ours to cut.</h2>
@@ -653,7 +1281,7 @@ Reply DONE K7Q2FX when finished.</div>
     <p><strong>Two keys open the final door:</strong> Meta business verification, and the agreement with an authorised WhatsApp provider.</p>
     <p><strong>And the two question documents with the villa team are the fuel</strong> — every answer switches on another feature.</p>
   </div>
-  <div class="foot"><span>What is Nistula Assistance</span><span>09</span></div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>21</span></div>
 </section>
 
 </div>
