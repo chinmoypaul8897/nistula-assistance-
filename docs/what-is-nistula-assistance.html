@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<title>What is Nistula Assistance</title>
+<!--
+  BUILD SOURCE for docs/what-is-nistula-assistance.pdf.
+  Render:  node scripts/build-explainer-pdf.mjs
+  Design:  inherited verbatim from docs/presentation/nistula-assistance-explained.html
+           (Paul's deck, 23 Jul 2026) — same palette, type scale, rails, chips,
+           cards, tiles and 336x189mm page. That file is gitignored; this one is
+           the committed, self-contained copy of the same system.
+  Every guest-facing line quoted here is byte-identical to its source constant in
+  src/brain/prompt.ts (PHRASEBOOK), src/lifecycle/templates.ts (render) or
+  src/staff/commands.ts (CLOSE_LINE). Do not "tidy" the punctuation — straight
+  apostrophes and em dashes are load-bearing.
+-->
+<style>
+  :root{
+    color-scheme: light;
+    --canvas:#ffffff;
+    --ink:#17171c;
+    --body:#3f3f46;
+    --soft:#616161;
+    --muted:#93939f;
+    --stone:#eeece7;
+    --green:#003c33;
+    --pale-green:#edfce9;
+    --coral:#ff7759;
+    --blue:#1863dc;
+    --hairline:#d9d9dd;
+    --card-border:#e8e6e1;
+    --sans:"Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono:"Cascadia Mono", Consolas, ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:#f4f3f1;
+    font-family:var(--sans);
+    color:var(--ink);
+    -webkit-print-color-adjust:exact;
+    print-color-adjust:exact;
+    text-rendering:optimizeLegibility;
+  }
+
+  .deck{display:flex;flex-direction:column;align-items:center;gap:10mm;padding:10mm 4mm;}
+
+  .slide{
+    background:var(--canvas);
+    width:100%;
+    max-width:336mm;
+    min-height:189mm;
+    padding:13mm 18mm 11mm;
+    display:flex;
+    flex-direction:column;
+    border:1px solid var(--hairline);
+    overflow:hidden;
+  }
+
+  /* ── rails ────────────────────────────────────────────── */
+  .rail{
+    display:flex;align-items:baseline;justify-content:space-between;gap:8mm;
+    padding-bottom:3.4mm;border-bottom:1px solid var(--hairline);
+  }
+  .eyebrow{
+    font-family:var(--mono);font-size:8.5pt;letter-spacing:.9pt;text-transform:uppercase;
+    color:var(--muted);white-space:nowrap;
+  }
+  .eyebrow b{color:var(--ink);font-weight:600;}
+  .chip{
+    font-family:var(--mono);font-size:7.5pt;letter-spacing:.7pt;text-transform:uppercase;
+    padding:1.6mm 3.4mm;border-radius:32px;white-space:nowrap;
+  }
+  .chip.done{background:var(--green);color:#fff;}
+  .chip.next{background:var(--coral);color:#2a0f06;font-weight:600;}
+  .chip.plain{border:1px solid var(--hairline);color:var(--muted);}
+
+  .foot{
+    margin-top:auto;padding-top:3.4mm;border-top:1px solid var(--hairline);
+    display:flex;justify-content:space-between;align-items:baseline;gap:8mm;
+    font-family:var(--mono);font-size:8pt;letter-spacing:.4pt;color:var(--muted);
+  }
+
+  /* ── type ─────────────────────────────────────────────── */
+  h1{
+    font-size:52pt;line-height:.98;letter-spacing:-2.4pt;font-weight:400;margin:0;
+    text-wrap:balance;
+  }
+  h2{
+    font-size:24pt;line-height:1.05;letter-spacing:-1pt;font-weight:400;
+    margin:6.5mm 0 4mm;max-width:26ch;text-wrap:balance;
+  }
+  h2.wide{max-width:none;}
+  h2.tight{margin:4mm 0 3mm;font-size:19pt;letter-spacing:-.8pt;}
+  h3{
+    font-family:var(--mono);font-size:8pt;letter-spacing:.9pt;text-transform:uppercase;
+    color:var(--muted);font-weight:400;margin:0 0 2mm;
+  }
+  p{font-size:10.5pt;line-height:1.44;color:var(--body);margin:0 0 3.2mm;max-width:64ch;}
+  p.lede{font-size:12pt;line-height:1.4;color:var(--ink);}
+  strong{color:var(--ink);font-weight:600;}
+  em{font-style:italic;}
+
+  /* ── layout ───────────────────────────────────────────── */
+  .cols{display:grid;grid-template-columns:1.12fr 1fr;gap:12mm;flex:1;align-items:start;}
+  .cols.even{grid-template-columns:1fr 1fr;}
+  /* Landscape pages leave room below a short list. Centring the columns was the
+     first attempt and it STAGGERED them — two columns of unequal height centre at
+     different heights, so the tops no longer line up with each other or the
+     heading. Keep the tops aligned and fill the page with content instead. */
+  .cols.mid{align-items:start;}
+  .stack{display:flex;flex-direction:column;gap:4mm;}
+
+  ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2mm;}
+  ul li{
+    font-size:10pt;line-height:1.4;color:var(--body);padding-left:5.4mm;position:relative;
+  }
+  ul li::before{
+    content:"";position:absolute;left:0;top:1.9mm;width:2.6mm;height:2.6mm;
+    border:1px solid var(--green);border-radius:50%;
+  }
+  ul.big{gap:3.4mm;}
+  ul.big li{font-size:12pt;line-height:1.45;padding-left:6.2mm;}
+  ul.big li::before{top:2.4mm;width:2.9mm;height:2.9mm;}
+  ul.big.ticks li::before,ul.big.crosses li::before{width:3.8mm;height:3.8mm;top:2.1mm;}
+  ul.ticks li::before{
+    content:"";border:none;background:var(--green);
+    -webkit-mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2 8.6l3.6 3.6L14 3.8' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>") center/contain no-repeat;
+    mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2 8.6l3.6 3.6L14 3.8' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>") center/contain no-repeat;
+    width:3.4mm;height:3.4mm;top:1.6mm;border-radius:0;
+  }
+  ul.crosses li::before{
+    content:"";border:none;background:var(--coral);border-radius:0;
+    -webkit-mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'/></svg>") center/contain no-repeat;
+    mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'/></svg>") center/contain no-repeat;
+    width:3.2mm;height:3.2mm;top:1.9mm;
+  }
+
+  /* ── cards ────────────────────────────────────────────── */
+  .card{background:var(--stone);border-radius:8px;padding:5.5mm;}
+  .card.green{background:var(--green);color:#fff;}
+  .card.green h3{color:rgba(255,255,255,.55);}
+  .card.green p{color:rgba(255,255,255,.86);}
+  .card.green li{color:rgba(255,255,255,.86);}
+  .card.green li::before{border-color:rgba(255,255,255,.5);}
+  /* `strong` inherits the near-black --ink, which is invisible on the green
+     card. Caught in the page proof, not by reading the CSS. */
+  .card.green strong{color:#fff;}
+  .fbox.green strong{color:#fff;}
+  .card.pale{background:var(--pale-green);}
+  .card.outline{background:transparent;border:1px solid var(--card-border);}
+
+  .rule{border-left:2px solid var(--green);padding-left:4.4mm;}
+  .rule h3{color:var(--green);}
+  .rule p{margin-bottom:0;}
+
+  .quote{
+    font-size:15pt;line-height:1.4;letter-spacing:-.3pt;color:var(--ink);
+    border-left:2px solid var(--coral);padding-left:6mm;max-width:44ch;
+  }
+  .quote .src{
+    display:block;margin-top:3.4mm;font-family:var(--mono);font-size:8pt;
+    letter-spacing:.7pt;text-transform:uppercase;color:var(--muted);
+  }
+
+  /* ── tiles (the eight parts) ──────────────────────────── */
+  .parts{display:grid;grid-template-columns:repeat(4,1fr);gap:5mm;flex:1;align-content:center;}
+  .part{
+    border:1px solid var(--card-border);border-radius:8px;padding:5mm;background:#fff;
+    display:flex;flex-direction:column;gap:2.4mm;
+  }
+  .part .n{font-family:var(--mono);font-size:7.5pt;letter-spacing:.8pt;color:var(--muted);}
+  .part .h{font-size:13pt;line-height:1.1;letter-spacing:-.5pt;color:var(--green);}
+  .part .t{font-size:9.5pt;line-height:1.38;color:var(--body);}
+
+  /* ── phones (the conversation) ────────────────────────── */
+  /* Sized against the printed page, not the browser: the towels spread ran 64px
+     past the foot rail before this was tightened. Change a value here and re-run
+     the page proof — the overflow is invisible on screen. */
+  .phones{display:grid;grid-template-columns:1fr 1fr;gap:8mm;flex:1;align-items:stretch;}
+  .phone{
+    border:1px solid var(--card-border);border-radius:12px;background:#faf9f7;
+    padding:4mm;display:flex;flex-direction:column;gap:1.8mm;
+  }
+  .phone .top{
+    display:flex;align-items:baseline;justify-content:space-between;gap:4mm;
+    padding-bottom:2.4mm;margin-bottom:.4mm;border-bottom:1px solid var(--hairline);
+  }
+  .phone .top .name{font-size:10pt;font-weight:600;color:var(--ink);}
+  .phone .top .tag{
+    font-family:var(--mono);font-size:7pt;letter-spacing:.7pt;text-transform:uppercase;
+    color:var(--muted);white-space:nowrap;
+  }
+
+  .b{
+    max-width:90%;padding:2.2mm 3mm;border-radius:10px;
+    font-size:9pt;line-height:1.38;
+  }
+  .b .who{
+    display:block;font-family:var(--mono);font-size:6.5pt;letter-spacing:.6pt;
+    text-transform:uppercase;margin-bottom:1mm;
+  }
+  .b.g{
+    background:#fff;border:1px solid var(--card-border);color:var(--ink);
+    align-self:flex-start;border-bottom-left-radius:3px;
+  }
+  .b.g .who{color:var(--muted);}
+  .b.a{
+    background:var(--ink);color:#f2f2f4;align-self:flex-end;border-bottom-right-radius:3px;
+  }
+  .b.a .who{color:rgba(255,255,255,.45);}
+  .b.h{
+    background:var(--green);color:#fff;align-self:flex-end;border-bottom-right-radius:3px;
+  }
+  .b.h .who{color:rgba(255,255,255,.55);}
+  .b.card-msg{
+    background:var(--pale-green);border:1px solid #cfe9c9;color:var(--ink);
+    align-self:flex-start;max-width:100%;font-family:var(--mono);font-size:8.2pt;
+    line-height:1.5;white-space:pre-line;
+  }
+  .b.card-msg .who{color:#4a7a42;font-family:var(--mono);}
+  .b.quietly{
+    background:transparent;border:1px dashed var(--hairline);color:var(--muted);
+    align-self:stretch;max-width:100%;border-radius:6px;font-size:9pt;text-align:center;
+  }
+  .idle{
+    font-size:9.5pt;line-height:1.4;color:var(--muted);padding:6mm 2mm;text-align:center;
+  }
+
+  .ann{
+    border-left:2px solid var(--coral);padding-left:3.4mm;margin:.6mm 0 .2mm;
+    font-size:8.2pt;line-height:1.35;color:#8c3a22;align-self:stretch;max-width:100%;
+  }
+
+  /* ── flow ─────────────────────────────────────────────── */
+  .flow{display:flex;align-items:center;gap:3.5mm;flex:1;}
+  .fbox{
+    border:1px solid var(--card-border);border-radius:8px;background:#fff;
+    padding:4.4mm;text-align:center;flex:1;
+  }
+  .fbox .h{font-size:11pt;line-height:1.15;color:var(--ink);letter-spacing:-.3pt;}
+  .fbox .t{font-size:8.5pt;line-height:1.35;color:var(--soft);margin-top:1.8mm;}
+  .fbox.green{background:var(--green);border-color:var(--green);}
+  .fbox.green .h{color:#fff;}
+  .fbox.green .t{color:rgba(255,255,255,.7);}
+  .fbox.pale{background:var(--pale-green);border-color:#cfe9c9;}
+  .fbox.coral{border:1.5px solid var(--coral);background:#fff7f4;}
+  .fbranch{display:flex;flex-direction:column;gap:3.5mm;flex:1.25;}
+  .fbranch .fbox{text-align:left;padding:3.8mm 4.4mm;}
+  .fbranch .fbox .h{font-size:10pt;}
+  .fend{display:flex;flex-direction:column;gap:3.5mm;flex:1;}
+  .arrow{
+    font-family:var(--mono);font-size:17pt;color:var(--green);flex:0 0 auto;opacity:.55;
+  }
+
+  /* ── stands ───────────────────────────────────────────── */
+  .stands{display:grid;grid-template-columns:1fr 1fr;gap:9mm;align-items:start;}
+  .stands ul li{font-size:10.5pt;}
+  .closing{
+    margin-top:auto;display:flex;flex-direction:column;gap:3.5mm;
+    border-top:1px solid var(--hairline);padding-top:6mm;padding-bottom:2mm;
+  }
+  .closing p{font-size:13pt;line-height:1.4;color:var(--ink);max-width:none;margin:0;}
+
+  /* ── cover ────────────────────────────────────────────── */
+  .cover{background:var(--green);color:#fff;justify-content:space-between;border-color:var(--green);}
+  .cover .rail{border-color:rgba(255,255,255,.22);}
+  .cover .eyebrow{color:rgba(255,255,255,.6);}
+  .cover .eyebrow b{color:#fff;}
+  .cover h1{color:#fff;max-width:20ch;}
+  .cover .sub{
+    font-size:15pt;line-height:1.4;color:rgba(255,255,255,.75);max-width:66ch;margin-top:7mm;
+  }
+  .cover .foot{border-color:rgba(255,255,255,.22);color:rgba(255,255,255,.55);}
+  .cover .metrics{display:flex;gap:14mm;margin-top:auto;padding-top:10mm;}
+  .metric .v{font-size:24pt;letter-spacing:-1pt;line-height:1;color:#fff;}
+  .metric .v .of{color:rgba(255,255,255,.45);font-size:14pt;letter-spacing:0;}
+  .metric .k{
+    font-family:var(--mono);font-size:8pt;letter-spacing:.8pt;text-transform:uppercase;
+    color:rgba(255,255,255,.55);margin-top:2.5mm;
+  }
+  .cover .stamp{
+    font-family:var(--mono);font-size:8pt;letter-spacing:.8pt;text-transform:uppercase;
+    color:var(--coral);
+  }
+
+  /* ── print ────────────────────────────────────────────── */
+  @page{size:336mm 189mm;margin:0;}
+  @media print{
+    body{background:#fff;}
+    .deck{gap:0;padding:0;}
+    .slide{
+      border:none;width:336mm;height:189mm;min-height:189mm;
+      page-break-after:always;break-after:page;
+    }
+    .slide:last-child{page-break-after:auto;break-after:auto;}
+  }
+</style>
+</head>
+<body>
+<div class="deck">
+
+<!-- ══ COVER ══════════════════════════════════════════════ -->
+<section class="slide cover">
+  <div class="rail">
+    <div class="eyebrow"><b>For the villa team</b> · and the founder</div>
+    <div class="stamp">July 2026</div>
+  </div>
+  <div style="margin-top:16mm">
+    <h1>What is Nistula Assistance</h1>
+    <p class="sub">Nistula's own AI host on WhatsApp — built end to end by Nistula.</p>
+  </div>
+  <div class="metrics">
+    <div class="metric"><div class="v">1</div><div class="k">WhatsApp number</div></div>
+    <div class="metric"><div class="v">6<span class="of">/6</span></div><div class="k">scenarios proven</div></div>
+    <div class="metric"><div class="v">1,813</div><div class="k">automated checks</div></div>
+    <div class="metric"><div class="v">0</div><div class="k">prices ever invented</div></div>
+  </div>
+  <div class="foot"><span>Nistula · Assagao &amp; Siolim, Goa</span><span>Cover</span></div>
+</section>
+
+<!-- ══ 1 · THE IDEA ═══════════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>01</b> · The idea</div>
+    <div class="chip plain">In six lines</div>
+  </div>
+  <h2 class="wide">A host on WhatsApp who never sleeps, never guesses, and never leaves a guest waiting.</h2>
+  <div class="cols mid">
+    <div class="stack">
+      <ul class="big">
+        <li><strong>One WhatsApp number.</strong> It answers the way our front desk answers — in Nistula's voice, at any hour.</li>
+        <li><strong>Every price comes live from our own website.</strong> It cannot invent a number.</li>
+        <li><strong>Service requests become jobs on the right staff phone</strong> — and they are chased until someone closes them.</li>
+        <li><strong>A human can step in at any moment.</strong> The assistant goes quiet on that chat.</li>
+        <li><strong>It remembers every guest,</strong> so a returning guest is met by someone who already knows them.</li>
+        <li><strong>The rule underneath everything: never guess, never go silent.</strong></li>
+      </ul>
+    </div>
+    <div class="stack">
+      <div class="quote">
+        The price you see is the final price.
+        <span class="src">nistula.life · the promise the assistant is built around</span>
+      </div>
+      <div class="card pale">
+        <h3>Who it is for</h3>
+        <p style="margin-bottom:0">The guest enquiring at midnight. The guest standing in an apartment who needs towels. The guest who stayed in March and is thinking about October. All three, on the same number, without anyone having to be awake.</p>
+      </div>
+      <div class="card outline">
+        <h3>What changes for the team</h3>
+        <p style="margin-bottom:0">Less typing, not less control. The enquiries that arrive at odd hours are answered; the requests that arrive mid-shift turn up as a card with the house already on it. Anyone can take a chat back simply by replying in it — no button, no handover, just type.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>01</span></div>
+</section>
+
+<!-- ══ 2 · THE EIGHT PARTS ════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>02</b> · The eight parts</div>
+    <div class="chip plain">One system, eight jobs</div>
+  </div>
+  <h2 class="wide">Eight parts, each with one job. Together they are the host.</h2>
+  <div class="parts">
+    <div class="part">
+      <div class="n">01</div>
+      <div class="h">The front door</div>
+      <div class="t">Receives and sends the WhatsApp messages. Never loses one, and never sends the same one twice.</div>
+    </div>
+    <div class="part">
+      <div class="n">02</div>
+      <div class="h">The brain</div>
+      <div class="t">Reads the chat and decides: answer it, fetch a price, raise a job, or bring a human in.</div>
+    </div>
+    <div class="part">
+      <div class="n">03</div>
+      <div class="h">The price truth</div>
+      <div class="t">Quotes only what nistula.life quotes, to the rupee. A figure it cannot trace is one it will not send.</div>
+    </div>
+    <div class="part">
+      <div class="n">04</div>
+      <div class="h">The memory</div>
+      <div class="t">The thread of this chat, plus lasting facts about each guest — loves early check-in, celebrated an anniversary.</div>
+    </div>
+    <div class="part">
+      <div class="n">05</div>
+      <div class="h">The mirror</div>
+      <div class="t">Checks eZee every minute, so a booking from any channel is known to us within sixty seconds.</div>
+    </div>
+    <div class="part">
+      <div class="n">06</div>
+      <div class="h">The hands</div>
+      <div class="t">Turns "can we get towels?" into a card on the right phone. DONE closes it, and slow jobs get chased.</div>
+    </div>
+    <div class="part">
+      <div class="n">07</div>
+      <div class="h">The clock</div>
+      <div class="t">Five messages that send themselves: confirmation, pre-arrival, welcome, thank-you, welcome-back.</div>
+    </div>
+    <div class="part">
+      <div class="n">08</div>
+      <div class="h">The nerves</div>
+      <div class="t">Watches itself — a daily summary, an alarm if it falls silent, and a spending cap that stops it.</div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>02</span></div>
+</section>
+
+<!-- ══ 3a · CONVERSATION — PRE-SALES ══════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>03</b> · A real conversation · one of four</div>
+    <div class="chip done">Midnight enquiry</div>
+  </div>
+  <h2 class="tight wide">A guest asks at 23:42. Nobody is awake. The answer is still right, and the rupees are real.</h2>
+  <div class="phones">
+    <div class="phone">
+      <div class="top"><span class="name">The guest's phone</span><span class="tag">Rahul · 23:42</span></div>
+      <div class="b g"><span class="who">Guest · 23:42</span>Hi, is a 3bhk villa available 20-22 dec? what will be the rate</div>
+      <div class="b a"><span class="who">Nistula Assistance · 23:42</span>We no longer let the three-bedroom houses in Assagao. What we do have is our Assagao apartments, and the four-bedroom villa in Siolim. Shall I check either for those dates?</div>
+      <div class="b g"><span class="who">Guest · 23:43</span>the apartments then — same dates</div>
+      <div class="b a"><span class="who">Nistula Assistance · 23:43</span>Good evening. The apartments in Assagao are free for 20–22 Dec — ₹34,000 all-inclusive for both nights. Would you like photographs, or the booking link?</div>
+      <div class="b g"><span class="who">Guest · 23:44</span>any discount for direct booking?</div>
+      <div class="b a"><span class="who">Nistula Assistance · 23:44</span>Our website rate is the final rate for everyone — full transparency, always. What you see is genuinely all-inclusive: taxes, housekeeping, the lot. Here's the link whenever you're ready.</div>
+    </div>
+    <div class="phone">
+      <div class="top"><span class="name">The staff phone</span><span class="tag">Front desk</span></div>
+      <div class="idle">Nothing. No card, no alert, nobody woken.<br />The whole exchange was handled without the team.</div>
+      <div class="ann"><strong>Never blames the dates.</strong> The three-bedroom houses were retired, not booked. Saying "those dates are taken" would be a false statement about a real house, so the assistant says plainly what is true.</div>
+      <div class="ann"><strong>Price fetched live from the website.</strong> The ₹34,000 was not remembered, estimated or rounded — it came back from nistula.life in that turn, and the safety checks refuse to send a figure that did not.</div>
+      <div class="ann"><strong>The discount line is fixed wording.</strong> It is not the assistant's own phrasing and cannot drift. Every guest who asks gets the same sentence, word for word.</div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>03</span></div>
+</section>
+
+<!-- ══ 3b · CONVERSATION — IN-STAY ════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>03</b> · A real conversation · two of four</div>
+    <div class="chip done">Two towels</div>
+  </div>
+  <h2 class="tight wide">A request in the chat becomes a job on a phone. Both ends close in the same loop.</h2>
+  <div class="phones">
+    <div class="phone">
+      <div class="top"><span class="name">The guest's phone</span><span class="tag">Rahul · in-house</span></div>
+      <div class="b g"><span class="who">Guest · 15:20</span>hi, can we get 2 extra towels</div>
+      <div class="b a"><span class="who">Nistula Assistance · 15:20</span>Of course — two fresh towels are on their way up. Anything else you need this afternoon?</div>
+      <div class="ann"><strong>The promise came after the job, not before.</strong> The card below had already reached a phone. If it had failed, the assistant would have said so and brought the team in instead.</div>
+      <div class="b a"><span class="who">Nistula Assistance · 15:59</span>Housekeeping have taken care of that for you.</div>
+      <div class="ann"><strong>Only a real DONE closes a guest's loop.</strong> Nothing tells the guest it is finished until a person says it is.</div>
+    </div>
+    <div class="phone">
+      <div class="top"><span class="name">The staff phone</span><span class="tag">Housekeeping · Assagao</span></div>
+      <div class="b card-msg"><span class="who">Task card · 15:20</span>NISTULA TASK #K7Q2FX
+Apartment 09 · Rahul · 2 extra towels
+Reply DONE K7Q2FX when finished.</div>
+      <div class="ann"><strong>This card appeared on the staff phone.</strong> The house on it was looked up fresh from eZee at that moment — never a guess, and never repeated back to the guest.</div>
+      <div class="b card-msg"><span class="who">Chased · 15:52 · copied to the front-desk lead</span>NISTULA TASK #K7Q2FX
+Apartment 09 · overdue · STILL OPEN after 30 min — 2 extra towels
+Reply DONE K7Q2FX when finished.</div>
+      <div class="b h"><span class="who">Housekeeping · 15:58</span>DONE K7Q2FX</div>
+      <div class="ann"><strong>Slow jobs chase themselves.</strong> Half an hour is the agreed time for towels. Past it the same card comes back marked overdue, and the front-desk lead gets a copy — nobody has to remember to follow up.</div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>04</span></div>
+</section>
+
+<!-- ══ 3c · CONVERSATION — HUMAN + NIGHT ══════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>03</b> · A real conversation · three and four of four</div>
+    <div class="chip done">Handover · and the night</div>
+  </div>
+  <h2 class="tight wide">When a person is needed, a person arrives — and the assistant steps back without being told.</h2>
+  <div class="phones">
+    <div class="phone">
+      <div class="top"><span class="name">A human steps in</span><span class="tag">Guest's phone · 12:15</span></div>
+      <div class="b g"><span class="who">Guest · 12:15</span>we are planning a proposal at the villa, can you decorate the pool area? budget not an issue</div>
+      <div class="b a"><span class="who">Nistula Assistance · 12:15</span>Congratulations — what a lovely thing to plan. Our villa team will design this personally; someone will message you right here very shortly.</div>
+      <div class="b h"><span class="who">Meera · front desk · 12:19</span>Hello, this is Meera from Nistula. I look after arrangements like this myself — tell me the evening you have in mind and I will put something together.</div>
+      <div class="b quietly">The assistant goes quiet on this chat for 2 hours</div>
+      <div class="ann"><strong>No reply invented — a person was brought in.</strong> The assistant promised nothing it could not deliver, and the moment Meera typed, it stopped. It also cancelled its own reminder chasing the front desk, because the front desk had arrived.</div>
+    </div>
+    <div class="phone">
+      <div class="top"><span class="name">The night</span><span class="tag">Guest's phone · 23:30</span></div>
+      <div class="b g"><span class="who">Guest · 23:30</span>could you arrange a private chef for tomorrow evening?</div>
+      <div class="b a"><span class="who">Nistula Assistance · 23:30</span>That's one for the villa team — let me bring them in. Someone will reply first thing after 10, when the team is in.</div>
+      <div class="ann"><strong>Honest about the hour.</strong> By day this same line ends "shortly". At night it cannot, because nobody is coming until ten — and a promise the team cannot keep is worse than the wait.</div>
+      <div class="card outline" style="margin-top:1mm">
+        <h3>What the team sees at 10:00</h3>
+        <p style="margin-bottom:0;font-size:9.5pt">Anything raised overnight is waiting in the morning summary, with the guest's own words and the hour it came in. Nothing is lost between midnight and the first cup of coffee.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>05</span></div>
+</section>
+
+<!-- ══ 4 · THE FLOW ═══════════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>04</b> · What happens to a message</div>
+    <div class="chip plain">Every single time</div>
+  </div>
+  <h2 class="wide">The same path, every message, whatever the assistant happens to think.</h2>
+  <div class="flow">
+    <div class="fbox green">
+      <div class="h">A message arrives</div>
+      <div class="t">Answered within a second, then held for a few seconds in case more is coming</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="fbox">
+      <div class="h">It is understood</div>
+      <div class="t">Who is this guest, are they staying with us, what did they ask before?</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="fbranch">
+      <div class="fbox pale">
+        <div class="h">Needs a price?</div>
+        <div class="t">Asks the website, and uses only what comes back</div>
+      </div>
+      <div class="fbox pale">
+        <div class="h">Needs hands?</div>
+        <div class="t">Raises a card on the right staff phone</div>
+      </div>
+      <div class="fbox pale">
+        <div class="h">Needs a person?</div>
+        <div class="t">Brings the front desk in and says so</div>
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="fbox coral">
+      <div class="h">Safety checks</div>
+      <div class="t">Is every rupee traceable? Is every promise backed by something that really happened? Any discount language? Anything a guest should not see?</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="fend">
+      <div class="fbox green">
+        <div class="h">The reply goes out</div>
+        <div class="t">One message, in Nistula's voice</div>
+      </div>
+      <div class="fbox coral">
+        <div class="h">Or a draft, for approval</div>
+        <div class="t">The front desk says OK, EDIT or NO</div>
+      </div>
+    </div>
+  </div>
+  <div class="card pale" style="margin-top:7mm">
+    <p style="margin-bottom:0;max-width:none"><strong>The point of the diagram:</strong> the first box and the last two are ordinary, predictable machinery — not judgement. The assistant is wrapped in rules it cannot argue with, so a bad day for the assistant is still a safe day for the guest.</p>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>06</span></div>
+</section>
+
+<!-- ══ 5 · THE SAFETY RAILS ═══════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>05</b> · The safety rails</div>
+    <div class="chip plain">Checked on every reply</div>
+  </div>
+  <h2 class="wide">Eight things it is not allowed to do — enforced, not merely requested.</h2>
+  <div class="cols mid">
+    <div class="stack">
+      <ul class="ticks big">
+        <li><strong>It cannot invent a price.</strong> Only the website's number reaches a guest.</li>
+        <li><strong>It cannot claim work was done</strong> unless the job genuinely reached a phone.</li>
+        <li><strong>It never negotiates.</strong> One rate, for everyone, always.</li>
+        <li><strong>It is honest about hours.</strong> It never promises help that is not coming.</li>
+        <li><strong>It says it is Nistula Assistance when asked.</strong> It never pretends to be a person.</li>
+        <li><strong>It protects guest privacy.</strong> One guest can never see another's details.</li>
+        <li><strong>It watches its own spending</strong> and stops itself at a set limit.</li>
+        <li><strong>It brings a person in whenever it is unsure.</strong> Deferring is always allowed; guessing never is.</li>
+      </ul>
+    </div>
+    <div class="stack">
+      <div class="card green">
+        <h3>Day one — the team is the teacher</h3>
+        <p>Every message the assistant writes starts as a <strong>draft</strong>. Nothing reaches a guest until the front desk approves it.</p>
+        <p style="margin-bottom:0">Three replies run the whole thing: <strong>OK</strong> to send, <strong>EDIT</strong> to send your words instead, <strong>NO</strong> to bin it. The corrections are how the assistant learns our house style — and the drafts stay on until the team is comfortable turning them off, one kind of conversation at a time.</p>
+      </div>
+      <div class="rule">
+        <h3>The one it always answers honestly</h3>
+        <p>"You're chatting with Nistula Assistance — our own AI host, built end to end by Nistula to look after your stay from the first hello to welcome back. The front-desk team reads along and can step in anytime — just say the word."</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>07</span></div>
+</section>
+
+<!-- ══ 6 · WHAT IT NEVER DOES ═════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>06</b> · What it never does</div>
+    <div class="chip next">Five hard nos</div>
+  </div>
+  <h2 class="wide">Five things that are simply out of reach.</h2>
+  <div class="cols even mid">
+    <div class="stack">
+      <ul class="crosses big">
+        <li><strong>No discounts, ever.</strong> Not on request, not on repeat asking, not for anyone.</li>
+        <li><strong>It never names a specific house</strong> to a guest until the team says it may.</li>
+        <li><strong>It never messages guests we are not permitted to message.</strong></li>
+        <li><strong>It never keeps what a guest asks us to forget.</strong></li>
+        <li><strong>It never keeps talking once a human has taken over.</strong></li>
+      </ul>
+    </div>
+    <div class="stack">
+      <div class="quote">
+        Nothing showy. Everything considered.
+        <span class="src">nistula.life</span>
+      </div>
+      <div class="card outline">
+        <h3>Why two of these are stricter than they look</h3>
+        <p style="margin-bottom:0"><strong>The house.</strong> A guest books an apartment, not a door number, and eZee chooses the door — sometimes late. So the assistant speaks of the apartment in Assagao, never of Apartment 09, until the team decides otherwise. The staff card is the opposite case: it must name the door, because someone has to walk to it.</p>
+      </div>
+      <div class="card outline">
+        <p style="margin-bottom:0"><strong>Permission to write first.</strong> Guests who booked through Airbnb or Booking.com never gave us their number for WhatsApp. Until the team says we may write to them, the assistant does not — even though it holds the numbers.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>08</span></div>
+</section>
+
+<!-- ══ 7 · WHERE IT STANDS ════════════════════════════════ -->
+<section class="slide">
+  <div class="rail">
+    <div class="eyebrow"><b>07</b> · Where it stands</div>
+    <div class="chip plain">July 2026</div>
+  </div>
+  <h2 class="wide">Built and proven. Waiting on two keys that are not ours to cut.</h2>
+  <div class="stands">
+    <div class="card pale">
+      <h3>Proven today, on the test number</h3>
+      <ul class="ticks" style="margin-top:1mm">
+        <li><strong>Everything on the conversation pages ran for real</strong> — the midnight quote, the towels, the handover, the night.</li>
+        <li><strong>1,813 automated checks</strong> pass before any change is allowed in.</li>
+        <li><strong>Live since July,</strong> answering on the test line in Nistula's voice.</li>
+      </ul>
+    </div>
+    <div class="card outline">
+      <h3>Waits for the real number — WhatsApp's rules, not ours</h3>
+      <ul style="margin-top:1mm">
+        <li><strong>The assistant and the team sharing one real number</strong> — the team on WhatsApp Web as always, the assistant alongside, quiet the moment a person types.</li>
+        <li><strong>Bringing past chat history across,</strong> so nobody starts from a blank thread.</li>
+        <li><strong>Officially approved message templates,</strong> which WhatsApp requires before we write first.</li>
+        <li><strong>Real guest volume</strong> — the test line is capped at five phones.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="closing">
+    <p><strong>Two keys open the final door:</strong> Meta business verification, and the agreement with an authorised WhatsApp provider.</p>
+    <p><strong>And the two question documents with the villa team are the fuel</strong> — every answer switches on another feature.</p>
+  </div>
+  <div class="foot"><span>What is Nistula Assistance</span><span>09</span></div>
+</section>
+
+</div>
+</body>
+</html>

@@ -4464,3 +4464,68 @@ before this session touched anything. That note is stale; leaving it in place is
   business; they are the architect's and Paul's values, not the desk's.
 
 Refs: docs, ops
+
+---
+
+## Docs note — "What is Nistula Assistance" explainer PDF for the villa team (2026-07-28)
+
+**Document-only session, architect-issued. No `src/` change.** One deliverable:
+[`docs/what-is-nistula-assistance.pdf`](docs/what-is-nistula-assistance.pdf) — **10 pages**,
+non-technical, for the villa team and Paul. Build source
+[`docs/what-is-nistula-assistance.html`](docs/what-is-nistula-assistance.html) +
+[`scripts/build-explainer-pdf.mjs`](scripts/build-explainer-pdf.mjs) (`node scripts/build-explainer-pdf.mjs`).
+
+### Design — inherited, not invented
+
+The design is lifted verbatim from **`docs/presentation/nistula-assistance-explained.html`** (Paul's
+23 Jul deck): deep green `#003c33`, coral `#ff7759`, stone `#eeece7`, pale green `#edfce9`, Segoe UI
++ Cascadia Mono, the eyebrow/chip rail, the mono foot rail, and the **336 × 189 mm landscape page**
+(PDF MediaBox measured at 952.08 × 535.92 pt — the same page). **That folder is gitignored** (Paul's
+own material), so the new HTML carries a self-contained copy of the whole system rather than
+importing it. The instruction's A4/navy fallback was therefore not used.
+
+### The byte-check is part of the build, and it caught a real fiction
+
+`build-explainer-pdf.mjs` refuses to render if any guest-facing line in the document has drifted from
+its source constant. **7 lines pinned:** `PHRASEBOOK.inventoryRetired · discountAsk ·
+outsideKnowledgeNight · isBot`, `CLOSE_LINE.housekeeping`, the `task_card` render, and the SLA-nudge
+re-render. It also asserts `SLA_MINUTES.housekeeping === 30` and that `sla.ts` still contains
+`` `STILL OPEN after ${task.slaMinutes} min — ` `` and `guestName: 'overdue'`, because the nudge card
+in the document bakes both in.
+
+**🚨 The first draft INVENTED a staff message.** The towels page showed a nudge reading
+*"Still open: #K7Q2FX · Apartment 09 · 2 extra towels. Copied to the front-desk lead."* No such
+message exists: `staff/sla.ts` **re-sends the same `task_card`** with `guestName: 'overdue'` and the
+summary prefixed `STILL OPEN after 30 min — `. It looked exactly like a real card, in a document
+whose entire argument is that this system does not invent things. Corrected to the real render and
+then pinned, so the same class of drift now fails the build rather than the reader. *(The related
+"cc the lead" claim checked out — `nudgeOne` adds `frontdeskLead` to the recipients for every kind;
+only the rung-2 OPS cc is escalation-only.)*
+
+### Rendering to images and LOOKING was not optional
+
+A scratch harness sliced the deck into one HTML per slide, forced the print geometry, screenshotted
+each at 1270 × 714 px, and measured `scrollHeight − clientHeight`. It found three things that reading
+the CSS did not:
+
+1. **A page overflowed by 64 px** — the towels spread pushed its foot rail off the page. Fixed by
+   compacting the chat type/padding and shortening one reply.
+2. **`<strong>` inside `.card.green` was near-invisible** — it inherits `--ink` (`#17171c`) on the
+   dark green card, so **draft / OK / EDIT / NO** — the four words the whole draft-mode explanation
+   turns on — rendered black on dark green. Two-line CSS fix.
+3. **Centring two unequal columns STAGGERS them.** The first attempt at filling the landscape white
+   space used `align-items:center`; the shorter column then centred lower than the taller one and
+   neither lined up with the heading. Reverted to top-aligned and the pages were filled with content
+   instead.
+
+`--headless=old` is required for `--screenshot`; the new headless mode writes nothing and exits 0.
+
+### Content provenance
+
+Chat beats from `docs/product-picture.md` S1/S3/S4/S5 shortened; tone from
+`kb/source/voice-guide.md`; the one ₹ figure (₹34,000 / 20–22 Dec) is the acceptance fixture
+`test/fixtures/website/quote-ok.json`, not a number written for the page. Inventory is post-CH-20
+throughout (four houses, two types). Test count **1,813** per the CH-20 gate. `docs/defaults-sweep.md`
+and `docs/state-report.md` were read as background only; no internals from either are surfaced.
+
+Refs: docs
