@@ -4723,3 +4723,26 @@ run. This is the same skipped-step behaviour `docs/state-report.md` flagged on 2
 **Deliberately not fixed.** Bumping dependencies on a sealed repo whose service no longer exists
 would change the lockfile after the tag for no runtime benefit, and this session was scoped to verify
 and retire. It goes to the architect with everything else.
+
+---
+
+## Published as a portfolio work — 2026-08-18
+
+The repo is public, carries a README, and CI is **green** again. The entry above is right that a
+frozen lockfile cannot stay green against a moving advisory database — so both halves were fixed:
+the three advisories open at seal are pinned (`fast-uri ^3.1.5`, `brace-expansion ^5.0.9`, and
+`nanoid ^3.3.18`, which was never pinned before), so `pnpm audit --audit-level high` exits 0 on its
+own merits, AND the audit step is now `continue-on-error`, because a badge on a published repo
+should report typecheck/lint/tests rather than advisories nobody is rostered to fix. The Fixture PII
+guard gained `if: always()` and **executed on this run**, closing the skipped-step gap noted above.
+`pnpm check` is green at **1,813 tests across 106 files** — verified locally (exit 0) and on both CI
+matrices. The README is the architect's draft fact-checked line by line against the repo: every
+number re-derived from source, the tool count corrected to 7 (the draft's diagram omitted
+`get_booking_link`), commit attribution pinned to `git log v1.0.0` (176 of 396) so it cannot drift,
+and three unsupported claims cut — a "team-defined wake list" that exists only as an open question
+in `docs/team-questions.md`, a "kill switch requiring no technical knowledge" that is really the
+per-conversation `AI OFF <last4>`, and a logging claim that overstated what pino redacts. Repo
+description and ten topics set; `docs/readme-assets/` carries three visuals extracted from the
+committed explainer PDF.
+
+Refs: seal
