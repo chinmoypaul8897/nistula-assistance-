@@ -4589,3 +4589,106 @@ and a global `nth-last-child(2)` bottom margin so nothing sits flush on the foot
 typecheck and lint clean on the new script (no `src/` or `test/` change, so the suite was not re-run).
 
 Refs: docs
+
+---
+
+## Project sealed — v1.0.0, internship complete (Jun–Jul 2026) — sealed 2026-08-17
+
+**Seal session 1 of 2: verify + retire.** The build finished at `v1.0.0` (CH-00 → CH-20 plus
+FIX-1/2/4); the internship has ended; Nistula has approved publishing this repo as a portfolio work.
+This entry is the closing record. **Nothing here changes behaviour — the service no longer exists.**
+
+### The last heartbeat
+
+**There was no live `/health` left to capture.** Probed 2026-08-17T15:22:46Z:
+
+```
+GET https://nistula-assistance-production.up.railway.app/health
+→ 404 {"status":"error","code":404,"message":"Application not found"}
+```
+
+That 404 predates this session. The app service's last deployment was
+`fc97a05d-ceca-4154-b58a-1ff11e89c8dd`, **status `REMOVED`**, created **2026-07-28T01:42:22Z** on
+commit **`7497ddd`** ("docs: expand the explainer…") — the last commit on `main`. `activeDeployments`
+was already `0` on both services when this session opened, so the box had stopped some time between
+28 Jul and today, most likely with the trial plan (`meta.plan: "trial"`) rather than by a deploy.
+
+**The last recorded LIVE heartbeat therefore stands as the one in `docs/state-report.md` (~25 Jul):**
+
+```json
+{"ok":true,"version":"0.1.0","uptime":588,"db":true,"boss":true,
+ "degraded":false,"pollerAgeMs":17135,"senderAgeMs":17133}
+```
+
+— poller and lifecycle sender both ticking. That is the system's last proof of life, and
+`/health` never exposed the deployed commit, so the running commit at that moment stays UNKNOWN.
+
+### What was retired
+
+| Thing | Id | Result |
+|---|---|---|
+| App service `nistula-assistance-` | `001289b2-0c9e-478c-b684-82a926bff948` | **deleted** |
+| Postgres service | `9a054cf8-261d-4f42-81d3-4fa9ccd4217f` | **deleted** |
+| `postgres-volume` (168 MB, `/var/lib/postgresql/data`) | attached to Postgres | **delete scheduled 2026-08-19 20:57 IST** |
+| Project `nistula-assistance` | `b2967725-…` | kept, now **0 services** |
+
+Verified after: `railway service list` → *"No services found in environment 'production'"*;
+`railway status` → `serviceInstances: 0`, `services: []`; `/health` → 404 (re-probed 15:28:34Z).
+
+**🚨 The trap worth recording: deleting the Postgres SERVICE did NOT delete the DATA.** The volume
+survived the service deletion, detached but intact — `Attached to: N/A`, still `Ready`, still
+168 MB — and had to be deleted as a separate object. **And `volume delete` is not immediate:** it
+returns `Deletes on: Aug 19 2026 8:57 PM +05:30`, a ~48 h grace window. So the real guest data
+mirrored from eZee is *scheduled* for destruction, not yet destroyed, and remains recoverable by
+Railway until 19 Aug. There are no backups by design (`BACKUP_ENABLED` never set in production), so
+after that date the mirror is gone for good. **Anyone auditing this should check the volume is
+actually gone on 19 Aug, not assume the command sufficed** — same failure class as the rest of this
+build: the verb the API offered ("delete") did not mean what the caller needed ("erased").
+
+### Sweep verdict: CLEAN
+
+Read-only sweep of the **entire** history — 420 commits across 84 refs (all branches, all 31 tags),
+and every one of the **1 399 blobs in the object database**, which covers unreachable objects too.
+
+- **Secrets — none.** `gitleaks` 8.28.0 over `--log-opts="--all"`: **0 findings**, 369 commits (= all
+  non-merge commits, i.e. every commit that introduces content). A separate blob-level pass for
+  `sk-ant`, `EAA…`, eZee auth codes, `postgres(ql)://` with credentials, `dh_live_`, Bearer tokens,
+  JWTs, private-key blocks, `age` keys/recipients, AWS keys, `hc-ping`/healthchecks URLs, Slack/GitHub/
+  Google keys and `.env`-shaped assignments resolved every hit to a test literal or documentation:
+  `AKIAIOSFODNN7EXAMPLE` (AWS's own published SigV4 vector), `Bearer test-token-never-logged`,
+  `postgresql://nistula:nistula@localhost` (local dev), `sk-super-secret-key` / `EAAG-token-value` /
+  `ezee-auth-value` (config-test fixtures), and empty keys in `.env.example`.
+- **`.env`, `credentials-local/`, `*.pem`, `*.key` have NEVER been committed in any revision** —
+  confirmed by `--diff-filter=A` over `--all --full-history`. Only `.env.example` (names only) exists.
+- **The dead-man's-switch URL never leaked.** The only `hc-ping.com` string in all of history is the
+  placeholder `hc-ping.com/secret-uuid` in `test/config.test.ts`, which asserts it gets redacted.
+- **Personal data — no guest data.** 2 987 phone-shaped hits reduce to: **228 distinct numbers in the
+  reserved fictional `7700 900xxx` block** (2 815 hits), the **published business number
+  8810358517** (78 hits, on nistula.life), `9999…`/`+1 415 555…` placeholders (93), and 23 stragglers
+  that are all either the test-number-ledger prose (`+9177009004xx`), deliberate synthetics
+  (`9812345678`, `8899776655`, `9876543210`), or **eZee's own published API documentation** mirrored
+  verbatim under `docs/ezee/` — the one real-shaped number in the whole repo, `+447464942724`, is
+  attached to a record reading `FirstName: Test / LastName: Test`, `City: London`, in eZee's OTA/RMS
+  doc. Emails likewise: fakenamegenerator domains (`rhyta.com`, `jourrapide.com`, `dayrep.com`),
+  `example.com`, the published `contact.us@nistula.life`, and eZee's vendor contacts. No card, UPI,
+  IFSC, Aadhaar or passport data. `4111111111111111` is the universal Visa test card.
+- The CH-00 discipline is why: `scripts/fixture-scrub.ts` plus the CI "Fixture PII guard" that fails
+  the build on any `+91`/plusless number outside `9177009xxxxx`. It held for the whole build.
+
+**One item is NOT clean, and it is not in the history: the GitHub repo is PUBLIC right now**
+(`gh api` → `"private": false, "visibility": "public"`, 0 forks). It was made public temporarily
+around 28 Jul and was never flipped back. The sweep above says nothing in it is dangerous to expose —
+but publication is meant to be a decision, not a leftover. **Flagged to the architect; deliberately
+NOT changed in this session**, which was scoped read-only on the repo. No history was rewritten.
+
+### Still Paul's to click (nobody else can)
+
+Revoke the Anthropic API key at console.anthropic.com · retire the Meta test app's webhook + tokens
+at developers.facebook.com · pause or delete the healthchecks.io check, which will otherwise alarm
+now that the pings have stopped. The empty Railway project shell can also be deleted by hand.
+
+### What happens next
+
+**The repo now prepares for publication as a portfolio work, with Nistula's permission.**
+
+Refs: seal
