@@ -14,13 +14,19 @@ allowBuilds:
 # Each entry is a TEMPORARY pin: delete it once the parent's own release carries
 # the patched version, and let `pnpm audit` prove it is still clean.
 overrides:
-  # fastify > @fastify/ajv-compiler > ajv > fast-uri (9 paths) · GHSA-v2hh-gcrm-f6hx
-  # host confusion via a literal backslash authority delimiter. fastify 5.10.0 is
+  # fastify > @fastify/ajv-compiler > ajv > fast-uri (9 paths) · GHSA-v2hh-gcrm-f6hx,
+  # then re-issued as GHSA-7p8r-x3mc-p8w7 with the floor moved to 3.1.5 — host
+  # confusion via a literal backslash authority delimiter. fastify 5.10.0 is
   # already the newest release, so bumping fastify cannot close this — only a pin can.
-  fast-uri: ^3.1.4
+  fast-uri: ^3.1.5
   # fastify > find-my-way · GHSA-c96f-x56v-gq3h — DDoS with HTTP/2. Same story.
   find-my-way: ^9.6.1
   # vitest > vite > postcss · GHSA-r28c-9q8g-f849 — path traversal via sourceMappingURL.
   postcss: ^8.5.18
-  # eslint > minimatch > brace-expansion · GHSA-mh99-v99m-4gvg — DoS via unbounded expansion.
-  brace-expansion: ^5.0.8
+  # eslint > minimatch > brace-expansion · GHSA-mh99-v99m-4gvg, then GHSA-rgw5-rvv9-x895
+  # (the follow-up that bypassed the first mitigation) — DoS via unbounded expansion.
+  brace-expansion: ^5.0.9
+  # vitest > vite > postcss > nanoid · GHSA-2v37-7h3g-55p8 — a custom generator loops
+  # for ever when size is 0. Dev-only (postcss is vite's, never shipped), pinned inside
+  # major 3 because that is what postcss itself asks for.
+  nanoid: ^3.3.18
