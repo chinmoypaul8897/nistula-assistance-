@@ -4692,3 +4692,34 @@ now that the pings have stopped. The empty Railway project shell can also be del
 **The repo now prepares for publication as a portfolio work, with Nistula's permission.**
 
 Refs: seal
+
+### CI at seal time — RED, and it is worth knowing why
+
+The seal commit's run ([`32042576363`](https://github.com/chinmoypaul8897/nistula-assistance-/actions/runs/32042576363))
+**fails on both Node 22 and Node 24 — but `pnpm check` PASSED on both.** Typecheck, lint and the full
+suite are green. What fails is the next step, `pnpm audit --audit-level high`: **3 high advisories,
+all transitive, none in code we wrote.**
+
+| Package | Vulnerable | Patched | Reached via |
+|---|---|---|---|
+| `fast-uri` | `>=3.0.0 <3.1.5` | `>=3.1.5` | `fastify > @fastify/ajv-compiler > ajv` (9 paths) |
+| `brace-expansion` | `>=4.0.0 <5.0.9` | `>=5.0.9` | `eslint > minimatch` (35 paths, dev-only) |
+| `nanoid` | `<3.3.18` | `>=3.3.18` | `vitest > vite > postcss` (dev-only) |
+
+**This is not a regression, and specifically not one this commit caused.** The seal commit changes
+`progress.md` and nothing else; the last dependency change was `1558ebc` (FIX-4, "pin four transitive
+deps to their patched versions"), and **the identical lockfile went green on 2026-07-28** (run
+`30321032164` on `7497ddd`). The advisories were published or widened in the three weeks since — the
+`fast-uri` range in particular moved from `<=3.1.3` (what FIX-4 pinned past) to `<3.1.5`. **A frozen
+lockfile does not stay green; the advisory database moves underneath it.** Any archived repo left
+long enough will go red for this reason alone, which is worth knowing before reading the badge as a
+verdict on the code.
+
+**Consequence to note:** because the audit step aborts the job, the **Fixture PII guard step is
+`skipped`** — it did not run on this commit. That gap is covered here by the far broader manual
+sweep recorded above (all 1 399 blobs, all refs), but the guard itself should not be assumed to have
+run. This is the same skipped-step behaviour `docs/state-report.md` flagged on 2026-07-25.
+
+**Deliberately not fixed.** Bumping dependencies on a sealed repo whose service no longer exists
+would change the lockfile after the tag for no runtime benefit, and this session was scoped to verify
+and retire. It goes to the architect with everything else.
