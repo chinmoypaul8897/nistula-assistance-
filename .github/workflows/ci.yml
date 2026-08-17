@@ -45,8 +45,18 @@ jobs:
       # The gate: typecheck + lint + tests (plan §3.1)
       - run: pnpm check
 
-      # Dependency audit (plan §3.3)
-      - run: pnpm audit --audit-level high
+      # Dependency audit (plan §3.3).
+      #
+      # 2026-08-17, at seal: sealed portfolio repo: audit is informational;
+      # typecheck/lint/tests remain blocking. The lockfile is frozen for ever but
+      # the advisory database is not, so a NEW advisory against an unchanged tree
+      # would turn this badge red months from now with nothing to fix and nobody
+      # rostered to fix it. The finding still prints in the log — it just no longer
+      # claims the BUILD is broken. Every advisory open at seal time is pinned in
+      # pnpm-workspace.yaml, and `pnpm audit --audit-level high` exited 0 there.
+      - name: Dependency audit (informational)
+        run: pnpm audit --audit-level high
+        continue-on-error: true
 
       # Fixture PII guard (plan §3.6). Two patterns: the +91 form AND the
       # plusless wire form Meta actually sends — only the reserved test range
@@ -58,7 +68,13 @@ jobs:
       # outside the guard entirely. Deliberately NOT all of test/: the phone,
       # scrubber and logger-redaction unit tests legitimately carry synthetic
       # 91-shaped numbers as their INPUT, and would fire ~30 false positives.
+      #
+      # `if: always()` (2026-07-27 ruling, landed at seal): a leaked phone number is
+      # a DISCLOSURE, not a build error, so it must be discovered on the run where a
+      # failing typecheck or test would otherwise have skipped this step entirely —
+      # exactly the run where somebody is mid-fix and about to push again.
       - name: Fixture PII guard
+        if: always()
         run: |
           if grep -rEn '\+91[0-9]{5,}' test/fixtures/ test/acceptance/ | grep -vE '9177009[0-9]{5}'; then
             echo '::error::Real-looking +91 number found in test/fixtures or test/acceptance'
