@@ -142,14 +142,23 @@ TypeScript 5 (strict) · Node 22 · Fastify 5 · PostgreSQL 16 + Drizzle ORM · 
 
 ## Status
 
-Built solo, end to end, during my internship at **Nistula** (June–July 2026): idea → research → PRD → plan → v1.0.0 → live verification on a WhatsApp test line, with the production cutover pack (BSP onboarding, coexistence, template approval) designed and vendor-verified. The internship concluded and the deployment was retired; the codebase is published, with Nistula's permission, as a portfolio work.
+Built solo, end to end, during my internship at **Nistula** (June–August 2026): idea → research → PRD → plan → v1.0.0 → live verification on a WhatsApp test line, with the production cutover pack (BSP onboarding, coexistence, template approval) designed and vendor-verified. The internship concluded and the deployment was retired; the codebase is published as a portfolio work.
 
 ## About the builder
 
-**Chinmoy Paul** — I build products with AI, end to end: the planning systems, the guardrails, and the verification culture that make AI-built software trustworthy.
+<p align="center">
+  <img src="docs/readme-assets/about-builder.png" width="900" alt="Built by Chinmoy Paul — Nistula, Goa, June to August 2026: idea to PRD to 20 chunks to v1.0.0."/>
+</p>
 
-📫 hello.chinmoypaul@gmail.com · 🌐 [chinmoypaul.vercel.app](https://chinmoypaul.vercel.app/) · [LinkedIn](https://www.linkedin.com/in/chinmoy-paul) · [GitHub](https://github.com/chinmoypaul8897)
+**Data Science & Artificial Intelligence** · IIT Guwahati
+
+I build products with AI, end to end: the planning systems, the guardrails, and the verification culture that make AI-built software trustworthy.
+
+[![Portfolio](https://img.shields.io/badge/Portfolio-chinmoypaul.vercel.app-003c33?logo=vercel&logoColor=white)](https://chinmoypaul.vercel.app/)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-chinmoy--paul-003c33?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/chinmoy-paul)
+[![GitHub](https://img.shields.io/badge/GitHub-chinmoypaul8897-003c33?logo=github&logoColor=white)](https://github.com/chinmoypaul8897)
+[![Email](https://img.shields.io/badge/hello.chinmoypaul%40gmail.com-003c33?logo=gmail&logoColor=white)](mailto:hello.chinmoypaul@gmail.com)
 
 ---
 
-*© Nistula. Published with permission for portfolio demonstration; not licensed for reuse.*
+*© Nistula. Not licensed for reuse.*
